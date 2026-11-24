@@ -7,6 +7,7 @@ import { generateTypingHistory } from "./support/typing-history.ts";
 import { intoDraft } from "./support/screen-journeys.ts";
 
 import { awaited } from "./support/mounted-repl.ts";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { decodeLocation } from "../src/repl/route.ts";
 
 function hasRound(row: string, round: number): boolean {
@@ -32,6 +33,13 @@ describe("History round controls", () => {
           const input = page.screen().locate("[Input]", { onRow: "3:" });
           const output = page.screen().locate("[Output]", { onRow: "3:" });
           expect(input.row).toBe(output.row);
+          expect(page.screen().rows[input.row]).toContain("✓ COMPLETED");
+          const number = page.screen().locate("3:");
+          for (let offset = 0; offset < 2; offset++) {
+            expect(
+              page.repl.terminal.screen?.styleAt(number.column + offset, number.row).foreground,
+            ).toBe(REPL_PALETTE.output);
+          }
           const heading = page
             .screen()
             .rows.findIndex(
@@ -51,6 +59,11 @@ describe("History round controls", () => {
             );
             if (destination === "Output") {
               yield* page.key("ArrowRight");
+              yield* page.until("Output focused", (one) => one.shows("> [Output]"));
+              const number = page.screen().locate("3:");
+              expect(page.repl.terminal.screen?.styleAt(number.column, number.row).foreground).toBe(
+                REPL_PALETTE.output,
+              );
               yield* page.until("Output focus", (one) => one.shows("> [Output]"));
               yield* page.key("ArrowUp");
             }
@@ -222,6 +235,7 @@ describe("History round controls", () => {
     yield* page.until("round waits", (one) => one.shows("[answer]"));
     yield* page.press("[History]");
     yield* page.until("pending round row", (one) => one.shows("3:"));
+    expect(page.screen().rows[page.screen().locate("3:").row]).toContain("● ACTIVE");
     expect(page.screen().found("[Output]", { onRow: "3:" })).toBe(0);
     expect(page.screen().found("[Output]", { onRow: "2:" })).toBe(1);
     yield* page.until("pending Input focus", (one) =>
