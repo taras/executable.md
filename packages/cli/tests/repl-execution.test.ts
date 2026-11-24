@@ -13,7 +13,8 @@
  * once and never after its owner is gone.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { INLINE_SOURCE_PATH, useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
@@ -1227,6 +1228,8 @@ describe(SELECTION_SUITE, () => {
 });
 
 describe("execution initialization in REPL entries", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("EI-REPL: two entries own fresh state below the same session attachment", function* () {
     const State = createContext<object | undefined>("executablemd.test.repl.init", undefined);
     const initialized: object[] = [];
@@ -1247,8 +1250,12 @@ describe("execution initialization in REPL entries", () => {
         yield* next(request);
       },
     });
+    const sessionExecution: ReplExecution = {
+      id: "kf39sla2",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const session = opened(
-      yield* submitReplEntry({ ...options(execution()), source: "first entry\n" }),
+      yield* submitReplEntry({ ...options(sessionExecution), source: "first entry\n" }),
     );
     yield* session.join();
     const submitted = yield* session.submit("second entry\n");

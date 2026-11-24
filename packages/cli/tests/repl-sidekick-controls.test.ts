@@ -34,7 +34,8 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { appendFile, open, readFile } from "node:fs/promises";
@@ -141,6 +142,8 @@ import {
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplLive } from "../src/repl/application.ts";
 import type { ReplModel } from "../src/repl/model.ts";
+
+const OWNER = "packages/cli/tests/repl-sidekick-controls.test.ts";
 
 /** A history with nothing in it, which is what a fresh execution reduces over. */
 const EMPTY: ReplModel = Object.freeze({
@@ -371,7 +374,7 @@ function reply(
     const execution = yield* executeInstalled(
       {
         ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
-        stream: new InMemoryStream(),
+        stream: yield* useJournalStream("repl/sidekick.md"),
       },
       [
         sidekickCeilingInstallation(ceiling),
@@ -459,7 +462,7 @@ function replyThrough(
     const execution = yield* executeInstalled(
       {
         ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
-        stream: new InMemoryStream(),
+        stream: yield* useJournalStream("repl/sidekick.md"),
       },
       [
         sidekickCeilingInstallation(ceiling),
@@ -544,7 +547,7 @@ function replyWith(
     const execution = yield* executeInstalled(
       {
         ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
-        stream: new InMemoryStream(),
+        stream: yield* useJournalStream("repl/sidekick.md"),
       },
       [
         sidekickCeilingInstallation(ceiling),
@@ -676,6 +679,8 @@ function refusal(answer: Result<GeneratedXmdRootResult>): string {
 }
 
 describe("Tier R3 — what the ceiling admits, and what it does not", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   it("R3a: the compact surface describes exactly what is admitted", function* () {
@@ -847,6 +852,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
 });
 
 describe("Tier R3 — each control asks once, and records before and after", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   it("R3e: a read asks for exactly what the element said, and renders the answer", function* () {
@@ -1407,6 +1414,8 @@ describe("Tier R3 — the guide index describes what is admitted", () => {
  * then pass while the shipped file was wrong.
  */
 describe("Tier R3 — a shipped example prepares a draft and runs", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -1615,6 +1624,8 @@ describe("Tier R3 — a shipped example prepares a draft and runs", () => {
  * route at all, which is how that is kept true rather than remembered.
  */
 describe("Tier R3 — a reply reads the history, not the screen", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   /** One entry that publishes a root value and prints it. */
@@ -2507,6 +2518,8 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
  * Core's own contract — what it must never do is run.
  */
 describe("Tier R3 — what a capture seals, and what cannot reach across it", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   it("R3m: each capture answers the handle its own installation sealed", function* () {
@@ -2609,6 +2622,8 @@ describe("Tier R3 — what a capture seals, and what cannot reach across it", ()
  * doctor a copy of those real records rather than inventing a history.
  */
 describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   beforeAll(() => useTempFileCompiler());
 
   /** The run-produced history these rows read, and never write. */
@@ -3818,6 +3833,8 @@ function retexted(events: readonly DurableEvent[], ordinal: number, text: string
 }
 
 describe("ImportAsset captured response admission", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("A1: validates both operands and refuses paired and extra props before work", function* () {
     for (const source of [
       '<REPL.ImportAsset destination="assets/a" />',
@@ -3852,6 +3869,8 @@ describe("ImportAsset captured response admission", () => {
 });
 
 describe("1113: response admission stays bounded", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   for (const source of [
     '<File path="sentinel">wrong</File>',
     '<Glob include={["**/*"]} as="paths" />',
@@ -3874,6 +3893,8 @@ describe("1113: response admission stays bounded", () => {
 });
 
 describe("1113: response Cwd is ordinary text", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("1113: renders and captures without becoming designated feedback", function* () {
     yield* API.Env.around(
       {
