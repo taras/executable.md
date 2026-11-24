@@ -535,48 +535,62 @@ describe("Tier CIV — the identity a host's component names its work after", ()
   it("CIV9: an implementation kept from one execution names nothing in another", function* () {
     const first = record();
     const second = record();
+    const firstStream = yield* useJournalStream("<eval>");
+    const secondStream = yield* useJournalStream("<eval>");
     let kept: unknown;
 
     // Two executions, each declaring `<Probe />` and each minting its own
     // domain — what two live attachments are.
-    yield* run("<Probe />\n", [probe(first)], function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          if (name === "Probe" && definition.kind === "function") {
-            kept = definition.fn;
-          }
-          return definition;
-        },
-      });
-    });
+    yield* run(
+      "<Probe />\n",
+      [probe(first)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name === "Probe" && definition.kind === "function") {
+              kept = definition.fn;
+            }
+            return definition;
+          },
+        });
+      },
+      undefined,
+      firstStream,
+    );
     expect(first.taken).toHaveLength(1);
 
-    yield* run("<Probe />\n", [probe(second)], function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          if (name !== "Probe" || definition.kind !== "function") {
-            return definition;
-          }
-          const original = definition.fn;
-          if (typeof original !== "function") {
-            return definition;
-          }
-          return {
-            ...definition,
-            *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-              const borrowed = kept;
-              // The first execution's implementation, at this execution's own
-              // `<Probe />`, with the genuine issuance minted here.
-              return typeof borrowed === "function"
-                ? yield* borrowed(props, invocation)
-                : yield* original(props, invocation);
-            },
-          };
-        },
-      });
-    });
+    yield* run(
+      "<Probe />\n",
+      [probe(second)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                const borrowed = kept;
+                // The first execution's implementation, at this execution's own
+                // `<Probe />`, with the genuine issuance minted here.
+                return typeof borrowed === "function"
+                  ? yield* borrowed(props, invocation)
+                  : yield* original(props, invocation);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      secondStream,
+    );
 
     // The borrowed implementation belongs to the first execution, so what it
     // recorded went there: it refused, and the second execution's own probe
@@ -591,56 +605,70 @@ describe("Tier CIV — the identity a host's component names its work after", ()
   it("CIV10: a registration's whole record, transplanted, carries no identity", function* () {
     const first = record();
     const second = record();
+    const firstStream = yield* useJournalStream("<eval>");
+    const secondStream = yield* useJournalStream("<eval>");
     let kept: unknown;
     let entry: RegistryEntry | undefined;
 
-    yield* run("<Probe />\n", [probe(first)], function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          if (name === "Probe" && definition.kind === "function") {
-            kept = definition.fn;
-          }
-          return definition;
-        },
-        registry: (_args, next): ComponentRegistry => {
-          const answer = next();
-          entry = answer.get("Probe") ?? entry;
-          return answer;
-        },
-      });
-    });
+    yield* run(
+      "<Probe />\n",
+      [probe(first)],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name === "Probe" && definition.kind === "function") {
+              kept = definition.fn;
+            }
+            return definition;
+          },
+          registry: (_args, next): ComponentRegistry => {
+            const answer = next();
+            entry = answer.get("Probe") ?? entry;
+            return answer;
+          },
+        });
+      },
+      undefined,
+      firstStream,
+    );
     expect(entry).not.toBe(undefined);
 
-    yield* run("<Probe />\n", [probe(second)], function* () {
-      yield* Component.around({
-        // The first execution's whole registration record, answered for this
-        // name here: not a field read out of it, the object itself.
-        registry: (_args, next): ComponentRegistry => {
-          const answer = next();
-          return entry === undefined ? answer : new Map([...answer, ["Probe", entry]]);
-        },
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          if (name !== "Probe" || definition.kind !== "function") {
-            return definition;
-          }
-          const original = definition.fn;
-          if (typeof original !== "function") {
-            return definition;
-          }
-          return {
-            ...definition,
-            *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-              const borrowed = kept;
-              return typeof borrowed === "function"
-                ? yield* borrowed(props, invocation)
-                : yield* original(props, invocation);
-            },
-          };
-        },
-      });
-    });
+    yield* run(
+      "<Probe />\n",
+      [probe(second)],
+      function* () {
+        yield* Component.around({
+          // The first execution's whole registration record, answered for this
+          // name here: not a field read out of it, the object itself.
+          registry: (_args, next): ComponentRegistry => {
+            const answer = next();
+            return entry === undefined ? answer : new Map([...answer, ["Probe", entry]]);
+          },
+          *importComponent([name], next) {
+            const definition = yield* next(name);
+            if (name !== "Probe" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                const borrowed = kept;
+                return typeof borrowed === "function"
+                  ? yield* borrowed(props, invocation)
+                  : yield* original(props, invocation);
+              },
+            };
+          },
+        });
+      },
+      undefined,
+      secondStream,
+    );
 
     // Same again, with the record itself transplanted: the second execution
     // resolved `<Probe />` to the first execution's registration entirely, and
@@ -827,37 +855,49 @@ describe("Tier CIV — the identity a host's component names its work after", ()
       next: (name: string) => Operation<ComponentDefinition | FunctionComponentDefinition>,
       kept: FunctionComponent,
     ) => Operation<ComponentDefinition | FunctionComponentDefinition>,
+    stream: InMemoryStream,
   ): Operation<void> {
     let kept: FunctionComponent | undefined;
     // `<Elsewhere />` is declared as well, so a handler redirecting the name has
     // a real registration to redirect to.
-    return run("<Probe />\n\n<Probe />\n", [probe(seen), probe(seen, "Elsewhere")], function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          if (name !== "Probe") {
-            return yield* next(name);
-          }
-          if (kept === undefined) {
-            const definition = yield* next(name);
-            if (definition.kind === "function" && typeof definition.fn === "function") {
-              kept = definition.fn;
+    return run(
+      "<Probe />\n\n<Probe />\n",
+      [probe(seen), probe(seen, "Elsewhere")],
+      function* () {
+        yield* Component.around({
+          *importComponent([name], next) {
+            if (name !== "Probe") {
+              return yield* next(name);
             }
-            return definition;
-          }
-          return yield* answer(next, kept);
-        },
-      });
-    });
+            if (kept === undefined) {
+              const definition = yield* next(name);
+              if (definition.kind === "function" && typeof definition.fn === "function") {
+                kept = definition.fn;
+              }
+              return definition;
+            }
+            return yield* answer(next, kept);
+          },
+        });
+      },
+      undefined,
+      stream,
+    );
   }
 
   it("CIV16: an import nobody delegated selects nothing, so it names nothing", function* () {
     const seen = record();
+    const stream = yield* useJournalStream("<eval>");
     // Answered without delegating: canonical resolution never ran for this
     // site, so there is nothing for the frame to have selected.
     // deno-lint-ignore require-yield
-    yield* twoSites(seen, function* (_next, kept) {
-      return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
-    });
+    yield* twoSites(
+      seen,
+      function* (_next, kept) {
+        return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
+      },
+      stream,
+    );
 
     expect(seen.taken).toHaveLength(1);
     expect(seen.refusals).toHaveLength(1);
@@ -866,15 +906,20 @@ describe("Tier CIV — the identity a host's component names its work after", ()
 
   it("CIV17: a redirected name selects nothing for the name the engine asked", function* () {
     const seen = record();
-    yield* twoSites(seen, function* (next, kept) {
-      // Delegated, but for a different name, and answered with what that name
-      // resolved to: canonical resolution selected a registration this element
-      // never named, and the implementation running here is that one's.
-      const other = yield* next("Elsewhere");
-      const redirected =
-        other.kind === "function" && typeof other.fn === "function" ? other.fn : kept;
-      return { kind: "function", name: "Probe", props: NO_PROPS, fn: redirected };
-    });
+    const stream = yield* useJournalStream("<eval>");
+    yield* twoSites(
+      seen,
+      function* (next, kept) {
+        // Delegated, but for a different name, and answered with what that name
+        // resolved to: canonical resolution selected a registration this element
+        // never named, and the implementation running here is that one's.
+        const other = yield* next("Elsewhere");
+        const redirected =
+          other.kind === "function" && typeof other.fn === "function" ? other.fn : kept;
+        return { kind: "function", name: "Probe", props: NO_PROPS, fn: redirected };
+      },
+      stream,
+    );
 
     // `<Elsewhere />`'s implementation ran at a `<Probe />` site and named
     // nothing: the frame settles only for the name the engine asked.
@@ -885,14 +930,19 @@ describe("Tier CIV — the identity a host's component names its work after", ()
 
   it("CIV18: two canonical selections in one import settle to nothing", function* () {
     const seen = record();
-    yield* twoSites(seen, function* (next, kept) {
-      // Delegated twice. Which of the two answers the engine was handed is not
-      // a question the frame can settle, so it settles to nothing.
-      yield* next("Probe");
-      const again = yield* next("Probe");
-      void again;
-      return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
-    });
+    const stream = yield* useJournalStream("<eval>");
+    yield* twoSites(
+      seen,
+      function* (next, kept) {
+        // Delegated twice. Which of the two answers the engine was handed is not
+        // a question the frame can settle, so it settles to nothing.
+        yield* next("Probe");
+        const again = yield* next("Probe");
+        void again;
+        return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
+      },
+      stream,
+    );
 
     expect(seen.taken).toHaveLength(1);
     expect(seen.refusals).toHaveLength(1);
@@ -939,16 +989,23 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     // terminal `next` reaches is the one this import created, so the invocation
     // is still in its execution's domain.
     const seen = record();
-    yield* run("<Probe />\n", [probe(seen)], function* () {
-      yield* Component.around(
-        {
-          *importComponent([name, position], next) {
-            return yield* scoped(() => next(name, position));
+    const stream = yield* useJournalStream("<eval>");
+    yield* run(
+      "<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              return yield* scoped(() => next(name, position));
+            },
           },
-        },
-        { at: "max" },
-      );
-    });
+          { at: "max" },
+        );
+      },
+      undefined,
+      stream,
+    );
 
     expect(seen.refusals).toEqual([]);
     expect(seen.taken).toHaveLength(1);
@@ -957,7 +1014,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     // identity is the authored element's and the delegation changed nothing
     // about which element asked.
     const direct = record();
-    yield* run("<Probe />\n", [probe(direct)]);
+    const directStream = yield* useJournalStream("<eval>");
+    yield* run("<Probe />\n", [probe(direct)], undefined, undefined, directStream);
     expect(seen.taken).toEqual(direct.taken);
   });
 
@@ -1040,28 +1098,35 @@ describe("Tier CIV — the import's own terminal is the association", () => {
 
     const seen = record();
     const nested: string[] = [];
-    yield* run("<Probe />\n", [probe(seen), probe(seen, "Other")], function* () {
-      yield* Component.around(
-        {
-          *importComponent([name, position], next) {
-            if (name !== "Probe") {
+    const stream = yield* useJournalStream("<eval>");
+    yield* run(
+      "<Probe />\n",
+      [probe(seen), probe(seen, "Other")],
+      function* () {
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Probe") {
+                return yield* next(name, position);
+              }
+              const answered = yield* importThroughTerminal(
+                "Other",
+                position,
+                // deno-lint-ignore require-yield
+                function* (asked: string) {
+                  throw foreignTerminalReport(asked);
+                },
+              );
+              nested.push(`${answered.kind}:${answered.name}`);
               return yield* next(name, position);
-            }
-            const answered = yield* importThroughTerminal(
-              "Other",
-              position,
-              // deno-lint-ignore require-yield
-              function* (asked: string) {
-                throw foreignTerminalReport(asked);
-              },
-            );
-            nested.push(`${answered.kind}:${answered.name}`);
-            return yield* next(name, position);
+            },
           },
-        },
-        { at: "max" },
-      );
-    });
+          { at: "max" },
+        );
+      },
+      undefined,
+      stream,
+    );
 
     // The nested import was answered by this execution's ordinary resolution,
     // with this execution's own implementation of that component.
@@ -1071,7 +1136,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     expect(seen.refusals).toEqual([]);
     expect(seen.taken).toHaveLength(1);
     const direct = record();
-    yield* run("<Probe />\n", [probe(direct)]);
+    const directStream = yield* useJournalStream("<eval>");
+    yield* run("<Probe />\n", [probe(direct)], undefined, undefined, directStream);
     expect(seen.taken).toEqual(direct.taken);
   });
 
@@ -1312,7 +1378,14 @@ describe("Tier CIV — two canonical imports live at the same time", () => {
       // terminal it was created with, so neither selection can land in the
       // sibling's frame — and which import resolves first decides nothing.
       const seen = record();
-      yield* run(CONCURRENT, [probe(seen)], heldImports(["Probe", "Probe"], order));
+      const heldStream = yield* useJournalStream("<eval>");
+      yield* run(
+        CONCURRENT,
+        [probe(seen)],
+        heldImports(["Probe", "Probe"], order),
+        undefined,
+        heldStream,
+      );
 
       expect(seen.refusals).toEqual([]);
       expect(seen.taken).toHaveLength(2);
@@ -1322,7 +1395,8 @@ describe("Tier CIV — two canonical imports live at the same time", () => {
       // their imports at all: overlapping changed the scheduling, not the
       // authored element either invocation belongs to.
       const direct = record();
-      yield* run(CONCURRENT, [probe(direct)]);
+      const directStream = yield* useJournalStream("<eval>");
+      yield* run(CONCURRENT, [probe(direct)], undefined, undefined, directStream);
       expect(new Set(seen.taken)).toEqual(new Set(direct.taken));
     });
   }
