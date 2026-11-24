@@ -42,8 +42,6 @@ import { useCompositionComponents } from "@executablemd/git";
 import { useReplRepositoryRecording } from "../../src/repl/repositories/deno/provider.ts";
 import { admitReplRepositoryHistory } from "../../src/repl/repositories/admission.ts";
 import type { ObservationFixture } from "../../../git/tests/support/observations.ts";
-import { captureTestJournal } from "@executablemd/test-support/failure-journal";
-import type { JournalCase } from "../../src/test-diagnostics.ts";
 
 /** What the repository handle beneath one entry was asked to do. */
 export interface EntryCounters {
@@ -265,14 +263,6 @@ export function runEntry(
     }
     return { output, events: yield* stream.readAll(), refusal };
   });
-}
-
-export function captureObservationEntry(
-  testCase: JournalCase,
-  place: EntryPlace,
-  body: (stream: InMemoryStream) => Operation<void>,
-): Operation<void> {
-  return captureTestJournal(testCase, join(place.root, "entry.md"), body);
 }
 
 /**
