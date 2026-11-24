@@ -27,7 +27,8 @@
  * `execute()` has none and behaves exactly as it always did.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -67,6 +68,8 @@ import { createExactSource, isExactSource } from "../src/output/exact-source.ts"
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
+
+const OWNER = "packages/core/tests/declared-markdown-component.test.ts";
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -308,7 +311,10 @@ function* workspace(files: Record<string, string>): Operation<string> {
 }
 
 describe("Tier DM — retained text context", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM1b: canonical retention keeps midline interpolation and passive source", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const source = [
       '<Let as="source" value="CURRENT_1050" />',
       '<Let as="prefix" value={0} />```xmd',
@@ -319,37 +325,53 @@ describe("Tier DM — retained text context", () => {
       "{source}",
       "~~~",
     ].join("\n");
-    const output = yield* run("<Policy />", [declared(source)]);
+    const output = yield* run("<Policy />", [declared(source)], undefined, stream);
     expect(output).toBe("\n```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
   });
 });
 
 describe("Tier DM — a declaration is held to its own bytes", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM1: a declared name resolves to the declared source with no search path", function* () {
-    expect(yield* run("<Policy />\n")).toContain("The policy ran.");
+    const stream = yield* useJournalStream(ROOT_PATH);
+    expect(yield* run("<Policy />\n", undefined, undefined, stream)).toContain("The policy ran.");
   });
 
   it("DM2: a digest the source does not have refuses before the root is imported", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { digest: sourceDigest("something else") })]),
+      run(
+        "<Policy />\n",
+        [declared(POLICY_SOURCE, { digest: sourceDigest("something else") })],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("states a digest its source does not have");
   });
 
   it("DM3: a props schema the source does not declare refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [
-        declared(POLICY_SOURCE, {
-          props: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
-        }),
-      ]),
+      run(
+        "<Policy />\n",
+        [
+          declared(POLICY_SOURCE, {
+            props: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
+          }),
+        ],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("states a props schema its source does not declare");
   });
 
   it("DM3b: a props schema the source does declare is accepted whatever order it wrote it in", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const source = [
       "---",
       "props:",
@@ -364,31 +386,43 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
       "",
     ].join("\n");
 
-    const output = yield* run('<Policy who="reader" />\n', [
-      declared(source, {
-        props: {
-          additionalProperties: false,
-          required: ["who"],
-          properties: { who: { type: "string" } },
-          type: "object",
-        },
-      }),
-    ]);
+    const output = yield* run(
+      '<Policy who="reader" />\n',
+      [
+        declared(source, {
+          props: {
+            additionalProperties: false,
+            required: ["who"],
+            properties: { who: { type: "string" } },
+            type: "object",
+          },
+        }),
+      ],
+      undefined,
+      stream,
+    );
 
     expect(output).toContain("Hello reader.");
   });
 
   it("DM4: a return the source does not declare refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { returns: { type: "string" } })]),
+      run(
+        "<Policy />\n",
+        [declared(POLICY_SOURCE, { returns: { type: "string" } })],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("states a return its source does not declare");
   });
 
   it("DM5: a name that is not a component name refuses without printing it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE, { name: "policy" })]),
+      run("<Policy />\n", [declared(POLICY_SOURCE, { name: "policy" })], undefined, stream),
     );
 
     expect(message).toContain("a name that is not a component name");
@@ -396,20 +430,25 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
   });
 
   it("DM6: a structural name refuses", function* () {
-    const message = yield* refusal(run("<Policy />\n", [declared(POLICY_SOURCE, { name: "If" })]));
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const message = yield* refusal(
+      run("<Policy />\n", [declared(POLICY_SOURCE, { name: "If" })], undefined, stream),
+    );
 
     expect(message).toContain("structural syntax the engine owns");
   });
 
   it("DM7: one name declared twice refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [declared(POLICY_SOURCE), declared("Another.\n")]),
+      run("<Policy />\n", [declared(POLICY_SOURCE), declared("Another.\n")], undefined, stream),
     );
 
     expect(message).toContain("declared as Markdown twice");
   });
 
   it("DM8: a name a host reserved refuses, whichever installed it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -432,6 +471,7 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -440,28 +480,29 @@ describe("Tier DM — a declaration is held to its own bytes", () => {
 });
 
 describe("Tier DM — the name is claimed rather than offered", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM9: a repository file of the same name cannot answer for it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const root = yield* workspace({ "Policy.md": "The repository file ran.\n" });
 
-    const output = yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], new InMemoryStream(), [
-      root,
-    ]);
+    const output = yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], stream, [root]);
 
     expect(output).toContain("The policy ran.");
     expect(output).not.toContain("The repository file ran.");
   });
 
   it("DM9b: a repository file the declaration does not claim still answers", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const root = yield* workspace({ "Helper.md": "The repository file ran.\n" });
 
-    const output = yield* run("<Helper />\n", [declared(POLICY_SOURCE)], [], new InMemoryStream(), [
-      root,
-    ]);
+    const output = yield* run("<Helper />\n", [declared(POLICY_SOURCE)], [], stream, [root]);
 
     expect(output).toContain("The repository file ran.");
   });
 
   it("DM10: an ordinary registration cannot answer for it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const output = yield* run(
       "<Policy />\n",
       [declared(POLICY_SOURCE)],
@@ -482,6 +523,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("The policy ran.");
@@ -489,6 +531,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
   });
 
   it("DM11: a workflow component bundle cannot answer for it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const output = yield* run(
       "<Policy />\n",
       [declared(POLICY_SOURCE)],
@@ -506,6 +549,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("The policy ran.");
@@ -513,6 +557,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
   });
 
   it("DM12: middleware that answers an import without delegating is refused", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -541,6 +586,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -548,6 +594,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
   });
 
   it("DM13: middleware that changes the answer before it is invoked is refused", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -572,6 +619,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -648,6 +696,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
   });
 
   it("DM14: middleware that observes and delegates sees the declared origin", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const seen: string[] = [];
     const output = yield* run(
       "<Policy />\n",
@@ -670,6 +719,7 @@ describe("Tier DM — the name is claimed rather than offered", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("The policy ran.");
@@ -678,71 +728,95 @@ describe("Tier DM — the name is claimed rather than offered", () => {
 });
 
 describe("Tier DM — the private closure is lexical", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM15: the declaration's own body resolves a private name", function* () {
-    const output = yield* run("<Policy />\n", [declared(WITH_PRIVATE, { privates: [secret()] })]);
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const output = yield* run(
+      "<Policy />\n",
+      [declared(WITH_PRIVATE, { privates: [secret()] })],
+      undefined,
+      stream,
+    );
 
     expect(output).toContain("policy says the private answer");
   });
 
   it("DM15b: a private component names durable work through the claimant it was built with", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const seen: string[] = [];
-    const output = yield* run("<Policy />\n", [
-      declared("<Claiming />\n", { privates: [claiming(seen)] }),
-    ]);
+    const output = yield* run(
+      "<Policy />\n",
+      [declared("<Claiming />\n", { privates: [claiming(seen)] })],
+      undefined,
+      stream,
+    );
 
     expect(output).toContain("claimed");
     expect(seen).toHaveLength(1);
   });
 
   it("DM16: the caller's root cannot write a private name", function* () {
-    const message = yield* refusal(
-      run('<Secret as="answer" />\n', [declared(WITH_PRIVATE, { privates: [secret()] })]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM17: content the caller projects through the declaration cannot write one", function* () {
-    const message = yield* refusal(
-      run('<Policy><Secret as="answer" /></Policy>\n', [
-        declared(["<Content />", ""].join("\n"), { privates: [secret()] }),
-      ]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM18: a sibling declaration cannot write another declaration's private name", function* () {
-    const message = yield* refusal(
-      run("<Other />\n", [
-        declared(WITH_PRIVATE, { privates: [secret()] }),
-        declared('<Secret as="answer" />\n', {
-          name: "Other",
-          origin: "@executablemd/test/Other.md",
-        }),
-      ]),
-    );
-
-    expect(message).toContain("Cannot resolve component: Secret");
-  });
-
-  it("DM19: a repository component the declaration imports cannot write one", function* () {
-    const root = yield* workspace({ "Helper.md": '<Secret as="answer" />\n' });
-
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
-        "<Policy />\n",
-        [declared("<Helper />\n", { privates: [secret()] })],
-        [],
-        new InMemoryStream(),
-        [root],
+        '<Secret as="answer" />\n',
+        [declared(WITH_PRIVATE, { privates: [secret()] })],
+        undefined,
+        stream,
       ),
     );
 
     expect(message).toContain("Cannot resolve component: Secret");
   });
 
+  it("DM17: content the caller projects through the declaration cannot write one", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const message = yield* refusal(
+      run(
+        '<Policy><Secret as="answer" /></Policy>\n',
+        [declared(["<Content />", ""].join("\n"), { privates: [secret()] })],
+        undefined,
+        stream,
+      ),
+    );
+
+    expect(message).toContain("Cannot resolve component: Secret");
+  });
+
+  it("DM18: a sibling declaration cannot write another declaration's private name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const message = yield* refusal(
+      run(
+        "<Other />\n",
+        [
+          declared(WITH_PRIVATE, { privates: [secret()] }),
+          declared('<Secret as="answer" />\n', {
+            name: "Other",
+            origin: "@executablemd/test/Other.md",
+          }),
+        ],
+        undefined,
+        stream,
+      ),
+    );
+
+    expect(message).toContain("Cannot resolve component: Secret");
+  });
+
+  it("DM19: a repository component the declaration imports cannot write one", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const root = yield* workspace({ "Helper.md": '<Secret as="answer" />\n' });
+
+    const message = yield* refusal(
+      run("<Policy />\n", [declared("<Helper />\n", { privates: [secret()] })], [], stream, [root]),
+    );
+
+    expect(message).toContain("Cannot resolve component: Secret");
+  });
+
   it("DM20: middleware cannot substitute a private declaration it observed", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -765,6 +839,7 @@ describe("Tier DM — the private closure is lexical", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -776,6 +851,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM38: a factory replaced after capture does not become what runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The declaration object is the host's, and an installation runs after the
     // invocation captured it. Reading the factory then rather than now would
     // let a hook installed by the same host — or by anything that reached the
@@ -802,6 +878,7 @@ describe("Tier DM — the private closure is lexical", () => {
           },
         },
       ],
+      stream,
     );
 
     expect(output).toContain("policy says the private answer");
@@ -809,6 +886,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM39: a schema mutated after capture is not the contract an invocation is held to", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The schema is the one member of a declaration that is a whole object
     // graph, so holding the caller's object rather than a copy of it would let
     // a hook loosen the contract after the invocation captured the declaration
@@ -842,6 +920,7 @@ describe("Tier DM — the private closure is lexical", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -851,6 +930,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM40: middleware cannot reuse a delegated private answer at another site", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The hole this closes: a handler delegates a legitimate private import from
     // inside the declaration, keeps the exact definition canonical execution
     // produced, and hands it back when the caller's root writes the same name.
@@ -887,6 +967,7 @@ describe("Tier DM — the private closure is lexical", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -896,6 +977,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM41: a repository component cannot answer for a private name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const root = yield* workspace({ "Secret.md": "the repository file ran.\n" });
     const entered: string[] = [];
 
@@ -904,7 +986,7 @@ describe("Tier DM — the private closure is lexical", () => {
         ['<Secret as="answer" />', ""].join("\n"),
         [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
         [],
-        new InMemoryStream(),
+        stream,
         [root],
       ),
     );
@@ -943,6 +1025,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM43: a private implementation cannot run under an unrelated open name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The name is the wrong thing to check. A handler delegates a legitimate
     // private import from inside the declaration, keeps the definition, and
     // hands it back as the answer for `Virtual` — a name nothing declares, which
@@ -954,6 +1037,7 @@ describe("Tier DM — the private closure is lexical", () => {
         ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
         [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
         [aliasing()],
+        stream,
       ),
     );
 
@@ -963,6 +1047,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM44: a copy of the private definition is admitted nowhere either", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The same reach, through a definition of the handler's own making that
     // carries the implementation it kept. What is restricted is the
     // implementation, not the object it arrives in.
@@ -972,6 +1057,7 @@ describe("Tier DM — the private closure is lexical", () => {
         ["<Policy />", '<Virtual as="aliased" />', ""].join("\n"),
         [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
         [aliasing((kept) => ({ ...kept, name: "Virtual" }))],
+        stream,
       ),
     );
 
@@ -980,6 +1066,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM45: an answer kept past the declaration's teardown grants none", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The declaration has finished expanding and its closure is gone. What the
     // handler is holding is an answer from an invocation that is over, and an
     // invocation that is over authorizes nothing — under its own name or any
@@ -992,6 +1079,7 @@ describe("Tier DM — the private closure is lexical", () => {
         ),
         [declared(WITH_PRIVATE, { privates: [watching(entered)] })],
         [aliasing()],
+        stream,
       ),
     );
 
@@ -1080,6 +1168,7 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM21: a private name a registration also claims refuses the declaration", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
       run(
         "<Policy />\n",
@@ -1101,6 +1190,7 @@ describe("Tier DM — the private closure is lexical", () => {
             },
           },
         ],
+        stream,
       ),
     );
 
@@ -1108,15 +1198,21 @@ describe("Tier DM — the private closure is lexical", () => {
   });
 
   it("DM22: one private name declared by two declarations refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const message = yield* refusal(
-      run("<Policy />\n", [
-        declared(WITH_PRIVATE, { privates: [secret()] }),
-        declared(WITH_PRIVATE, {
-          name: "Other",
-          origin: "@executablemd/test/Other.md",
-          privates: [secret()],
-        }),
-      ]),
+      run(
+        "<Policy />\n",
+        [
+          declared(WITH_PRIVATE, { privates: [secret()] }),
+          declared(WITH_PRIVATE, {
+            name: "Other",
+            origin: "@executablemd/test/Other.md",
+            privates: [secret()],
+          }),
+        ],
+        undefined,
+        stream,
+      ),
     );
 
     expect(message).toContain("is declared twice");
@@ -1124,8 +1220,10 @@ describe("Tier DM — the private closure is lexical", () => {
 });
 
 describe("Tier DM — selection is journaled and replays", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM23: a declared import records its origin, digest and bytes", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     yield* run("<Policy />\n", [declared(POLICY_SOURCE)], [], stream);
 
     const selection = (yield* stream.readAll())
@@ -1182,7 +1280,7 @@ describe("Tier DM — selection is journaled and replays", () => {
   });
 
   it("DM26b: the record carries the exact-source disposition when the host declares one", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     yield* run("<Policy />\n", [declared(POLICY_SOURCE, { exact: true })], [], stream);
 
     const selection = (yield* stream.readAll())
@@ -1516,22 +1614,32 @@ function* refusalOfRun(
 }
 
 describe("Tier DM — exact source is a provenance, not a field", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("DM49: a declared component the host called exact emits its bytes unpresented", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The positive control. Without it the two refusals below would pass for a
     // build where exact source never worked at all.
-    const output = yield* published("<Policy />\n", [declared(PRESENTABLE, { exact: true })], []);
+    const output = yield* published(
+      "<Policy />\n",
+      [declared(PRESENTABLE, { exact: true })],
+      [],
+      stream,
+    );
 
     expect(unpresented(output)).toBe(true);
   });
 
   it("DM50: an ordinary declared component is presented as prose", function* () {
-    const output = yield* published("<Policy />\n", [declared(PRESENTABLE)], []);
+    const stream = yield* useJournalStream(ROOT_PATH);
+    const output = yield* published("<Policy />\n", [declared(PRESENTABLE)], [], stream);
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
   });
 
   it("DM51: middleware answering with `exact: true` gets prose", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The definition is the handler's own, written to claim the disposition a
     // trusted declaration states. Nothing admitted it, so nothing about it is
     // exact — the claim is data on an object, and the answer is prose.
@@ -1549,6 +1657,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
           bodySegments: [{ type: "text", content: PRESENTABLE }],
         } as unknown as ImportedDefinition),
       ],
+      stream,
     );
 
     expect(unpresented(output)).toBe(false);
@@ -1556,6 +1665,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
   });
 
   it("DM53: a component that reaches for the record by context name gets prose", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // Effection contexts resolve by name, so a name is not a secret: anything
     // that can run code can build a context with the same one. This is the
     // attack that closes — a function component nobody trusts asks for the
@@ -1587,6 +1697,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
           },
         } as unknown as ImportedDefinition),
       ],
+      stream,
     );
 
     // The record is not reachable by name at all, which is the property under
@@ -1644,6 +1755,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
   });
 
   it("DM54: a spawned child's exact source is still source", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // `<All>` joins its children by value, so what crosses the join says what
     // it is. A child that reduced its region to one string would hand the
     // caller prose, and the approved bytes a `<Spawn>` rendered would be
@@ -1662,6 +1774,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       ].join("\n"),
       [declared(PRESENTABLE, { exact: true })],
       [],
+      stream,
     );
 
     expect(unpresented(inside)).toBe(true);
@@ -1671,6 +1784,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
   });
 
   it("DM55: a replayed child restores what its bytes were", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The disposition is a fact about what canonical expansion produced, and
     // the segments it marked do not survive the process. A replay therefore
     // reads it from the child's own durable close — and a close that retained
@@ -1687,7 +1801,6 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       "",
     ].join("\n");
     const declarations = [declared(PRESENTABLE, { exact: true })];
-    const stream = new InMemoryStream();
     const live = yield* published(source, declarations, [], stream);
     expect(unpresented(live)).toBe(true);
 
@@ -2139,11 +2252,14 @@ function* refusedBeforeRoot(
 }
 
 describe("Tier ED — one catalog, two arms", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("ED1: both arms coexist in capture order, and Markdown keeps its behavior", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const declarations = [declared(POLICY_SOURCE), deck(), panel()];
 
     // The Markdown arm, unchanged: it selects, expands and describes itself.
-    expect(String(yield* run("<Policy />\n", [], [declaring(declarations)]))).toContain(
+    expect(String(yield* run("<Policy />\n", [], [declaring(declarations)], stream))).toContain(
       "The policy ran.",
     );
     const policy = yield* inspectComponent({ name: "Policy", includes: [], declarations });
@@ -2165,6 +2281,7 @@ describe("Tier ED — one catalog, two arms", () => {
   });
 
   it("ED2: declarations and the handler are captured once, before install()", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const properties: Record<string, Json> = { title: { type: "string" } };
     const props: PropsSchema = { type: "object", properties, additionalProperties: false };
     const construct = { ...deck(), description: "As captured.", props };
@@ -2191,7 +2308,7 @@ describe("Tier ED — one catalog, two arms", () => {
       },
     };
 
-    const output = String(yield* run("<Syntax />\n<Policy />\n", [], [installation]));
+    const output = String(yield* run("<Syntax />\n<Policy />\n", [], [installation], stream));
 
     expect(reads).toBe(1);
     expect(order).toEqual(["install after 1 handler read"]);
@@ -2377,6 +2494,7 @@ describe("Tier ED — one catalog, two arms", () => {
 });
 
 describe("Tier ED — the catalog answers for the set", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("ED1: capture refuses every unknown kind before it reads anything else", function* () {
     // Every other member throws if it is read, and the installation records
     // whether it ever ran: capture decides about the discriminant before either
@@ -2477,6 +2595,7 @@ describe("Tier ED — the catalog answers for the set", () => {
   });
 
   it("ED5: a construct claims its name ahead of a bundle member and a default", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const declarations = [deck(), panel()];
 
     // A registered default under the same name loses to the declaration, and
@@ -2533,7 +2652,9 @@ describe("Tier ED — the catalog answers for the set", () => {
 
     // And a declared construct is not reached through component import at all,
     // so the losing default never runs.
-    const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
+    const message = yield* refusal(
+      run("<Deck />\n", [], [declaring(declarations), registering], stream),
+    );
     expect(message).toContain("is not written in a form it accepts");
     expect(message).not.toContain("the registered default ran.");
   });
