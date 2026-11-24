@@ -118,6 +118,8 @@ describe("wheel bursts in one input chunk", () => {
     yield* generateTypingHistory(page, 30, 1);
     yield* page.press("[History]");
     yield* page.until("History", (one) => one.shows("[close]"));
+    yield* page.key("Tab");
+    yield* page.until("History actions own focus", (one) => one.shows("> [close]"));
     const cell = page.screen().locate("30:");
     const positions = () =>
       page
