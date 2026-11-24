@@ -9996,8 +9996,19 @@ Generated XMD requires a separate trusted offer for the name and form.
 
 The protected paired component takes one required relative `path` and exactly
 one passive backtick or tilde fence containing a single unified diff. Optional
-fence info is `diff` or `patch`. The engine reads the authored body without
-expanding children. Surrounding whitespace is allowed.
+fence info is `diff` or `patch`. The scanner removes the structural prefix
+(§2.2) from each diff row and preserves the remaining characters, including the
+context marker and leading or trailing spaces. Component and closing-tag text
+inside the fence is literal.
+
+The opening and closing fence markers use the same structural prefix, or
+both omit it. The element's opening and closing tags occupy their own lines
+and align with each other.
+Whitespace between the delimiters is allowed. The fence must end at an
+explicit marker. An exit from a Markdown container cannot close it. A
+malformed boundary reports a source diagnostic before document effects.
+Once the boundary is established, a stale or malformed diff produces a File
+refusal.
 
 The diff has one or more ordered hunks with exact old and new ranges. Context
 and removed rows must match at those coordinates, including whether a row has

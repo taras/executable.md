@@ -39,8 +39,11 @@ answer.
   patch emits no text. Echoed `<File.Patch>` source means the patch did not
   execute. When a diff touches a Markdown fence, make the outer diff fence
   longer than the fence in the diff's context, for example four backticks
-  around a diff with three backticks in its context. After a stale-patch
-  error, read the source again before preparing a fresh diff.
+  around a diff with three backticks in its context. Align the two fence
+  markers and align the closing tag with the opening tag. Nested patches
+  use the surrounding document's structural indentation. A missing or
+  premature delimiter is reported before the document runs. After a
+  stale-patch error, read the source again before preparing a fresh diff.
 
   ````xmd
   <File.Patch path="notes.md">

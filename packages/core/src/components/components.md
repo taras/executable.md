@@ -195,11 +195,14 @@ with `<File path="notes.md" />`, then submit a paired `<File.Patch>`.
 
 When the diff touches a Markdown fence, use a longer outer diff fence than
 the fence in the diff's context. For example, use four backticks around a diff
-with a three-backtick fence in its context.
+with a three-backtick fence in its context. Align the two fence markers and
+align the closing tag with the opening tag. The reader removes the structural
+indentation from nested diff rows. A missing or premature delimiter reports a
+source diagnostic before the document runs.
 
 Success renders nothing. Echoed `<File.Patch>` source means the patch did
-not execute. A refusal produces a file error. Read the source again before
-editing a stale patch.
+not execute. A stale or malformed diff inside those delimiters produces a file error.
+Read the source again before editing a stale patch.
 
 ## File.Copy
 

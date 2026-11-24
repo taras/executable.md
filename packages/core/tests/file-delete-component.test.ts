@@ -600,7 +600,7 @@ describe("File.Patch", () => {
     );
   });
 
-  it("refuses the entire edit for stale, malformed, multiple, active or wrong-target content", function* () {
+  it("refuses the entire edit for stale, malformed or wrong-target diffs", function* () {
     const fixture = yield* useFixture();
     const target = join(fixture.workspace, "target.txt");
     const other = join(fixture.workspace, "other.txt");
@@ -611,14 +611,107 @@ describe("File.Patch", () => {
     for (const [diff, message] of [
       [stale, "the diff no longer matches"],
       [SMALL_PATCH.replace("-2 +2", "-2,2 +2"), "exact, single-file unified diff"],
-      [SMALL_PATCH + "\n" + SMALL_PATCH, "exactly one passive fenced"],
       [SMALL_PATCH.replaceAll("target.txt", "other.txt"), "exact, single-file unified diff"],
-      ['<File path="other.txt">overwrite</File>\n' + SMALL_PATCH, "exactly one passive fenced"],
     ]) {
       expect(yield* run(fixture, patchDocument("target.txt", diff))).toContain(message);
       expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
       expect(new Uint8Array(yield* until(readFile(other)))).toEqual(before);
     }
+  });
+
+  it("establishes the complete indented patch boundary before any wrapper or sibling runs", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const other = join(fixture.workspace, "other.txt");
+    const probe = "<Probe />";
+    const encoder = new TextEncoder();
+    const before = encoder.encode("```\r\n</File.Patch>\r\n" + probe + "  \r\nold\r\nlast");
+    const unrelated = encoder.encode("unchanged\r\n");
+    yield* until(writeFile(target, before));
+    yield* until(writeFile(other, unrelated));
+    const events: string[] = [];
+    const install = () =>
+      registerComponents([
+        {
+          name: "Wrap",
+          origin: "patch-boundary",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            events.push("wrapper");
+            return yield* content();
+          },
+        },
+        {
+          name: "Probe",
+          origin: "patch-boundary",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            events.push("row");
+            yield* writeTextFile(other, "probe executed");
+            return "probe executed";
+          },
+        },
+      ]);
+    const wrap = (rows: string[]) =>
+      [
+        "before patch",
+        "<Wrap>",
+        '  <File.Patch path="target.txt">',
+        ...rows,
+        "  wrapper content",
+        "</Wrap>",
+        "after patch",
+      ].join("\n");
+
+    for (const rows of [
+      [
+        "    ```diff",
+        "    @@ -1,3 +1,3 @@",
+        "     ```",
+        "     </File.Patch>",
+        "    +" + probe,
+        "  </File.Patch>",
+      ],
+      ["    ```diff", "    +" + probe, "  </File.Patch>"],
+      ["    ```diff", "    +" + probe],
+      ["    ```diff", "    @@ -2 +2 @@", "    -old", "    +new", "    ```", "  " + probe],
+      ["    > ```diff", "    > +" + probe, "  </File.Patch>", "  +" + probe],
+      ["    ```diff", "    ```", "    ```diff", "    ```", "  </File.Patch>"],
+      ["    " + probe, "  </File.Patch>"],
+    ]) {
+      let message = "";
+      try {
+        yield* run(fixture, wrap(rows), install);
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message).toContain("File.Patch requires exactly one passive fenced unified diff");
+      expect(events).toEqual([]);
+      expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
+      expect(new Uint8Array(yield* until(readFile(other)))).toEqual(unrelated);
+    }
+
+    const valid = yield* run(
+      fixture,
+      wrap([
+        "    ````diff",
+        "    @@ -1,4 +1,4 @@",
+        "     ```",
+        "     </File.Patch>",
+        "     " + probe + "  ",
+        "    -old",
+        "    +new",
+        "    ````",
+        "  </File.Patch>",
+      ]),
+      install,
+    );
+    expect(events).toEqual(["wrapper"]);
+    expect(valid.trim()).toBe("before patch\nwrapper content\nafter patch");
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(
+      encoder.encode("```\r\n</File.Patch>\r\n" + probe + "  \r\nnew\r\nlast"),
+    );
+    expect(new Uint8Array(yield* until(readFile(other)))).toEqual(unrelated);
   });
 
   it("refuses lossy UTF-8 replacement and honors an explicit final-newline marker", function* () {
