@@ -67,10 +67,34 @@ export const props: PropsSchema = {
 const checksProps: PropsSchema = {
   type: "object",
   properties: {
-    url: { type: "string", minLength: 1 },
-    provider: { type: "string", minLength: 1 },
-    watch: { type: "boolean" },
-    timeoutSeconds: { type: "integer", minimum: 1 },
+    url: {
+      type: "string",
+      minLength: 1,
+      description:
+        "The pull request's canonical URL, which identifies it; the provider that " +
+        "recognizes the URL answers, such as GitHub for `github.com`.",
+    },
+    provider: {
+      type: "string",
+      minLength: 1,
+      description:
+        "The name of the only provider that may answer, for a URL another provider would " +
+        "also recognize, such as a self-hosted deployment: lower-case letters, digits " +
+        "and hyphens, starting with a letter.",
+    },
+    watch: {
+      type: "boolean",
+      description:
+        "Wait until every check reported for the pinned head settles, instead of reading " +
+        "once, and bind one watch result. Needs `timeoutSeconds`; only a REPL entry watches.",
+    },
+    timeoutSeconds: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "How many seconds a watch waits before it ends `incomplete`: a positive whole " +
+        "number, required with `watch` and refused without it.",
+    },
   },
   required: ["url"],
   additionalProperties: false,

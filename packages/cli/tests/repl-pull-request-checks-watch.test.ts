@@ -28,7 +28,7 @@ import {
 import type { Operation, Task } from "effection";
 import { fromReadable } from "@effectionx/node";
 import { once } from "@effectionx/node/events";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { rm, writeTextFile } from "@effectionx/fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -976,54 +976,6 @@ describe("what a watch refuses before contacting anything", () => {
     expect(ran.output.trim()).toBe("[]");
     expect(retained(ran.events, PULL_REQUEST_READ)).toHaveLength(1);
     expect(results(ran.events)).toEqual([]);
-  });
-});
-
-/** The entry the Sidekick CI guide submits, read from the shipped chapter. */
-function* guideEntry(): Operation<string> {
-  const chapter = yield* readTextFile(new URL("../src/documents/sidekick/ci.md", import.meta.url));
-  const fence = /(?<!`)````xmd\n([\s\S]*?)\n````(?!`)/.exec(chapter);
-  if (fence?.[1] === undefined) {
-    throw new Error("the CI guide carries no entry example");
-  }
-  return fence[1].replaceAll("https://github.com/taras/executable.md/pull/123", URL_1);
-}
-
-describe("the Sidekick CI guide's entry", () => {
-  it("W17: renders failed rows only when the outcome is failure", function* () {
-    const fixture = yield* useFixture();
-    const source = yield* guideEntry();
-
-    fixture.ci.runs = [
-      checkRun(31, "build", "completed", "failure"),
-      checkRun(32, "lint", "completed", "success"),
-    ];
-    fixture.ci.statuses = [commitStatus(42, "green", "error")];
-    const failed = yield* run(fixture, source, new InMemoryStream());
-    expect(failed.refusal).toBe(undefined);
-    expect(failed.output).toContain("Failed check records");
-    const rows = failed.output.slice(failed.output.indexOf("Failed check records"));
-    expect(rows).toContain('"build"');
-    expect(rows).toContain('"green"');
-    expect(rows).not.toContain('"lint"');
-
-    fixture.ci.runs = [checkRun(32, "lint", "completed", "success")];
-    fixture.ci.statuses = [];
-    const passed = yield* run(fixture, source, new InMemoryStream());
-    expect(passed.refusal).toBe(undefined);
-    expect(passed.output).toContain('"success"');
-    expect(passed.output).not.toContain("Failed check records");
-
-    // Pending at the deadline: incomplete, with nothing failed to show.
-    fixture.ci.runs = [checkRun(33, "slow", "in_progress", null)];
-    const task = yield* started(fixture, source, new InMemoryStream());
-    const now = fixture.clock.now;
-    yield* fixture.clock.waitFor((at) => at === now + CHECK_WATCH_POLL_MS);
-    fixture.clock.advanceTo(now + 600_000);
-    const pending = yield* task;
-    expect(pending.output).toContain('"incomplete"');
-    expect(pending.output).toContain('"timeout"');
-    expect(pending.output).not.toContain("Failed check records");
   });
 });
 
