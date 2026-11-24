@@ -1257,6 +1257,10 @@ Terminal.app's Shift+Return insert a newline; releasing a key inserts nothing.
 Control-C in a focused Message that holds text clears it, as described under
 Message below.
 
+The Round editor retains its first visible row when the caret moves within the
+window. A caret move beyond the window scrolls only far enough to reveal it.
+Resizing follows the same rule unless a manually wheeled position is held.
+
 While the screen is open it enables bracketed paste. A framed paste inserts one
 text value at the caret, preserving blank lines, indentation, tabs and Unicode.
 CR, LF and CRLF line separators become LF in the value; framing markers never
@@ -1283,10 +1287,14 @@ using the existing recovery rules.
 The wheel scrolls the reading beneath your pointer without moving keyboard
 focus. Each decoded tick requests three displayed rows: up moves toward
 preceding content and down toward following content. Content edges stop movement
-without wrapping or moving another reading. When the focused control is inside
-that reading, the wheel stops before hiding it. Use keyboard navigation to
+without wrapping or moving another reading. Outside the Round editor, when the
+focused control is inside that reading, the wheel stops before hiding it. Use keyboard navigation to
 reveal further controls, or move focus elsewhere to scroll farther with the
-wheel. A reading anchor belongs to its viewport rather than a particular row.
+wheel. The Round editor can scroll past its focused caret without moving it.
+Its manually wheeled position survives repaints and resizing while the draft
+text and caret are unchanged. The next caret move or text change resumes caret
+following from that position. A reading anchor belongs to its viewport rather
+than a particular row.
 
 ## Every drawer is a window
 
@@ -1721,8 +1729,9 @@ conversation and unsent Message remain available.
 
 The bar shows `✎ draft`, **Send** and **X**. Send is dim and admits nothing
 while the draft is empty. X discards the draft and returns focus to
-**+ New Round**. A refused submission leaves the text in the editor. When
-Send admits a round, the live work replaces the editor and the bar shows
+**+ New Round**. A refused submission leaves the text in the editor. Admission
+through Send or the Sidekick consumes the submitted draft, closes its editor
+and reveals the admitted entry's work. After Send admits a round, the bar shows
 `● running · user` and offers **Stop** for that exact round while it runs.
 History highlights the draft with `✎` while the editor is open and shows
 the running round with a spinner glyph after admission. Unfiltered Transcript
@@ -4320,8 +4329,10 @@ submission.
 
 Filling the shared draft starts nothing, and submitting is a separate request. A
 fill is applied by the loop that owns the draft and the request waits for it, so
-a submission after one reserves the text the fill put there. While a person has
-taken the draft over, a fill refuses and stays refused until they ask the
+a submission after one reserves the text the fill put there. A nonempty
+Sidekick fill opens the Round editor without taking keyboard focus or changing
+the unsent Message. An empty fill does not open a closed editor. While a person
+has taken the draft over, a fill refuses and stays refused until they ask the
 Sidekick for something.
 
 A pause request is the root's, as process-local state on the exact reservation it
