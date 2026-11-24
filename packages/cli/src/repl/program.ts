@@ -2634,6 +2634,7 @@ function* drive(
           : undefined;
       if (action?.kind === "viewport-wheel" && action.window === DRAFT_WINDOW) {
         if (draftWindow.count !== undefined && draftWindow.length !== undefined) {
+          draftWindow.manual = true;
           draftWindow.from = Math.max(
             0,
             Math.min(
@@ -6331,6 +6332,10 @@ export function* prepareFrame(
         from,
         count,
         length: drafted.value.display.length,
+        manual:
+          draftWindow.manual === true &&
+          draftWindow.draft === view.state.draft &&
+          draftWindow.caret === (view.state.draftCaret?.offset ?? view.state.draft.length),
         draft: view.state.draft,
         caret: view.state.draftCaret?.offset ?? view.state.draft.length,
       });
@@ -6621,7 +6626,7 @@ export function draftWindowFrom(
 }
 
 /**
- * Keeps the remembered row while the caret and draft are unchanged, so a wheel
+ * Keeps a manually wheeled row while the caret and draft are unchanged, so a wheel
  * move survives repaints; otherwise applies draftWindowFrom.
  */
 export function followDraftWindow(
@@ -6632,7 +6637,7 @@ export function followDraftWindow(
   draft: string,
   caret: number,
 ): number {
-  return held?.draft === draft && held.caret === caret
+  return held?.manual === true && held.draft === draft && held.caret === caret
     ? Math.max(0, Math.min(held.from ?? 0, Math.max(0, length - count)))
     : draftWindowFrom(count, length, active, held?.from);
 }
@@ -6642,6 +6647,8 @@ export function followDraftWindow(
  * ReplState and cleared when the editor closes.
  */
 export interface ReplDraftWindow {
+  /** Whether wheel input holds the window away from caret following. */
+  manual?: boolean;
   /** First visible row. */
   from?: number;
   /** Visible row count of the last frame, used to clamp wheel movement. */

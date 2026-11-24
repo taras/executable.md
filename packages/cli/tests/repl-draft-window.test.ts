@@ -38,10 +38,25 @@ describe("draft window", () => {
     yield* page.until("three earlier draft rows", () => first() === before - 3);
     yield* page.wheel("up", { row: 10, column: 60 });
     yield* page.until("six earlier draft rows", () => first() === before - 6);
-    yield* page.resize({ columns: 201, rows: 53 });
+    yield* page.resize({ columns: 200, rows: 30 });
     expect(first()).toBe(before - 6);
     yield* page.key("ArrowRight");
     yield* page.until("the caret row returns", (one) => one.shows("DRAFT-END-119"));
+  });
+  it("keeps the rendered end caret visible when the focused draft shrinks", function* () {
+    const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
+    yield* generateTypingDraft(page, 120);
+    yield* page.resize({ columns: 200, rows: 30 });
+    let carets = 0;
+    for (let row = 0; row < 30; row++) {
+      for (let column = 0; column < 200; column++) {
+        if (page.repl.terminal.screen?.styleAt(column, row).background === 8377320) {
+          carets++;
+        }
+      }
+    }
+    expect(carets).toBe(1);
+    expect(page.screen().shows("DRAFT-END-119")).toBe(true);
   });
   it("applies every draft wheel notch in a burst with one paint and clamps", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
@@ -105,12 +120,28 @@ describe("draft window", () => {
   });
   it("retains a manually scrolled window until following resumes", function* () {
     expect(
-      followDraftWindow(10, 120, 119, { from: 90, draft: "held", caret: 119 }, "held", 119),
+      followDraftWindow(
+        10,
+        120,
+        119,
+        { manual: true, from: 90, draft: "held", caret: 119 },
+        "held",
+        119,
+      ),
     ).toBe(90);
     expect(
-      followDraftWindow(10, 120, 119, { from: 90, draft: "held", caret: 118 }, "held", 119),
+      followDraftWindow(
+        10,
+        120,
+        119,
+        { manual: true, from: 90, draft: "held", caret: 118 },
+        "held",
+        119,
+      ),
     ).toBe(110);
-    expect(followDraftWindow(10, 5, 4, { from: 90, draft: "short", caret: 4 }, "short", 4)).toBe(0);
+    expect(
+      followDraftWindow(10, 5, 4, { manual: true, from: 90, draft: "short", caret: 4 }, "short", 4),
+    ).toBe(0);
   });
   it("keeps the first visible line when the caret moves down inside it", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
