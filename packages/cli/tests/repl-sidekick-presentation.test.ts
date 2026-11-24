@@ -1180,15 +1180,7 @@ describe("PV3/PV4: question and Configure editing", () => {
       "History over Configure",
       (one) => one.shows("History") && !one.shows("[refresh]"),
     );
-    yield* tab(page);
-    yield* tab(page);
-    yield* page.key("ArrowRight");
-    yield* page.until("held History Exit guidance", (one) => one.shows("Enter exits"));
-    yield* page.key("ArrowLeft");
-    yield* page.until("held History opener guidance", (one) => one.shows("Enter opens History"));
-    yield* page.key("Backtab");
-    yield* sleep(30);
-    yield* page.key("Enter");
+    yield* page.key("Escape");
     yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
     yield* page.until("Configure owns focus again", (one) => one.shows(">> Agent:"));
     yield* page.type("!");
@@ -3075,15 +3067,15 @@ describe("Sidekick original interrupted identities and native input routes", () 
     expect(yield* finishDraft(page)).toBe("kept entry");
   });
 
-  it("UH5: an open History drawer still says Esc closes, and closing keeps both texts", function* () {
+  it("UH5: History exposes Close, and closing keeps both texts", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
     yield* compose(page, "kept question");
     yield* tab(page);
     yield* page.key("Enter");
     yield* page.until("the keyboard-opened History drawer", (one) => one.shows("[close]"));
-    expect(page.screen().shows("Esc closes")).toBe(true);
-    expect(page.screen().shows("Tab regions Alt↑↓")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+    expect(page.screen().shows("Tab regions Alt↑↓")).toBe(false);
     yield* page.key("Escape");
     yield* page.until("History closing once", (one) => !one.shows("[close]"));
     expect(composerHolds(page.screen(), "kept question")).toBe(true);

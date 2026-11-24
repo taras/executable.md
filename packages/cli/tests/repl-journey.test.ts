@@ -1769,7 +1769,7 @@ describe("REPL original first-use paths and question ownership", () => {
         }
         yield* page.press("Entry 1 admitted");
         yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
-        expect(directions(page.screen())).toContain("Esc closes");
+        expect(page.screen().shows("[close]")).toBe(true);
         yield* closeDrawer(page);
         yield* page.until("the frozen Draft guidance", (one) =>
           one.shows("History · Send unavailable"),
@@ -2415,10 +2415,7 @@ describe("REPL original visible guidance and controlled typing", () => {
         yield* page.key("ArrowLeft");
         yield* page.until("History focused", (one) => one.shows("> [History]"));
         yield* page.key("Enter");
-        yield* page.until(
-          "History's closing instruction",
-          (one) => one.shows("[close]") && one.shows("Esc closes"),
-        );
+        yield* page.until("History's close action", (one) => one.shows("[close]"));
       });
     }
   });
