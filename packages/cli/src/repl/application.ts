@@ -8839,7 +8839,7 @@ function drawerContent(
     // been. Every position gets its own row — a group is how the rail *draws*
     // two of them, never how it counts them — and each says what kind it is
     // without reading anything the position holds.
-    for (const one of numbered(view.navigation)) {
+    for (const one of [...numbered(view.navigation)].reverse()) {
       content.push({
         described: row(
           `drawer:marker:${one.point.marker}`,

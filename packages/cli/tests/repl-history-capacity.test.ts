@@ -103,9 +103,9 @@ describe("History over a long retained history", () => {
     const admitted = markers(drawn);
     expect(admitted.length).toBeGreaterThan(20);
     expect(markers(again)).toEqual(admitted);
-    // In recorded order, from the first position.
+    // Newest first, with the journal positions unchanged.
     expect(admitted).toEqual(
-      model.checkpoints.slice(0, admitted.length).map((one) => `drawer:marker:${one.marker}`),
+      [...model.checkpoints].reverse().slice(0, admitted.length).map((one) => `drawer:marker:${one.marker}`),
     );
     // One column, one row each, one under the other, each as wide as the next.
     const bounds = admitted.map((key) => drawn.boundsOf(key));
@@ -117,7 +117,31 @@ describe("History over a long retained history", () => {
       expect(one.y).toBe((placed[0]?.y ?? 0) + at);
     }
     const label = presenter.grid.textIn(placed[0] ?? { x: 0, y: 0, width: 0, height: 0 })[0] ?? "";
-    expect(label.trimEnd()).toContain("1 · Entry 1 admitted");
+    expect(label.trimEnd()).toContain("120 · Entry outcome recorded");
+    const original = model.checkpoints.map((one) => one.marker);
+    for (const [index, kind] of ["key", "pointer"].entries()) {
+      const key = admitted[index];
+      const bounds = drawn.boundsOf(key);
+      if (bounds === undefined) {
+        throw new Error("History row is absent");
+      }
+      const current = yield* presenter.commit(viewOf(opened, model, TALL, key));
+      const result = yield* presenter.tree.dispatch(
+        kind === "key"
+          ? { kind: "key", key: "Enter" }
+          : {
+              kind: "pointer",
+              target: current.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
+              frame: current.committed.rendered.tree,
+            },
+      );
+      if (!result.ok || result.value.outcome !== "action") {
+        throw new Error("History row selected nothing");
+      }
+      const selected = reduceRepl(opened, result.value.action, model, LIVE).state;
+      expect(selected.route.at).toBe(original[original.length - 1 - index]);
+    }
+    expect(model.checkpoints.map((one) => one.marker)).toEqual(original);
     expect(presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
   });
 

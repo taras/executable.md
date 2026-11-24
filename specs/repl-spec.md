@@ -1840,6 +1840,10 @@ position, and `[live]` returns from any of them to the head. The selected
 position keeps its own surface and the head its own colour, so the two can sit
 side by side.
 
+The History drawer lists retained positions in descending history order, newest
+first. Keyboard and pointer activation select the displayed position by its
+retained marker. Display order changes neither journal order nor entry identity.
+
 The map and the content are one reading, taken from one acknowledged array and
 carried together through the frame. Nothing on this screen pairs a prefix with
 a map the file no longer has: a record retained while the terminal is being
