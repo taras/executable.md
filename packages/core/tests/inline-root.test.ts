@@ -27,7 +27,7 @@ import {
 } from "@executablemd/test-support/failure-journal";
 
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, scoped, sleep, until } from "effection";
+import { ensure, race, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API, exec, Permissions, useHostFiles } from "@executablemd/runtime";
@@ -365,6 +365,52 @@ describe("Tier IR — inline root documents", () => {
     expect(output).toContain('"window": "🦊🦊🦊🦊"');
   });
 
+  it("isolates concurrent bounded File reads and keeps nested and sibling reads ordinary", function* () {
+    const contents = "left marker\nright marker\nSYNTHETIC_OUTSIDE_1483";
+    const cwd = yield* useWorkspace({ "notes.md": contents, "nested.md": "ordinary nested text" });
+    const bothReading = withResolvers<void>();
+    let arrivals = 0;
+    yield* API.Fs.around({
+      *readTextFile([path], next) {
+        if (path.endsWith("/notes.md")) {
+          const nested = yield* API.Files.operations.readTextFile({ cwd, path: "nested.md" });
+          expect(nested).toMatchObject({ ok: true, value: "ordinary nested text" });
+          arrivals += 1;
+          if (arrivals === 2) {
+            bothReading.resolve();
+          }
+          yield* bothReading.operation;
+        }
+        return yield* next(path);
+      },
+    });
+    function* window(line: string, marker: string) {
+      const stream = new InMemoryStream();
+      const source = `<File path="notes.md" lines="${line}" as="window" />\n\n{window}`;
+      const output = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+      expect(output).toContain(marker);
+      const retained = stream
+        .snapshot()
+        .filter(
+          (event) =>
+            event.type === "yield" &&
+            ["file-window", "file-read", "repl_repository_local"].includes(event.description.type),
+        );
+      expect(retained).toHaveLength(1);
+      expect(JSON.stringify(retained)).toContain(marker);
+      expect(JSON.stringify(stream.snapshot())).not.toContain("SYNTHETIC_OUTSIDE_1483");
+    }
+    const left = yield* spawn(() => window("1", "left marker"));
+    const right = yield* spawn(() => window("2", "right marker"));
+    yield* bothReading.operation;
+    expect(yield* API.Files.operations.readTextFile({ cwd, path: "notes.md" })).toMatchObject({
+      ok: true,
+      value: contents,
+    });
+    yield* left;
+    yield* right;
+  });
+
   it("continues literal scanning across a chunk and cancels a long miss", function* () {
     const late = "x".repeat(65534) + "needle needle";
     const first = yield* searchText(late, "needle", -1, 1);
@@ -391,7 +437,20 @@ describe("Tier IR — inline root documents", () => {
       files: ([operation], next) => (operation === "read" && !allowed ? false : next(operation)),
     });
     let reads = 0;
+    let deniedProbes = 0;
     yield* API.Fs.around({
+      *realpath([path], next) {
+        if (!allowed && String(path).endsWith("/notes.md")) {
+          deniedProbes += 1;
+        }
+        return yield* next(path);
+      },
+      *stat([path], next) {
+        if (!allowed && String(path).endsWith("/notes.md")) {
+          deniedProbes += 1;
+        }
+        return yield* next(path);
+      },
       *readTextFile([path], next) {
         if (path.endsWith("/notes.md")) {
           reads += 1;
@@ -403,9 +462,16 @@ describe("Tier IR — inline root documents", () => {
       '<Workspace.Search query="' +
       phrase +
       '" as="page" />\n<Output><Json value={page} /></Output>';
+    const searchStream = new InMemoryStream();
     const printed = asText(
-      yield* collect(yield* execute({ ...inlineSource(search), stream: new InMemoryStream() })),
+      yield* collect(yield* execute({ ...inlineSource(search), stream: searchStream })),
     );
+    expect(
+      searchStream
+        .snapshot()
+        .filter((event) => event.type === "yield" && event.description.type === "workspace-search"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(searchStream.snapshot())).not.toContain("do not retain this tail");
     const jsonStart = printed.indexOf("{");
     const jsonEnd = printed.lastIndexOf("}");
     const page = JSON.parse(printed.slice(jsonStart, jsonEnd + 1));
@@ -461,6 +527,7 @@ describe("Tier IR — inline root documents", () => {
     );
     expect(denied).toContain("bounded file read is unavailable");
     expect(reads).toBe(before);
+    expect(deniedProbes).toBe(0);
     const prefix = new InMemoryStream(
       stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
     );
@@ -468,7 +535,45 @@ describe("Tier IR — inline root documents", () => {
       yield* collect(yield* execute({ ...inlineSource(source), stream: prefix })),
     );
     expect(replayed).toBe(first);
+    const acknowledged = new InMemoryStream(stream.snapshot());
+    expect(
+      asText(yield* collect(yield* execute({ ...inlineSource(source), stream: acknowledged }))),
+    ).toBe(first);
+    for (const events of [
+      searchStream.snapshot(),
+      searchStream
+        .snapshot()
+        .filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    ]) {
+      const replay = new InMemoryStream(events);
+      expect(
+        asText(yield* collect(yield* execute({ ...inlineSource(search), stream: replay }))),
+      ).toBe(printed);
+    }
     expect(reads).toBe(before);
+
+    allowed = true;
+    for (const [operation, document, prior] of [
+      ["file-window", source, stream],
+      ["workspace-search", search, searchStream],
+    ] as const) {
+      const events = prior.snapshot();
+      const boundary = events.findIndex(
+        (event) => event.type === "yield" && event.description.type === operation,
+      );
+      expect(boundary).toBeGreaterThan(0);
+      const unfinished = new InMemoryStream(events.slice(0, boundary));
+      const output = asText(
+        yield* collect(yield* execute({ ...inlineSource(document), stream: unfinished })),
+      );
+      expect(output).toContain("edited");
+      expect(
+        unfinished
+          .snapshot()
+          .filter((event) => event.type === "yield" && event.description.type === operation),
+      ).toHaveLength(1);
+    }
+    expect(reads).toBe(before + 2);
   });
 
   it("refuses an unavailable observation provider even with an empty listing", function* () {
@@ -486,8 +591,11 @@ describe("Tier IR — inline root documents", () => {
     };
     expect(yield* run()).not.toContain("unavailable");
     yield* API.Files.around({
-      *readTextFile([input], next) {
+      readTextFile() {
         throw new Error("An unsupported search must not call the legacy reader");
+      },
+      globFiles() {
+        throw new Error("An unsupported search must not list files");
       },
     });
     expect(

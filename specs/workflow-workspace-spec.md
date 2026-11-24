@@ -3296,6 +3296,12 @@ durable effect.
 
 ### 10.1 Workspace-local effects
 
+The workflow provider records ordinary file reads as workspace effects.
+It refuses `readTextFile` requests carrying a bounded observation before
+reading or recording a workspace file effect. Project search checks that
+capability before enumeration, even in an empty workspace.
+
+
 One local expansion produces one effect and one SQLite transaction:
 
 ```text

@@ -3189,6 +3189,34 @@ function respond(request) {
     });
   });
 
+  it("1483: an authored bounded REPL entry owns File and search retention", function* () {
+    const project = yield* useTempDirectory("repl-bounded-journal-");
+    const marker = "retained synthetic 1483";
+    const tail = "outside synthetic 1483";
+    yield* writeTextFile(join(project, "bounded.txt"), marker + "\n" + "x".repeat(12000) + tail);
+    yield* useHostFiles();
+    const stream = new InMemoryStream();
+    const session = answered(
+      yield* openReplSession({ projectCwd: project, execution: { id: "bounded", stream } }),
+    );
+    const submitted = answered(
+      yield* session.submit(
+        [
+          '<File path="bounded.txt" lines="1" as="window" />',
+          '<Workspace.Search query="retained synthetic 1483" as="page" />',
+          "<Output><Json value={{window, page}} /></Output>",
+        ].join("\n"),
+      ),
+    );
+    answered(yield* submitted.join());
+    const journal = JSON.stringify(stream.snapshot());
+    expect(journal.match(/"type":"file-window"/g)).toHaveLength(1);
+    expect(journal.match(/"type":"workspace-search"/g)).toHaveLength(1);
+    expect(journal).toContain(marker);
+    expect(journal).not.toContain(tail);
+    expect(journal).not.toContain("repl_repository_local");
+  });
+
   it("1428: Sidekick falls back at mount boundaries and honors inherited global ignores", function* () {
     const project = yield* useTempDirectory("workspace-search-git-");
     const privateRoot = join(project, "private");

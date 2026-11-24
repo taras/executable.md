@@ -3926,8 +3926,11 @@ access checks. Direct file reads use their own access checks independently
 of enumeration. Search skips Git metadata, unreadable files and text
 containing NUL. Both search and context
 exclude Git metadata by authored path and resolved destination, including through
-internal symlinks. The file provider authorizes and reads the file before
-matching its text. A file with no eligible match skips disclosure detection.
+internal symlinks. Search and bounded file readers pass an observation in
+their `readTextFile` request. The provider authorizes and reads the file before
+applying that observation. It returns only the approved projection to the
+enclosing control or authored effect, which owns retention. Search matches
+inside that observation. A file with no eligible match skips disclosure detection.
 The same complete text must pass the caller’s disclosure policy before a
 match can contribute a result or establish a continuation. This can make a
 query with a withheld match take longer than an absent query even when their

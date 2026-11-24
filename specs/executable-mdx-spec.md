@@ -9966,8 +9966,18 @@ The read form accepts `lines="42"` or `lines="38:46"` for an inclusive
 one-based line selection. Alternatively, `offset={1200} limit={640}` selects
 a zero-based Unicode code-point window. A bounded read returns at most 4096
 code points. Its provider applies current authority and projects disclosed
-text before returning a bounded value. A provider without observation support
-refuses. An acknowledged observation restores under ordinary continuation rules.
+text before returning a bounded value. Bounded File and file search use the
+ordinary `readTextFile` operation with a typed `observation` on the request.
+The provider checks placement and access before reading. It applies the
+observation to the text from that read and returns only its projection.
+A provider without observation support refuses before I/O. File search
+checks support before enumeration, including in an empty directory.
+
+The enclosing bounded File or Workspace Search effect owns the retained
+outcome. The projected provider read creates no whole-file journal record.
+An acknowledged bounded outcome restores under ordinary continuation rules.
+If continuation reaches an unfinished observation, it performs the read
+under current authority.
 
 `<Workspace.Search query="error message" as="page" />` finds a case-sensitive
 literal in project files. A page returns up to 20 matches and continuation

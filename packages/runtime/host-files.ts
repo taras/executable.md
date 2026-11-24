@@ -100,13 +100,14 @@ import { Stdio } from "@effectionx/process";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
+import { installTextProvider } from "./files.ts";
 import { routeHostCopy } from "./files-host.ts";
 import { Permissions } from "./permissions.ts";
 import type {
   FileCopyInput,
   FilePathInput,
-  FileObservation,
-  DocumentFilesHandler,
+  FileReadInput,
+  FilesHandler,
   FilesOperation,
   FilesPhase,
   FilesReason,
@@ -471,7 +472,7 @@ function byCodePoint(left: string, right: string): number {
  * Exported so a test can drive one operation directly; entrypoints install it
  * with {@link useHostFiles}.
  */
-export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesHandler {
+export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   options = Object.freeze({
     ...options,
     ...(options.access === undefined ? {} : { access: Object.freeze({ ...options.access }) }),
@@ -486,16 +487,15 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     return Ok(undefined);
   }
 
-  function* readTextFile(
-    input: FilePathInput & { readonly observation?: FileObservation },
-  ): Operation<Result<string>> {
+  function* readTextFile(input: FileReadInput): Operation<Result<string>> {
+    const { observation } = input;
     const lexical = inadmissible(input);
     if (lexical !== undefined) {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
     if (
-      (options.excludeGitMetadata || input.observation?.excludeGitMetadata) &&
+      (options.excludeGitMetadata || observation?.excludeGitMetadata) &&
       isGitMetadata(input.path)
     ) {
       return nonWriteFailure("read", "lexical", "permission-denied");
@@ -514,7 +514,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     }
 
     if (
-      (options.excludeGitMetadata || input.observation?.excludeGitMetadata) &&
+      (options.excludeGitMetadata || observation?.excludeGitMetadata) &&
       (isGitMetadata(target.path) ||
         (options.access !== undefined && within(options.access.private, target.path)))
     ) {
@@ -544,7 +544,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     } catch (error) {
       return nonWriteFailure("read", "access", reasonOf(error));
     }
-    return input.observation === undefined ? Ok(text) : yield* input.observation.project(text);
+    return observation === undefined ? Ok(text) : yield* observation.project(text);
   }
 
   /**
@@ -1130,7 +1130,6 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
   return {
     checkFilePath,
     readTextFile,
-    observeTextFile: readTextFile,
     writeTextFile,
     copyFile,
     deleteFile,
@@ -1204,36 +1203,30 @@ function traverse(
  */
 export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
   const handler = hostFilesHandler(options);
-  return API.Files.around(
-    {
-      *checkFilePath([input]) {
-        return yield* handler.checkFilePath(input);
-      },
-      *readTextFile([input]) {
-        return yield* handler.readTextFile(input);
-      },
-      *observeTextFile([input]) {
-        return yield* handler.observeTextFile(input);
-      },
-      *writeTextFile([input]) {
-        return yield* handler.writeTextFile(input);
-      },
-      *copyFile([input]) {
-        return yield* handler.copyFile(input);
-      },
-      *deleteFile([input]) {
-        return yield* handler.deleteFile(input);
-      },
-      *ensureDirectory([input]) {
-        return yield* handler.ensureDirectory(input);
-      },
-      *globFiles([input]) {
-        return yield* handler.globFiles(input);
-      },
-      *temporaryDirectory() {
-        return yield* handler.temporaryDirectory();
-      },
+  return installTextProvider({
+    *checkFilePath([input]) {
+      return yield* handler.checkFilePath(input);
     },
-    { at: "min" },
-  );
+    *readTextFile([input]) {
+      return yield* handler.readTextFile(input);
+    },
+    *writeTextFile([input]) {
+      return yield* handler.writeTextFile(input);
+    },
+    *copyFile([input]) {
+      return yield* handler.copyFile(input);
+    },
+    *deleteFile([input]) {
+      return yield* handler.deleteFile(input);
+    },
+    *ensureDirectory([input]) {
+      return yield* handler.ensureDirectory(input);
+    },
+    *globFiles([input]) {
+      return yield* handler.globFiles(input);
+    },
+    *temporaryDirectory() {
+      return yield* handler.temporaryDirectory();
+    },
+  });
 }

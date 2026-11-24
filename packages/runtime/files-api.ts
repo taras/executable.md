@@ -1,11 +1,9 @@
-import { Err, lift } from "effection";
-import { filesFailure } from "./files.ts";
 import { createContext, ensure, useScope } from "effection";
-import type { Operation, Scope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import type { Api, Around, Middleware } from "@effectionx/context-api";
-import type { DocumentFilesHandler } from "./files.ts";
+import type { FilesHandler } from "./files.ts";
 
-type Layers = Partial<Around<DocumentFilesHandler>>;
+type Layers = Partial<Around<FilesHandler>>;
 interface State {
   max: Layers[];
   min: Layers[];
@@ -76,15 +74,28 @@ function isOperation<T>(value: Operation<T> | T): value is Operation<T> {
 }
 
 export interface FileRecorderHandle {
-  assemble<K extends keyof DocumentFilesHandler>(method: K): DocumentFilesHandler[K];
+  assemble<K extends keyof FilesHandler>(method: K): FilesHandler[K];
 }
-export interface FilesApi extends Api<DocumentFilesHandler> {
+export interface FilesApi extends Api<FilesHandler> {
+  /** Check the effective read provider without listing files or touching a target. */
   supportsTextObservation(): Operation<boolean>;
+  installTextProvider(layers: Layers): Operation<void>;
   register(boundary: Layers): Operation<FileRecorderHandle>;
 }
 
-export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
+export function createFilesApi(
+  terminal: FilesHandler,
+  unsupportedObservation: () => Result<string>,
+): FilesApi {
   const recorders = new WeakSet<Layers>();
+  const providers = new WeakSet<Layers>();
+  function supportsObservation(layers: Layers[]): boolean {
+    // An opted-in host provider terminates the read. Only recorder layers may precede it.
+    const reader = layers.find(
+      (layer) => layer.readTextFile !== undefined && !recorders.has(layer),
+    );
+    return reader !== undefined && providers.has(reader);
+  }
   function* around(
     layers: Layers,
     options: { at: "min" | "max" } = { at: "max" },
@@ -98,10 +109,11 @@ export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
         : { max: [...current.max, layers], min: [...current.min] },
     );
   }
-  function operations(exclude?: Layers, active: () => boolean = () => true): DocumentFilesHandler {
+  function operations(exclude?: Layers, active: () => boolean = () => true): FilesHandler {
     function call<A extends unknown[], T>(
       terminal: (...args: A) => Operation<T>,
       select: (layer: Layers) => Middleware<A, Operation<T>> | undefined,
+      wrap?: (layers: Layers[], args: A, invoke: () => Operation<T>) => Operation<T>,
     ): (...args: A) => Operation<T> {
       return (...args) => ({
         *[Symbol.iterator]() {
@@ -118,26 +130,26 @@ export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
               const handler = select(layer);
               return handler === undefined ? [] : [handler];
             });
-          const result = combine(handlers)(args, terminal);
-          return isOperation(result) ? yield* result : result;
+          const invoke = function* () {
+            const result = combine(handlers)(args, terminal);
+            return isOperation(result) ? yield* result : result;
+          };
+          return yield* wrap === undefined ? invoke() : wrap(layers, args, invoke);
         },
       });
     }
     return {
       checkFilePath: call(terminal.checkFilePath, (layer) => layer.checkFilePath),
-      readTextFile: call(terminal.readTextFile, (layer) => layer.readTextFile),
-      observeTextFile: call(terminal.observeTextFile, (layer) => {
-        if (layer.observeTextFile !== undefined) {
-          return layer.observeTextFile;
-        }
-        return layer.readTextFile === undefined
-          ? undefined
-          : lift(() =>
-              Err<string>(
-                filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }),
-              ),
-            );
-      }),
+      readTextFile: call(
+        terminal.readTextFile,
+        (layer) => layer.readTextFile,
+        function* (layers, [input], invoke) {
+          if (input.observation !== undefined && !supportsObservation(layers)) {
+            return unsupportedObservation();
+          }
+          return yield* invoke();
+        },
+      ),
       writeTextFile: call(terminal.writeTextFile, (layer) => layer.writeTextFile),
       copyFile: call(terminal.copyFile, (layer) => layer.copyFile),
       deleteFile: call(terminal.deleteFile, (layer) => layer.deleteFile),
@@ -150,12 +162,12 @@ export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
     operations: operations(),
     around,
     *supportsTextObservation() {
-      const layers = collect(yield* useScope());
-      // A recorder observes a provider’s calls without supplying its capabilities.
-      const provider = layers.find(
-        (layer) => layer.readTextFile !== undefined && !recorders.has(layer),
-      );
-      return provider?.observeTextFile !== undefined;
+      return supportsObservation(collect(yield* useScope()));
+    },
+    *installTextProvider(layers) {
+      const provider = Object.freeze({ ...layers });
+      providers.add(provider);
+      yield* around(provider, { at: "min" });
     },
     *register(boundary): Operation<FileRecorderHandle> {
       let live = true;
@@ -166,7 +178,7 @@ export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
       yield* around(boundary);
       const selected = operations(boundary, () => live);
       return Object.freeze({
-        assemble: <K extends keyof DocumentFilesHandler>(method: K) => selected[method],
+        assemble: <K extends keyof FilesHandler>(method: K) => selected[method],
       });
     },
   };

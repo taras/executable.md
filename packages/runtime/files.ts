@@ -245,15 +245,21 @@ export interface FileWriteSuccess {
   readonly publication: "host-committed" | "transaction-staged";
 }
 
+/** A bounded projection performed inside an authorized provider read. */
 export interface FileObservation {
   readonly excludeGitMetadata: boolean;
-  /** Project caller-approved data inside the read, before returning it to middleware. */
+  /** Use the text from this read and return only the bounded outcome to middleware. */
   project(text: string): Operation<Result<string>>;
 }
 
 export interface FilePathInput {
   readonly cwd: string;
   readonly path: string;
+}
+
+export interface FileReadInput extends FilePathInput {
+  /** Requires an observation-capable provider. Omit for an ordinary whole-text read. */
+  readonly observation?: FileObservation;
 }
 
 export interface FileCopyInput {
@@ -275,19 +281,14 @@ export interface GlobInput {
   readonly exclude: string[];
 }
 
-export interface DocumentFilesHandler extends FilesHandler {
-  observeTextFile(
-    input: FilePathInput & { readonly observation: FileObservation },
-  ): Operation<Result<string>>;
-}
-
 export interface FilesHandler {
   /**
    * Whether this authored path is admissible at all, decided from the path and
    * `cwd` alone. No filesystem access, and nothing usable comes back.
    */
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
-  readTextFile(input: FilePathInput): Operation<Result<string>>;
+  /** Read text after placement and access checks, then apply any requested observation. */
+  readTextFile(input: FileReadInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
   /** Copy a regular file to a vacant destination with an existing parent. */
   copyFile(input: FileCopyInput): Operation<Result<void>>;
@@ -887,7 +888,7 @@ export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefi
  * indistinguishable from an installed one, and the whole point of the boundary
  * is that a workflow run cannot silently touch the caller's filesystem.
  */
-const composedFiles: FilesApi = createFilesApi({
+const unavailableFiles: FilesHandler = {
   // deno-lint-ignore require-yield
   *checkFilePath(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
@@ -895,10 +896,6 @@ const composedFiles: FilesApi = createFilesApi({
   // deno-lint-ignore require-yield
   *readTextFile(_input: FilePathInput): Operation<Result<string>> {
     throw new FilesProviderUnavailableError();
-  },
-  // deno-lint-ignore require-yield
-  *observeTextFile(): Operation<Result<string>> {
-    return Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }));
   },
   // deno-lint-ignore require-yield
   *writeTextFile(_input: FileWriteInput): Operation<Result<FileWriteSuccess>> {
@@ -924,11 +921,15 @@ const composedFiles: FilesApi = createFilesApi({
   *temporaryDirectory(): Operation<Result<string>> {
     throw new FilesProviderUnavailableError();
   },
-});
+};
+const composedFiles: FilesApi = createFilesApi(unavailableFiles, () =>
+  Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" })),
+);
 
-export const Files: Api<DocumentFilesHandler> & Pick<FilesApi, "supportsTextObservation"> = {
+export const Files: Api<FilesHandler> & Pick<FilesApi, "supportsTextObservation"> = {
   operations: composedFiles.operations,
   around: composedFiles.around,
   supportsTextObservation: composedFiles.supportsTextObservation,
 };
+export const installTextProvider = composedFiles.installTextProvider;
 export const registerFileRecorder = composedFiles.register;

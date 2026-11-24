@@ -10,7 +10,7 @@ import {
 } from "@executablemd/runtime";
 import type {
   FileCopyInput,
-  DocumentFilesHandler,
+  FilesHandler,
   FilesOperation,
   FilesPhase,
   FilePathInput,
@@ -157,11 +157,13 @@ function recordingBody(
       );
       return result.ok ? Ok(undefined) : result;
     },
-    boundary(): Partial<Around<DocumentFilesHandler>> {
+    boundary(): Partial<Around<FilesHandler>> {
       const body = this;
       return {
-        readTextFile: ([input], next) => body.read(input, () => next(input)),
-        *observeTextFile([input], next) {
+        *readTextFile([input], next) {
+          if (input.observation === undefined) {
+            return yield* body.read(input, () => next(input));
+          }
           yield* routing.guard();
           const permitted =
             routing.observe === undefined ? Ok(undefined) : yield* routing.observe(input);
