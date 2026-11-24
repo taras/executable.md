@@ -1081,6 +1081,38 @@ describe("REPL layout: what the application admits at each size", () => {
     }
   });
 
+  it("History allocates all overflow cells once and keeps wide Exit at the edge", function* () {
+    for (const count of [1, 40]) {
+      const model = yield* entriesModel(count);
+      for (const size of [NARROW, MEDIUM, WIDE]) {
+        yield* scoped(function* () {
+          const presenter = yield* usePresenter(size);
+          const shown = yield* presenter.commit(withWorkspace(viewOf(model, size), workspaceOf()));
+          const row = shown.regionOf("box:history");
+          const map = shown.regionOf("box:history:map");
+          const actions = shown.regionOf(ACTION_ROW);
+          const launcher = shown.boundsOf("footer:history");
+          const exit = shown.boundsOf("footer:exit");
+          if (!row || !map || !actions || !launcher || !exit) {
+            throw new Error("History row missing");
+          }
+          if (count === 40) {
+            expect([size.columns, map.width + launcher.width + actions.width]).toEqual([
+              size.columns,
+              row.width,
+            ]);
+            expect(map.x).toBe(launcher.x + launcher.width);
+            expect(actions.x).toBe(map.x + map.width);
+          }
+          if (size === WIDE && count === 40) {
+            expect(exit.x + exit.width).toBe(row.x + row.width);
+          }
+          expect(shown.cells.get("footer:exit")).toContain("[exit]");
+        });
+      }
+    }
+  });
+
   it("A2: the wide History row divides an odd remainder into whole cells", function* () {
     const empty = projectRepl([]);
     if (!empty.ok) {

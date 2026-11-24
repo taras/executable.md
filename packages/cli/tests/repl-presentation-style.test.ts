@@ -6210,7 +6210,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     }
     const observed = yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
     const draft = observed.regionOf("box:round-editor:body");
-    const history = observed.regionOf("box:history");
+    const history = observed.regionOf("box:history:map");
     if (draft === undefined || history === undefined) {
       throw new Error("the empty frame did not publish its Draft and History surfaces");
     }

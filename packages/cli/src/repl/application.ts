@@ -13906,7 +13906,7 @@ export function historyProbeOf(
   const launcher = boxes.find((one) => one.id === "box:action:footer:history");
   const children = [...(launcher === undefined ? [] : [launcher]), ...actions.children].map(
     (child) =>
-      child.id === HISTORY_SPACE
+      child.id === HISTORY_SPACE || child.id === `${HISTORY_SPACE}:actions`
         ? // The leading spacer grows into whatever the row has spare. Declared at
           // zero here, because what is being asked is the minimum the controls
           // need and a growing child would answer with the whole row.
@@ -13927,16 +13927,9 @@ export function historyProbeOf(
       box({
         id: HISTORY_PROBE_MAP,
         props: fittedPartProps(),
-        text: " ".repeat(launcher?.text?.length ?? 0) + (map.text ?? ""),
+        text: map.text ?? "",
         ...(map.style === undefined ? {} : { style: map.style }),
-        ...(map.runs === undefined
-          ? {}
-          : {
-              runs: [
-                { text: " ".repeat(launcher?.text?.length ?? 0), token: "history" },
-                ...map.runs,
-              ],
-            }),
+        ...(map.runs === undefined ? {} : { runs: map.runs }),
       }),
     ],
   });
@@ -14018,7 +14011,8 @@ export function wideHistoryWidths(
   if (natural === undefined || !Number.isInteger(natural)) {
     return bounded;
   }
-  const gap = Math.floor(Math.max(0, row - natural) / 2);
+  const launcher = probedWidthOf(`${HISTORY_PROBE_ACTIONS}:box:action:footer:history`) ?? 0;
+  const gap = Math.floor(Math.max(0, row - launcher - natural) / 2);
   return row - natural - gap >= needed ? { map: natural, gap } : bounded;
 }
 
@@ -15356,24 +15350,10 @@ function workspacePresentation(input: {
                     props: accepted
                       ? context.wideHistoryMap === undefined
                         ? fittedPartProps()
-                        : statedPartProps(
-                            Math.max(
-                              0,
-                              context.wideHistoryMap -
-                                (placed.find((one) => one.key === "footer:history")?.text.length ??
-                                  0),
-                            ),
-                          )
+                        : statedPartProps(context.wideHistoryMap)
                       : context.historySplit === undefined
                         ? fittedPartProps()
-                        : statedPartProps(
-                            Math.max(
-                              0,
-                              context.historySplit.map -
-                                (placed.find((one) => one.key === "footer:history")?.text.length ??
-                                  0),
-                            ),
-                          ),
+                        : statedPartProps(context.historySplit.map),
                     text: runText(map),
                     runs: map,
                     style: styleOf("history", { inspected }),
@@ -15403,9 +15383,16 @@ function workspacePresentation(input: {
                       ? actionRowProps()
                       : context.historySplit === undefined
                         ? inlineActionRowProps()
-                        : statedActionRowProps(context.historySplit.actions),
+                        : statedActionRowProps(
+                            Math.max(
+                              0,
+                              context.historySplit.actions -
+                                (placed.find((one) => one.key === "footer:history")?.text.length ??
+                                  0),
+                            ),
+                          ),
                     children: [
-                      ...(accepted ? [] : [spacer(HISTORY_SPACE, "footer")]),
+                      spacer(`${HISTORY_SPACE}:actions`, "footer"),
                       ...placed
                         .filter((candidate) => candidate.key !== "footer:history")
                         .map((candidate) =>
