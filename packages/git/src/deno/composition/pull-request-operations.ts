@@ -43,6 +43,7 @@
  */
 
 import { getExpansion, sourceDescription, type JsonObject } from "@executablemd/core";
+import type { SearchResult } from "../../composition/components/GitHubSearch.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { scoped, type Operation } from "effection";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
@@ -77,7 +78,7 @@ export { PULL_REQUEST_READ } from "./pull-request-read-retention.ts";
 export function useRetainedPullRequestReads(): Operation<void> {
   return PullRequestReadExecution.around(
     {
-      *search([repository, request, transport, validate]): Operation<JsonObject> {
+      *search([repository, request, transport, validate]): Operation<SearchResult> {
         const run = yield* getWorkflowRun();
         const expansion = yield* getExpansion();
         const configuration = gitOperationFingerprint([
@@ -87,6 +88,7 @@ export function useRetainedPullRequestReads(): Operation<void> {
           request.order ?? null,
           String(request.page),
           String(request.perPage),
+          ...(request.paginate ? ["paginate"] : []),
         ]);
         const stored = yield* scoped(function* () {
           return yield createDurableOperation(

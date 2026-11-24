@@ -19,7 +19,7 @@
 
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { resource, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { useRunComposition } from "../src/deno/run-composition/provider.ts";
@@ -30,6 +30,7 @@ import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   gitHubSource,
+  type GitHubAccess,
   type GitHubHttpRequest,
   type GitHubHttpResponse,
   type GitHubSource,
@@ -183,7 +184,7 @@ const FIRST_PAGE = {
 
 function searchProvider(
   allowed = [REPOSITORY],
-  answer?: () => GitHubHttpResponse,
+  answer?: (request: GitHubHttpRequest) => GitHubHttpResponse,
   token: () => string | undefined = () => "private-test-token",
 ) {
   const requests: GitHubHttpRequest[] = [];
@@ -199,7 +200,7 @@ function searchProvider(
     *send(request) {
       requests.push(request);
       if (answer !== undefined) {
-        return answer();
+        return answer(request);
       }
       const url = new URL(request.url);
       if (url.pathname === "/repos/octo/project/pulls/7/reviews") {
@@ -229,6 +230,19 @@ function searchProvider(
   });
   return { requests, credentials, options: { access, configuration: { allowed } } };
 }
+
+function nextLink(request: GitHubHttpRequest, page: number): string {
+  const url = new URL(request.url);
+  url.searchParams.set("page", String(page));
+  return `<${url.href}>; rel="next"`;
+}
+
+const PAGINATED_SEARCH = '<GitHub.Search query="is:pr" perPage={1} paginate={true} as="pages" />';
+const SECOND_PAGE = {
+  ...FIRST_PAGE,
+  incomplete_results: true,
+  items: [{ ...ITEM, html_url: `${REPOSITORY}/pull/8` }],
+};
 
 describe("GitHub repository search", () => {
   beforeEach(journalBeforeEach(OWNER));
@@ -294,6 +308,78 @@ describe("GitHub repository search", () => {
       order: "desc",
     });
     expect(requests[2]?.searchParams.get("page")).toBe("2");
+  });
+
+  it("follows next links from the explicit start and binds original pages as an ordered array", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const pageTwo = { ...FIRST_PAGE, total_count: 9 };
+    const pageThree = { ...SECOND_PAGE, total_count: 9 };
+    const provider = searchProvider([REPOSITORY], (request) => {
+      const isStartingPage = new URL(request.url).searchParams.get("page") === "2";
+      return {
+        status: 200,
+        body: JSON.stringify(isStartingPage ? pageTwo : pageThree),
+        ...(isStartingPage ? { link: nextLink(request, 3) } : {}),
+      };
+    });
+    const output = yield* runOrdinaryDocument(
+      [
+        '<GitHub.Search query="is:pr" sort="created" order="asc" page={2} perPage={1} paginate={true} as="pages" />',
+        '<Query value={pages} yq="[.[].items[].html_url]" as="urls" />',
+        '<GitHub.Search query="is:pr" sort="created" order="asc" page={2} perPage={1} paginate={false} as="single" />',
+        '<GitHub.Search query="is:pr" sort="created" order="asc" page={3} perPage={1} paginate as="only" />',
+        "<Json value={{ pages, single, only, urls }} />",
+      ].join("\n"),
+      { cwd: checkout.root, root, gitHubPullRequests: provider.options },
+    );
+    expect(JSON.parse(String(output))).toEqual({
+      pages: [pageTwo, pageThree],
+      single: pageTwo,
+      only: [pageThree],
+      urls: [ITEM.html_url, SECOND_PAGE.items[0]?.html_url],
+    });
+    expect(
+      provider.requests.map(({ url }) => Object.fromEntries(new URL(url).searchParams)),
+    ).toEqual(
+      [2, 3, 2, 3].map((page) => ({
+        q: "repo:octo/project is:pr",
+        order: "asc",
+        sort: "created",
+        page: String(page),
+        per_page: "1",
+      })),
+    );
+    expect(provider.credentials).toEqual(["token", "token", "token"]);
+  });
+
+  it("refuses next links that change an admitted request or fail to advance", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    for (const link of [
+      '<https://other.invalid/search/issues?page=2>; rel="next"',
+      '<https://api.github.com/repos/octo/project/issues?q=repo%3Aocto%2Fproject+is%3Apr&page=2&per_page=1>; rel="next"',
+      '<https://api.github.com/search/issues?q=repo%3Aocto%2Fother+is%3Apr&page=2&per_page=1>; rel="next"',
+      '<https://api.github.com/search/issues?q=repo%3Aocto%2Fproject+is%3Apr&page=2&per_page=100>; rel="next"',
+      '<https://api.github.com/search/issues?q=repo%3Aocto%2Fproject+is%3Apr&page=1&per_page=1>; rel="next"',
+    ]) {
+      const provider = searchProvider([REPOSITORY], () => ({
+        status: 200,
+        body: JSON.stringify(FIRST_PAGE),
+        link,
+      }));
+      const refused = yield* raised(
+        runOrdinaryDocument(PAGINATED_SEARCH, {
+          cwd: checkout.root,
+          root,
+          gitHubPullRequests: provider.options,
+        }),
+      );
+      expect(String(refused)).toContain("invalid search page");
+      expect(provider.requests).toHaveLength(1);
+    }
   });
 
   it("refuses invalid arguments and unauthorized repository contexts before credentials", function* () {
@@ -405,6 +491,37 @@ describe("GitHub repository search", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  it("stops a paginated walk at the ceiling even if the terminal response has a next link", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const makePage = (page: number) => ({
+      total_count: 1500,
+      incomplete_results: false,
+      items: Array.from({ length: 30 }, (_, index) => ({
+        ...ITEM,
+        html_url: `${REPOSITORY}/pull/${(page - 1) * 30 + index + 1}`,
+      })),
+    });
+    const provider = searchProvider([REPOSITORY], (request) => {
+      const page = Number(new URL(request.url).searchParams.get("page"));
+      return {
+        status: 200,
+        body: JSON.stringify(makePage(page)),
+        link: nextLink(request, page + 1),
+      };
+    });
+    const output = yield* runOrdinaryDocument(
+      '<GitHub.Search query="is:pr" page={33} perPage={30} paginate as="pages" />\n<Json value={pages} />',
+      { cwd: checkout.root, root, gitHubPullRequests: provider.options },
+    );
+    expect(JSON.parse(String(output))).toEqual([makePage(33), makePage(34)]);
+    expect(provider.requests.map(({ url }) => new URL(url).searchParams.get("page"))).toEqual([
+      "33",
+      "34",
+    ]);
+  });
+
   it("defaults to best match and reads a fresh page on another ordinary run", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
@@ -487,6 +604,139 @@ describe("GitHub repository search", () => {
       expect(String(failure)).not.toContain("private-provider-detail");
       expect(provider.requests).toHaveLength(1);
     }
+  });
+
+  it("retains an entire paginated result and validates its later pages on replay", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useStorageRoot();
+    const provider = searchProvider([REPOSITORY], (request) => {
+      const first = new URL(request.url).searchParams.get("page") === "1";
+      return {
+        status: 200,
+        body: JSON.stringify(first ? FIRST_PAGE : SECOND_PAGE),
+        ...(first ? { link: nextLink(request, 2) } : {}),
+      };
+    });
+    const source = `<Repository name="search" url="${REPOSITORY}">\n${PAGINATED_SEARCH}\n<Json value={pages} />\n</Repository>`;
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const options = {
+        composition: { host: rewritingHost(REPOSITORY, remote.locator) },
+        gitHubPullRequests: provider.options,
+      };
+      const first = yield* runWorkflowDocument(database, source, options);
+      expect(JSON.parse(String(first))).toEqual([FIRST_PAGE, SECOND_PAGE]);
+      const path = runPath(root, "release-1.4");
+      dropRootClose(path);
+      expect(yield* runWorkflowDocument(database, source, options)).toEqual(first);
+      const events = yield* database.journal.readAll();
+      expect(
+        events.filter(
+          (event) => event.type === "yield" && event.description.type === "github_search",
+        ),
+      ).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain('rel="next"');
+      dropRootClose(path);
+      tamper(path, (sqlite) => {
+        const updated = sqlite
+          .prepare(
+            `UPDATE journal_events SET record = json_set(record, '$.result.value[1].items[0].repository_url', ?)
+           WHERE json_extract(record, '$.description.type') = 'github_search'`,
+          )
+          .run(`${ENDPOINT}/repos/octo/other`);
+        expect(Number(updated.changes)).toBe(1);
+      });
+      const refused = yield* raised(runWorkflowDocument(database, source, options));
+      expect(String(refused)).toContain("invalid search page");
+      expect(provider.requests).toHaveLength(2);
+      expect(provider.credentials).toEqual(["token"]);
+    });
+  });
+
+  it("retains only a failure when a later page fails", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useStorageRoot();
+    const provider = searchProvider([REPOSITORY], (request) =>
+      new URL(request.url).searchParams.get("page") === "1"
+        ? { status: 200, body: JSON.stringify(FIRST_PAGE), link: nextLink(request, 2) }
+        : { status: 503, body: "provider diagnostic" },
+    );
+    const source = `<Repository name="search" url="${REPOSITORY}">\n${PAGINATED_SEARCH}\n<Json value={pages} />\n</Repository>`;
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const options = {
+        composition: { host: rewritingHost(REPOSITORY, remote.locator) },
+        gitHubPullRequests: provider.options,
+      };
+      const refused = yield* raised(runWorkflowDocument(database, source, options));
+      expect(String(refused)).toContain("did not return a search page");
+      const events = yield* database.journal.readAll();
+      const results = events.flatMap((event) =>
+        event.type === "yield" && event.description.type === "github_search"
+          ? [event.result.status]
+          : [],
+      );
+      expect(results).toEqual(["err"]);
+      expect(provider.requests).toHaveLength(2);
+    });
+  });
+
+  it("cancels a pending later page, closes the session and retains no search result", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useStorageRoot();
+    const entered = withResolvers<void>();
+    const calls: string[] = [];
+    const access: GitHubSource = {
+      endpoint: ENDPOINT,
+      open() {
+        return resource<GitHubAccess>(function* (provide) {
+          try {
+            yield* provide({
+              endpoint: ENDPOINT,
+              // deno-lint-ignore require-yield
+              *token() {
+                return "private-test-token";
+              },
+              *send(request): Operation<GitHubHttpResponse> {
+                const page = new URL(request.url).searchParams.get("page") ?? "";
+                calls.push(page);
+                if (page === "1") {
+                  return {
+                    status: 200,
+                    body: JSON.stringify(FIRST_PAGE),
+                    link: nextLink(request, 2),
+                  };
+                }
+                entered.resolve();
+                yield* suspend();
+                throw new Error("unreachable");
+              },
+            });
+          } finally {
+            calls.push("close");
+          }
+        });
+      },
+    };
+    const source = `<Repository name="search" url="${REPOSITORY}">\n${PAGINATED_SEARCH}\n</Repository>`;
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const task = yield* spawn(() =>
+        runWorkflowDocument(database, source, {
+          composition: { host: rewritingHost(REPOSITORY, remote.locator) },
+          gitHubPullRequests: { access, configuration: { allowed: [REPOSITORY] } },
+        }),
+      );
+      yield* entered.operation;
+      yield* task.halt();
+      expect(calls).toEqual(["1", "2", "close"]);
+      const events = yield* database.journal.readAll();
+      expect(
+        events.some(
+          (event) => event.type === "yield" && event.description.type === "github_search",
+        ),
+      ).toBe(false);
+    });
   });
 
   it("validates retained raw pages on replay without requesting new credentials", function* () {

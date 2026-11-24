@@ -71,6 +71,7 @@ export interface GitHubHttpRequest {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body?: string;
+  readonly redirect?: "error";
 }
 
 /** One answer, as this adapter reads it. */

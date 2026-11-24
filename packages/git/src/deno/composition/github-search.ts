@@ -3,8 +3,10 @@ import type { JsonObject } from "@executablemd/core";
 import type { Operation } from "effection";
 import {
   GitHubSearch,
+  SEARCH_CEILING,
   SEARCH_ELEMENT,
   type SearchRequest,
+  type SearchResult,
 } from "../../composition/components/GitHubSearch.ts";
 import { PullRequestReadError } from "../../composition/errors.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
@@ -12,7 +14,10 @@ import type { RepositorySelection } from "../../composition/selection.ts";
 import {
   authorizedHeaders,
   GITHUB_API,
+  type GitHubAccess,
+  type GitHubHttpResponse,
   type GitHubSource,
+  nextPage,
   parseGitHubRepository,
   readJson,
 } from "./github.ts";
@@ -40,7 +45,7 @@ export function useGitHubSearch(
 ): Operation<void> {
   const resolved = gitHubPullRequestReadResolver(options);
   return GitHubSearch.around({
-    *search([selection, request]): Operation<JsonObject> {
+    *search([selection, request]): Operation<SearchResult> {
       const origin = yield* locator(selection);
       const repository = origin === undefined ? undefined : parseGitHubRepository(origin);
       if (repository === undefined) {
@@ -52,30 +57,25 @@ export function useGitHubSearch(
       if (!configuration?.allowed || !pullRequestAllowed(configuration.allowed, url)) {
         throw unavailable("this host has not authorized search in the selected Repository.");
       }
-      const validate = (value: unknown) =>
-        validateSearchPage(
-          value,
-          request,
-          name,
-          options.access?.endpoint ?? configuration.endpoint ?? GITHUB_API,
-        );
+      const apiBase = options.access?.endpoint ?? configuration.endpoint ?? GITHUB_API;
+      const validate = (value: unknown, page: number) =>
+        validateSearchPage(value, request, page, name, apiBase);
       return yield* PullRequestReadExecution.operations.search(
         url,
         request,
-        () => readSearchPage(() => resolved.transport(configuration), name, request, validate),
-        validate,
+        () => readSearch(() => resolved.transport(configuration), name, request, validate),
+        (value) => validateSearchResult(value, request, validate),
       );
     },
   });
 }
 
-function* readSearchPage(
+function* readSearch(
   source: () => GitHubSource,
   repository: string,
   request: SearchRequest,
-  validate: (value: unknown) => JsonObject,
-): Operation<JsonObject> {
-  const endpoint = "/search/issues";
+  validate: (value: unknown, page: number) => JsonObject,
+): Operation<SearchResult> {
   const parameters = new URLSearchParams({
     q: `repo:${repository} ${request.query}`,
     page: String(request.page),
@@ -86,32 +86,99 @@ function* readSearchPage(
     parameters.set("order", request.order);
   }
 
-  let response;
+  let access: GitHubAccess;
+  let headers: Record<string, string> | undefined;
   try {
-    const access = yield* source().open();
-    const headers = yield* authorizedHeaders(access, false);
-    if (headers !== undefined) {
-      response = yield* access.send({
-        method: "GET",
-        url: `${access.endpoint}${endpoint}?${parameters}`,
-        headers,
-      });
-    }
+    access = yield* source().open();
+    headers = yield* authorizedHeaders(access, false);
   } catch {
     throw unavailable("GitHub search could not authenticate or complete the request.");
   }
-  if (response === undefined) {
+  if (headers === undefined) {
     throw unavailable("GitHub search requires a credential.");
   }
-  if (response.status !== 200) {
-    throw unavailable("GitHub did not return a search page.");
+
+  const first = new URL(`${access.endpoint}/search/issues?${parameters}`);
+  let url = first.href;
+  const pages: JsonObject[] = [];
+  const last = lastAccessiblePage(request);
+  for (let page = request.page; page <= last; page += 1) {
+    let response: GitHubHttpResponse;
+    try {
+      response = yield* access.send({
+        method: "GET",
+        url,
+        headers,
+        ...(request.paginate ? { redirect: "error" } : {}),
+      });
+    } catch {
+      throw unavailable("GitHub search could not complete the request.");
+    }
+    if (response.status !== 200) {
+      throw unavailable("GitHub did not return a search page.");
+    }
+    const value = validate(readJson(response.body), page);
+    if (!request.paginate) {
+      return value;
+    }
+    pages.push(value);
+    if (page === last) {
+      break;
+    }
+    const walk = nextPage(response.link, access.endpoint);
+    if (walk.kind === "complete") {
+      break;
+    }
+    if (walk.kind === "unfollowable" || !sameSearch(walk.url, first, page + 1)) {
+      throw invalid();
+    }
+    url = walk.url;
   }
-  return validate(readJson(response.body));
+  return pages;
+}
+
+function lastAccessiblePage(request: SearchRequest): number {
+  return Math.ceil(SEARCH_CEILING / request.perPage);
+}
+
+function sameSearch(link: string, first: URL, page: number): boolean {
+  const next = new URL(link);
+  const expected = new URLSearchParams(first.searchParams);
+  expected.set("page", String(page));
+  expected.sort();
+  next.searchParams.sort();
+  return (
+    next.origin === first.origin &&
+    next.pathname === first.pathname &&
+    next.username === "" &&
+    next.password === "" &&
+    next.hash === "" &&
+    next.searchParams.toString() === expected.toString()
+  );
+}
+
+function validateSearchResult(
+  value: unknown,
+  request: SearchRequest,
+  validate: (value: unknown, page: number) => JsonObject,
+): SearchResult {
+  if (!request.paginate) {
+    return validate(value, request.page);
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > lastAccessiblePage(request) - request.page + 1
+  ) {
+    throw invalid();
+  }
+  return value.map((page, index) => validate(page, request.page + index));
 }
 
 function validateSearchPage(
   received: unknown,
   request: SearchRequest,
+  page: number,
   repository: string,
   apiBase: string,
 ): JsonObject {
@@ -125,7 +192,7 @@ function validateSearchPage(
     throw invalid();
   }
   const { total_count: total, incomplete_results: incomplete, items } = value;
-  const start = (request.page - 1) * request.perPage;
+  const start = (page - 1) * request.perPage;
   const expectedRepository = `${apiBase}/repos/${repository}`.toLowerCase();
   const publicRepository = `${GITHUB_API}/repos/${repository}`.toLowerCase();
   if (
