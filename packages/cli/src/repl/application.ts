@@ -8926,8 +8926,6 @@ function drawerContent(
         const older = rounds[index + 1];
         const newer = rounds[index - 1];
         const neighbours = {
-          ...(older === undefined ? {} : { ArrowDown: `drawer:marker:${older.point.marker}` }),
-          ...(newer === undefined ? {} : { ArrowUp: `drawer:marker:${newer.point.marker}` }),
           Home: `drawer:marker:${rounds[0].point.marker}`,
           End: `drawer:marker:${rounds[rounds.length - 1].point.marker}`,
         };
@@ -8943,6 +8941,8 @@ function drawerContent(
               historySelected: view.state.route.at === point.point.marker,
               reveal: {
                 ...neighbours,
+                ArrowDown: `drawer:marker:${older?.point.marker ?? point.point.marker}`,
+                ArrowUp: `drawer:marker:${newer?.point.marker ?? point.point.marker}`,
                 ...(label === "[Input]" && output !== undefined
                   ? { "Alt+ArrowDown": `drawer:marker:${output.point.marker}` }
                   : older === undefined

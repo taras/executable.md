@@ -1848,7 +1848,8 @@ unfinished round has Input but no Output control until its outcome is retained.
 Neither a live head nor an intermediate marker substitutes for an absent outcome.
 Keyboard and pointer activation use the same retained markers. Left and Right
 move between the two controls; Up and Down move between rounds, and Home and
-End reach the newest and oldest rounds. Alt+Down traverses Input, Output, then
+End reach the newest and oldest rounds. At either end, vertical arrows keep
+the current control. Alt+Down traverses Input, Output, then
 the next older round's Input; Alt+Up reverses that order. Missing Output
 controls are skipped. These paths reveal controls beyond either viewport edge
 without selecting a historical position.
