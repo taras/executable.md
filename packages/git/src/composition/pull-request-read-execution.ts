@@ -27,8 +27,7 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { JsonObject } from "@executablemd/core";
-import type { SearchRequest } from "./components/GitHubSearch.ts";
+import type { SearchRequest, SearchResult } from "./components/GitHubSearch.ts";
 import { scoped, type Operation } from "effection";
 import type {
   PullRequestReadRequestKind,
@@ -53,9 +52,9 @@ export interface PullRequestReadExecutionApi {
   search(
     repository: string,
     request: SearchRequest,
-    transport: () => Operation<JsonObject>,
-    validate: (value: unknown) => JsonObject,
-  ): Operation<JsonObject>;
+    transport: () => Operation<SearchResult>,
+    validate: (value: unknown) => SearchResult,
+  ): Operation<SearchResult>;
 
   /**
    * Perform one admitted read under this profile's lifecycle.

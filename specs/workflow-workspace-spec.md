@@ -2359,24 +2359,36 @@ The adapter sends the exact authored query with the selected repository's
 requires sort and defaults to `desc` when sorting. Omitting both uses best
 match. The adapter preserves GitHub's item order.
 
-Each invocation fetches one page. `page` defaults to 1 and `perPage` defaults
-to 20. Page size is an integer from 1 through 100. A page whose first result
-would be beyond GitHub's 1,000 accessible results is refused before transport.
-An in-range page can contain up to `perPage` items, including the final page
-when its first result is inside the window. Authors request another page by
-setting `page` explicitly and keeping the same query, ordering and page size.
+With `paginate` omitted or false, one invocation fetches one page and `as`
+binds the original GitHub response object. `page` defaults to 1 and `perPage`
+defaults to 20. Page size is an integer from 1 through 100. A page whose first
+result would be beyond GitHub's 1,000 accessible results is refused before
+transport. An in-range page can contain up to `perPage` items, including the
+final page when its first result is inside the window.
 
-The name supplied by `as` binds the original GitHub search response JSON,
-including `total_count`, `incomplete_results`, nullable fields and unfamiliar
-members. Transport headers and credentials stay with the adapter.
-Authentication and transport failures, malformed responses, and items from
-a different repository or of a different kind refuse the read. A valid
-incomplete response binds its original page and incompleteness indicator.
+With `paginate={true}`, `page` is the starting page and `perPage` is the
+size requested on every page. The adapter follows GitHub's REST `next`
+relation sequentially until it is absent or the accessible window ends.
+Each link must identify the immediately following page at the same API
+endpoint with the same scoped query, page size and ordering. An invalid
+link within the window fails the read. Redirects fail a paginated request.
+The binding is an ordered JSON array of original response objects, including
+a one-element array when the starting page is the only page fetched.
+
+Both forms preserve item order and all provider JSON fields, including
+`total_count`, `incomplete_results`, nullable fields and unfamiliar members.
+Transport headers and credentials stay with the adapter. Authentication and
+transport failures, malformed responses, and items from a different
+repository or of a different kind fail the entire read. A valid incomplete
+page binds its original incompleteness indicator. Cancellation stops the
+walk and publishes no result. `Query` projects from `.items` for one page
+and from `.[].items` when pagination is enabled.
 
 An ordinary run reads afresh. A workflow retains the admitted repository, full
-request and original response as one `github_search` read. Replay validates
-the retained page against the admitted request and restores it without opening
-a GitHub session. `Query` can project fields directly from the bound page.
+request and full result as one `github_search` read. Pagination mode is part
+of the request identity. Replay validates every retained page against the
+admitted request and restores the result without opening a GitHub session.
+A failed later page publishes no successful partial result.
 
 ### 7.8 Local repository reads
 

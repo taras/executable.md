@@ -332,6 +332,15 @@ To read another page, repeat the search with an explicit `page` and the same
 <GitHub.Search query="is:pr is:open label:bug" sort="created" page={2} perPage={20} as="pageTwo" />
 ```
 
+Set `paginate={true}` to follow GitHub's next-page links. `page` selects the
+starting page and `perPage` applies to each request. The binding is an
+ordered array of GitHub response objects, even when only one page is available.
+
+```mdx
+<GitHub.Search query="is:pr is:open label:bug" sort="created" paginate={true} as="pages" />
+<Query value={pages} yq="[.[].items[].html_url]" as="pullRequestUrls" />
+```
+
 ## IssueTracker
 
 Selects the issue tracker its content works with.

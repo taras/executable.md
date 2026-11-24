@@ -145,6 +145,7 @@ export function denoGitHubAccess(
             method: request.method,
             headers: { ...request.headers },
             body: request.body,
+            redirect: request.redirect,
             signal: controller.signal,
           }),
         );

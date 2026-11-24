@@ -17,14 +17,17 @@ export type SearchRequest = JsonObject & {
   order?: string;
   page: number;
   perPage: number;
+  paginate?: true;
 };
 
+export type SearchResult = JsonObject | JsonObject[];
+
 interface GitHubSearchApi {
-  search(repository: RepositorySelection, request: SearchRequest): Operation<JsonObject>;
+  search(repository: RepositorySelection, request: SearchRequest): Operation<SearchResult>;
 }
 
 export const GitHubSearch = createApi<GitHubSearchApi>("executablemd.git.github.search", {
-  *search(): Operation<JsonObject> {
+  *search(): Operation<SearchResult> {
     throw new GitOperationAdmissionError(
       SEARCH_ELEMENT,
       "this host has no GitHub search provider.",
@@ -97,8 +100,8 @@ function admitQuery(query: string): SearchRequest["kind"] {
   return selected === "is:issue" ? "issue" : "pr";
 }
 
-function* search(props: Record<string, Json>): Operation<JsonObject> {
-  const { query, sort, order, page = 1, perPage = 20 } = props;
+function* search(props: Record<string, Json>): Operation<SearchResult> {
+  const { query, sort, order, page = 1, perPage = 20, paginate } = props;
   if (typeof query !== "string" || typeof page !== "number" || typeof perPage !== "number") {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "the search arguments are invalid.");
   }
@@ -121,6 +124,7 @@ function* search(props: Record<string, Json>): Operation<JsonObject> {
     kind,
     page,
     perPage,
+    ...(paginate === true ? { paginate } : {}),
     ...(typeof sort === "string"
       ? { sort, order: typeof order === "string" ? order : "desc" }
       : {}),
@@ -138,11 +142,18 @@ export const githubSearchRegistration: ComponentRegistration = {
       order: { enum: ["asc", "desc"] },
       page: { type: "integer", minimum: 1, maximum: SEARCH_CEILING },
       perPage: { type: "integer", minimum: 1, maximum: 100 },
+      paginate: {
+        type: "boolean",
+        description:
+          "Follow GitHub's next page links starting at page and bind an ordered array of page bodies.",
+      },
     },
     required: ["query"],
     additionalProperties: false,
   },
-  returns: { type: "object" },
+  returns: {
+    oneOf: [{ type: "object" }, { type: "array", minItems: 1, items: { type: "object" } }],
+  },
   fn: formDispatcher({
     forms: "self-closing",
     fn: search,
@@ -152,7 +163,7 @@ export const githubSearchRegistration: ComponentRegistration = {
   ...documented({
     description:
       "Search the selected GitHub repository with GitHub's issue and pull-request query syntax.",
-    as: "Required. Binds the original GitHub response JSON.",
+    as: "Required. Binds one original GitHub response object, or an ordered array of response objects with paginate enabled.",
     context: null,
   }),
 };
