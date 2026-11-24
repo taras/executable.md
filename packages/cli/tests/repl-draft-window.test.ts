@@ -1,3 +1,4 @@
+import { sleep } from "effection";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useReplPage } from "./support/repl-page.ts";
@@ -41,6 +42,41 @@ describe("draft window", () => {
     expect(first()).toBe(before - 6);
     yield* page.key("ArrowRight");
     yield* page.until("the caret row returns", (one) => one.shows("DRAFT-END-119"));
+  });
+  it("renders the caret after moving down through a retained draft window", function* () {
+    const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
+    const draft = [
+      "hello this is a test",
+      "",
+      "",
+      "does this work",
+      ...Array.from({ length: 90 }, (_, index) =>
+        index % 9 === 0 ? "" : `${index} ${"DRAFT-row ".repeat(24)}`,
+      ),
+    ].join("\n");
+    yield* generateTypingDraft(page, 90, draft);
+    yield* sleep(40);
+    for (let at = 0; at < 110; at++) {
+      yield* page.key("ArrowUp");
+      yield* sleep(20);
+    }
+    const carets = () => {
+      let count = 0;
+      for (let row = 0; row < 52; row++) {
+        for (let column = 0; column < 200; column++) {
+          if (page.repl.terminal.screen?.styleAt(column, row).background === 8377320) {
+            count++;
+          }
+        }
+      }
+      return count;
+    };
+    expect(carets()).toBe(1);
+    for (let at = 0; at < 4; at++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(20);
+      expect(carets()).toBe(1);
+    }
   });
   it("retains a manually scrolled window until following resumes", function* () {
     expect(
