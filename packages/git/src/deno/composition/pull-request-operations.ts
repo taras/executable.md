@@ -42,17 +42,9 @@
  * `pull-request-read-retention.ts`, which obtains neither.
  */
 
-import {
-  getExpansion,
-  isJsonObject,
-  parseJson,
-  sourceDescription,
-  type JsonObject,
-} from "@executablemd/core";
+import { getExpansion, sourceDescription, type JsonObject } from "@executablemd/core";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { scoped, type Operation } from "effection";
-import { PullRequestReadError } from "../../composition/errors.ts";
-import { SEARCH_ELEMENT } from "../../composition/components/GitHubSearch.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import {
@@ -85,7 +77,7 @@ export { PULL_REQUEST_READ } from "./pull-request-read-retention.ts";
 export function useRetainedPullRequestReads(): Operation<void> {
   return PullRequestReadExecution.around(
     {
-      *search([repository, request, transport]): Operation<JsonObject> {
+      *search([repository, request, transport, validate]): Operation<JsonObject> {
         const run = yield* getWorkflowRun();
         const expansion = yield* getExpansion();
         const configuration = gitOperationFingerprint([
@@ -109,19 +101,7 @@ export function useRetainedPullRequestReads(): Operation<void> {
             { coordinator: joinedReadCoordinator },
           );
         });
-        const result = parseJson(stored);
-        if (
-          !isJsonObject(result) ||
-          !isJsonObject(result.value) ||
-          (result.next !== null && !isJsonObject(result.next))
-        ) {
-          throw new PullRequestReadError(
-            "protocol",
-            SEARCH_ELEMENT,
-            "the retained search page is invalid.",
-          );
-        }
-        return result;
+        return validate(stored);
       },
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
         const run = yield* getWorkflowRun();

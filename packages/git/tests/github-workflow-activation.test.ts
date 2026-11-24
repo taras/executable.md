@@ -47,6 +47,7 @@ import {
   BUNDLE_SOURCE,
   createRun,
   runPath,
+  tamper,
   withStorage,
   sourceBundleCreation,
   useStorageRoot,
@@ -206,14 +207,14 @@ function searchProvider(
       }
       const args = url.searchParams;
       const page = args.get("page");
-      const beyond = page === "10";
+
       return {
         status: 200,
         body: JSON.stringify(
           page === "1"
             ? FIRST_PAGE
             : {
-                total_count: beyond ? 1500 : 2,
+                total_count: 2,
                 incomplete_results: true,
                 items: [],
               },
@@ -221,7 +222,7 @@ function searchProvider(
         ...(page === "2"
           ? {}
           : {
-              link: `<${ENDPOINT}/search/issues?page=${beyond ? 11 : 2}>; rel="next"`,
+              link: `<${ENDPOINT}/search/issues?page=2>; rel="next"`,
             }),
       };
     },
@@ -253,20 +254,19 @@ describe("GitHub repository search", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
-  it("binds original pages, projects URLs and exposes only reusable continuation arguments", function* () {
+  it("reads explicit pages independently and keeps incomplete_results", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
     const root = yield* useTempDirectory("github-search");
     const provider = searchProvider();
     const output = yield* runOrdinaryDocument(
       [
-        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" perPage={1} as="first" nextAs="next" />`,
+        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" perPage={1} as="first" />`,
         '<Query value={first} yq="[.items[].html_url]" as="urls" />',
         '<PullRequest.Reviews url={urls[0]} as="reviews" />',
-        '<GitHub.Search query={next.query} sort={next.sort} order={next.order} page={next.page} perPage={next.perPage} as="second" nextAs="after" />',
-        '<GitHub.Search query="is:issue" page={10} perPage={100} as="ceiling" nextAs="beyond" />',
+        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" page={2} perPage={1} as="second" />`,
         "",
-        "<Json value={{ first, next, second, after, ceiling, beyond, urls, reviews }} />",
+        "<Json value={{ first, second, urls, reviews }} />",
       ].join("\n"),
       {
         cwd: checkout.root,
@@ -276,11 +276,7 @@ describe("GitHub repository search", () => {
     );
     expect(JSON.parse(String(output))).toEqual({
       first: FIRST_PAGE,
-      next: { query: QUERY, sort: "created", order: "desc", page: 2, perPage: 1 },
       second: { total_count: 2, incomplete_results: true, items: [] },
-      after: null,
-      ceiling: { total_count: 1500, incomplete_results: true, items: [] },
-      beyond: null,
       urls: [ITEM.html_url],
       reviews: [],
     });
@@ -288,7 +284,6 @@ describe("GitHub repository search", () => {
     expect(requests.map((url) => url.pathname)).toEqual([
       "/search/issues",
       "/repos/octo/project/pulls/7/reviews",
-      "/search/issues",
       "/search/issues",
     ]);
     expect(Object.fromEntries(requests[0]?.searchParams ?? [])).toEqual({
@@ -315,8 +310,27 @@ describe("GitHub repository search", () => {
       [checkout.root, 'query="is:issue is:pr"', "exactly one kind"],
       [checkout.root, 'query="is:open"', "exactly one kind"],
       [checkout.root, 'query="is:pr" page={11} perPage={100}', "first 1,000"],
-      [checkout.root, 'query="is:pr" nextAs="page"', "Duplicate result binding"],
-      [checkout.root, 'query="is:pr" nextAs="class"', "valid JavaScript binding name"],
+      [checkout.root, 'query="is:pr" nextAs="next"', "additional properties"],
+      [checkout.root, 'query="is:pr owner:other"', "scope qualifiers"],
+      [
+        checkout.root,
+        `query={${JSON.stringify('is:pr "x"repo:other/project')}}`,
+        "scope qualifiers",
+      ],
+      [checkout.root, 'query="is:pr (repo:other/project)"', "scope qualifiers"],
+      [checkout.root, 'query="is:issue is:pull-request"', "exactly one kind"],
+      [
+        checkout.root,
+        `query={${JSON.stringify('is:issue type:"pull-request"')}}`,
+        "exactly one kind",
+      ],
+      [
+        checkout.root,
+        `query={${JSON.stringify('"text is:issue text" is:pull-request')}}`,
+        "exactly one kind",
+      ],
+      [checkout.root, 'query="(is:pr) is:open"', "parentheses"],
+      [checkout.root, 'query="is:pr is:open OR label:bug"', "Boolean operators"],
       [checkout.root, 'query="is:pr"', "has not authorized"],
       [local.root, 'query="is:pr"', "does not name a GitHub repository"],
       [outside, 'query="is:pr"', "repository"],
@@ -332,6 +346,40 @@ describe("GitHub repository search", () => {
     }
     expect(provider.credentials).toEqual([]);
     expect(provider.requests).toEqual([]);
+  });
+
+  it("binds all 30 items on page 34 when GitHub returns a full terminal page", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const { pull_request: _pullRequest, ...issue } = ITEM;
+    const page = {
+      total_count: 1500,
+      incomplete_results: false,
+      items: Array.from({ length: 30 }, (_, index) => ({
+        ...issue,
+        html_url: `${REPOSITORY}/issues/${991 + index}`,
+      })),
+    };
+    const provider = searchProvider([REPOSITORY], () => ({
+      status: 200,
+      body: JSON.stringify(page),
+    }));
+    const options = { cwd: checkout.root, root, gitHubPullRequests: provider.options };
+    const output = yield* runOrdinaryDocument(
+      '<GitHub.Search query="is:issue" page={34} perPage={30} as="page" />\n<Json value={page} />',
+      options,
+    );
+    expect(JSON.parse(String(output))).toEqual(page);
+    const refused = yield* raised(
+      runOrdinaryDocument(
+        '<GitHub.Search query="is:issue" page={35} perPage={30} as="page" />',
+        options,
+      ),
+    );
+    expect(String(refused)).toContain("first 1,000");
+    expect(provider.credentials).toEqual(["token"]);
+    expect(provider.requests).toHaveLength(1);
   });
 
   it("defaults to best match and reads a fresh page on another ordinary run", function* () {
@@ -392,6 +440,17 @@ describe("GitHub repository search", () => {
         },
         "invalid search page",
       ],
+      [
+        {
+          status: 200,
+          body: JSON.stringify({
+            total_count: 1,
+            incomplete_results: false,
+            items: [{ repository_url: ITEM.repository_url, html_url: `${REPOSITORY}/issues/7` }],
+          }),
+        },
+        "invalid search page",
+      ],
     ] satisfies [GitHubHttpResponse, string][]) {
       const provider = searchProvider([REPOSITORY], () => response);
       const failure = yield* raised(
@@ -407,15 +466,15 @@ describe("GitHub repository search", () => {
     }
   });
 
-  it("restores a completed search during partial workflow replay without a new credential", function* () {
+  it("validates retained raw pages on replay without requesting new credentials", function* () {
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useStorageRoot();
     const provider = searchProvider();
     const source = [
       `<Repository name="search" url="${REPOSITORY}">`,
-      '<GitHub.Search query="is:pr" perPage={1} as="page" nextAs="next" />',
+      '<GitHub.Search query="is:pr" perPage={1} as="page" />',
       "",
-      "<Json value={{ page, next }} />",
+      "<Json value={page} />",
       "</Repository>",
     ].join("\n");
     yield* withStorage(root, function* () {
@@ -425,7 +484,7 @@ describe("GitHub repository search", () => {
         gitHubPullRequests: provider.options,
       };
       const first = yield* runWorkflowDocument(database, source, options);
-      expect(String(first)).toContain('"future_field"');
+      expect(JSON.parse(String(first))).toEqual(FIRST_PAGE);
       expect(provider.requests).toHaveLength(1);
       dropRootClose(runPath(root, "release-1.4"));
       expect(yield* runWorkflowDocument(database, source, options)).toEqual(first);
@@ -434,6 +493,21 @@ describe("GitHub repository search", () => {
       const journal = JSON.stringify(yield* database.journal.readAll());
       expect(journal).not.toContain("private-test-token");
       expect(journal).not.toContain(`${ENDPOINT}/search/issues?page=2`);
+      const path = runPath(root, "release-1.4");
+      dropRootClose(path);
+      tamper(path, (sqlite) => {
+        const updated = sqlite
+          .prepare(
+            `UPDATE journal_events SET record = json_set(record, '$.result.value.items[0].repository_url', ?)
+           WHERE json_extract(record, '$.description.type') = 'github_search'`,
+          )
+          .run(`${ENDPOINT}/repos/octo/other`);
+        expect(Number(updated.changes)).toBe(1);
+      });
+      const refused = yield* raised(runWorkflowDocument(database, source, options));
+      expect(String(refused)).toContain("invalid search page");
+      expect(provider.credentials).toEqual(["token"]);
+      expect(provider.requests).toHaveLength(1);
     });
   });
 });

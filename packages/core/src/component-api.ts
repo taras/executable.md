@@ -31,7 +31,6 @@ import type {
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
-  Json,
   Modifier,
   SourcePosition,
 } from "./types.ts";
@@ -209,12 +208,6 @@ export interface ComponentApi {
    * reading of the same prop.
    */
   hasBinding(): Operation<boolean>;
-  /**
-   * Reserve another JSON result binding in this invocation's caller scope.
-   * The engine publishes its value together with `as` after successful return
-   * validation and teardown.
-   */
-  bindResult(name: string): Operation<(value: Json) => void>;
   /**
    * Create a resource owned by the scope that invoked this component
    * (spec §4.4).
@@ -396,10 +389,6 @@ const COMPONENT_DEFAULTS: Omit<ComponentApi, "registry"> = {
   *raise(error: ErrorSegment): Operation<ErrorSegment> {
     return yield* settle(error);
   },
-  // deno-lint-ignore require-yield
-  *bindResult(): Operation<(value: Json) => void> {
-    throw new Error("Result bindings require a function component invocation.");
-  },
   env: undefined,
   evalScope: undefined,
   // deno-lint-ignore require-yield
@@ -552,7 +541,6 @@ export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operat
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
-export const bindResult: Operations<ComponentApi>["bindResult"] = Component.operations.bindResult;
 export const hasBinding: Operations<ComponentApi>["hasBinding"] = Component.operations.hasBinding;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;

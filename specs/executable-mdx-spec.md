@@ -2167,7 +2167,7 @@ the read that asked for it rather than appearing in it.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `generated`, `codeBlock`, `persistent`, `content`, `hasBinding`, `bindResult`) — §5.5 |
+| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `generated`, `codeBlock`, `persistent`, `content`, `hasBinding`) — §5.5 |
 | `src/eval-context.ts` | `compileBlock()` — delegates to `API.Env.compile` |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
@@ -5867,7 +5867,6 @@ interface, and each operation is also exported directly:
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
-| `bindResult(name)` | Reserve a separate JSON result binding in the caller scope and return a setter | throws: not inside a function component invocation |
 | `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
 | `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
@@ -5964,13 +5963,6 @@ it is captured and fails an uncaptured non-2xx — and reading the prop again
 would be a second, disagreeing reading of the same source. Each invocation
 answers for itself: a nested invocation is not told about its caller's binding,
 and two invocations that are live at once do not see each other's.
-
-A value component with an additional JSON result can reserve its authored name
-with `bindResult(name)`. It uses the same identifier validation and caller
-scope as `as`. Reserving requires `as` and a distinct name.
-The returned setter stages the value. The engine publishes staged values after
-the invocation finishes, its resources close, and its primary return passes
-validation.
 
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing

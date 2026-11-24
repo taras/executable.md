@@ -54,6 +54,7 @@ export interface PullRequestReadExecutionApi {
     repository: string,
     request: SearchRequest,
     transport: () => Operation<JsonObject>,
+    validate: (value: unknown) => JsonObject,
   ): Operation<JsonObject>;
 
   /**
