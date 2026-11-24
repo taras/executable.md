@@ -23,7 +23,7 @@
  * fragment and from the journal.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -76,7 +76,9 @@ import { executeInstalled } from "../host.ts";
 import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
 import type { GeneratedEffect, GeneratedForms } from "../src/components/generated-metadata.ts";
 import type { FunctionComponentDefinition, Json, JsonObject } from "../src/types.ts";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
+const OWNER = "packages/core/tests/generated-xmd.test.ts";
 const ROOT_PATH = "workflows/agent.md";
 
 /**
@@ -183,6 +185,7 @@ function reads(): GeneratedObservation {
 }
 
 describe("generated component resolution stays internal", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE33: ignores route, reference and durable-cursor injection on the public request", function* () {
     const candidate = {
       ...request("<Probe />", [probe()]),
@@ -327,7 +330,7 @@ function evaluate(
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = options.stream ?? new InMemoryStream();
+    const stream = options.stream ?? (yield* useJournalStream(ROOT_PATH));
     const captured: { result?: string } = {};
     const installation = driven(function* () {
       captured.result = yield* evaluateGeneratedXmd(candidate);
@@ -400,6 +403,7 @@ function persisted(events: DurableEvent[]): string {
 }
 
 describe("Tier GX — the trusted-host seam", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GX1: admits synthetic source with no Agent anywhere", function* () {
@@ -470,6 +474,7 @@ describe("Tier GX — the trusted-host seam", () => {
 });
 
 describe("Tier GX — the complete fragment is read first", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const UNSAFE = "```bash exec\nprintf ran\n```";
@@ -647,6 +652,7 @@ describe("Tier GX — the complete fragment is read first", () => {
 });
 
 describe("Tier GX — only pinned identities execute", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GX7: an admitted name resolves to the pinned definition, not a repository file", function* () {
@@ -773,6 +779,7 @@ describe("Tier GX — only pinned identities execute", () => {
 });
 
 describe("Tier GX — the request a generated fragment may perform", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GX11: the exact admitted request performs once", function* () {
@@ -815,6 +822,7 @@ describe("Tier GX — the request a generated fragment may perform", () => {
 });
 
 describe("Tier GX — what the run keeps", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const SOURCE = `<Fetch url="${URL_ONE}" />\n`;
@@ -1020,6 +1028,7 @@ describe("Tier GX — what the run keeps", () => {
  * diverging at the first retained nested record.
  */
 describe("Tier GX — nested generated effects belong to the owning expansion", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** The journal without the root's close, which is what makes the next run replay. */
@@ -1230,6 +1239,7 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
  */
 
 describe("Tier GX — a resumed run is held to the selection it was admitted under", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** A second definition under the same name, so a substitution is visible. */
@@ -1956,6 +1966,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
 });
 
 describe("Tier GX — the secret gate covers what is retained", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -1983,6 +1994,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
       yield* useTransport(() => ({ status: 200, body: "response-body-marker" }));
       return yield* evaluate(
         request(`<Fetch url="${URL_ONE}?query=url-marker" />\n`, [pinnedFetch()]),
+        { stream: new InMemoryStream() },
       );
     });
 
@@ -2011,6 +2023,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     const attempt = yield* scoped(function* () {
       return yield* evaluate(
         request(`token ${CANARY}\n\n<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]),
+        { stream: new InMemoryStream() },
       );
     });
 
@@ -2025,7 +2038,9 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const element = `<Fetch url="${URL_ONE}" headers={{ authorization: "${CANARY}" }} />`;
 
-    const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch()]));
+    const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch()]), {
+      stream: new InMemoryStream(),
+    });
 
     expect(attempt.failure).toContain("secret detection rejected content");
     expect(persisted(attempt.events)).not.toContain(CANARY);
@@ -2085,6 +2100,7 @@ function* useWorkspaceFiles(root: string): Operation<Reads> {
 }
 
 describe("Tier WGAC — the pinned read-only File", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("WGAC1: a self-closing File reads through the ordinary Files provider", function* () {
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
@@ -2307,6 +2323,7 @@ function recordedNames(event: DurableEvent | undefined): Json | undefined {
 }
 
 describe("Tier GXC — a selection is not a grant", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GXC1: omitting `allow` and asking for `read` are one policy", function* () {
@@ -2607,6 +2624,7 @@ describe("Tier GXC — a selection is not a grant", () => {
 });
 
 describe("Tier GXC — a name is not a form", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GXC3: each form resolves to its own pinned identity", function* () {
@@ -2766,6 +2784,7 @@ describe("Tier GXC — a name is not a form", () => {
 });
 
 describe("Tier GXC — a write is not an observation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("GXC7: a write-only fragment observes nothing and renders nothing", function* () {
@@ -2854,6 +2873,7 @@ describe("Tier GXC — a write is not an observation", () => {
 });
 
 describe("Tier GXC — a resumed run is held to its classes and forms", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   const WRITE = `<File path="proposed.md">written</File>\n`;
@@ -2963,6 +2983,7 @@ describe("Tier GXC — a resumed run is held to its classes and forms", () => {
 });
 
 describe("Tier GXC — the authored form survives the public content chain", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /**
@@ -3202,6 +3223,7 @@ describe("Tier GXC — the authored form survives the public content chain", () 
  * from anything live.
  */
 describe("Tier GS — generated work names its own admission", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** The position one recorded effect retained, exactly as the journal holds it. */

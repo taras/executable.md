@@ -343,7 +343,8 @@ function evaluateRoot(
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
-    const stream = options.stream ?? new InMemoryStream();
+    const stream =
+      options.stream ?? (yield* useJournalStream(options.root?.path ?? HELD_ROOT_PATH));
     const captured: { answer?: Result<GeneratedXmdRootResult> } = {};
     const run = yield* withHeldHost(
       {
@@ -369,7 +370,7 @@ function evaluateFragment(
   options: { stream?: InMemoryStream } = {},
 ): Operation<{ output?: string; failure?: string; events: DurableEvent[] }> {
   return scoped(function* () {
-    const stream = options.stream ?? new InMemoryStream();
+    const stream = options.stream ?? (yield* useJournalStream(ROOT_PATH));
     const captured: { output?: string } = {};
     const installation = driven(function* () {
       captured.output = yield* evaluateGeneratedXmd(candidate.fragment);
@@ -491,6 +492,7 @@ function failed(attempt: Attempt): Error & { partial?: GeneratedXmdRootResult } 
 }
 
 describe("Tier GR — a root selects what it renders", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("GR1: an explicit Output region is the whole rendering, and the root says it declared one", function* () {
@@ -560,6 +562,7 @@ describe("Tier GR — a root selects what it renders", () => {
 });
 
 describe("Tier GR — an ordinary failure keeps what the root rendered", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("GR6: a runtime failure after a committed effect answers Err with the rendering so far", function* () {
@@ -610,6 +613,7 @@ describe("Tier GR — an ordinary failure keeps what the root rendered", () => {
 });
 
 describe("Tier GR — the root context admits one construct more, and no others", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   const REFUSED: Array<[string, string, string, Ceilings]> = [
@@ -689,6 +693,7 @@ describe("Tier GR — the root context admits one construct more, and no others"
 });
 
 describe("Tier GR — a root's history is its own, and a document's is the document's", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /** Source whose one effect is retained by its own durable record. */
@@ -1134,6 +1139,7 @@ describe("Tier GRM — a record's marker is what authorizes the evaluation", () 
 const COMPOSITION_NAME = pinnedJson().name;
 
 describe("Tier GR — the trusted composition table reaches a root too", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("GR16: a root writes the composition table without the host naming it", function* () {
@@ -1174,6 +1180,7 @@ describe("Tier GR — the trusted composition table reaches a root too", () => {
  * fence may be executed, and the receiver must be handed that string once.
  */
 describe("Tier GR — a root fills an entry draft with literal captured source", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /** The paired receiver, recording exactly what each invocation was handed. */
@@ -1308,6 +1315,7 @@ describe("Tier GR — a root fills an entry draft with literal captured source",
  * this operation directly and has no site of its own to lend.
  */
 describe("Tier GR — a root describes its own vocabulary", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   it("GR23: <Syntax /> lists the names this root actually admits", function* () {
@@ -1516,6 +1524,7 @@ describe("Tier GR — a root describes its own vocabulary", () => {
  * interrupted, which is a promise source that can ask would break.
  */
 describe("Tier GR — a root asks the canonical question", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
 
   /** The answer shape these rows ask for, written the way a reply writes one. */
@@ -1720,6 +1729,7 @@ describe("Tier GR — a root asks the canonical question", () => {
 });
 
 describe("993 generated nested roots", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/generated-xmd-root.test.ts"));
   beforeAll(() => useTempFileCompiler());
   for (const ready of [true, false]) {
     it(`W9/W11: executes only the selected conditional root path (${ready})`, function* () {
