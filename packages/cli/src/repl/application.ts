@@ -8286,13 +8286,22 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(
-    view,
-    context.widths?.drawer ?? 0,
-    context.preview,
-    context.notices,
-    context.details,
-  );
+  const held =
+    context.measuring && view.selection.drawers.at(-1)?.kind === "history"
+      ? {
+          title: "History",
+          titleStyle: styleOf("drawer-title"),
+          dismissing: undefined,
+          entering: false,
+          content: [],
+        }
+      : drawerContent(
+          view,
+          context.widths?.drawer ?? 0,
+          context.preview,
+          context.notices,
+          context.details,
+        );
   if (held === undefined) {
     return undefined;
   }
@@ -8782,6 +8791,22 @@ function messageRows(
   return question.message.split("\n").map((text) => ({ text, runs: sourceRuns(text) }));
 }
 
+/** The retained destinations shared by round drawing and viewport admission. */
+function historyRounds(view: ReplView) {
+  if (view.selection.drawers.at(-1)?.kind !== "history" || view.state.historyPositions) {
+    return undefined;
+  }
+  const points = numbered(view.navigation);
+  const outcomes = new Map(
+    points.filter((one) => one.point.kind === "terminal").map((one) => [one.entry, one]),
+  );
+  const rounds = points
+    .filter((one) => one.point.kind === "entry")
+    .reverse()
+    .map((input) => ({ input, output: outcomes.get(input.entry) }));
+  return rounds.length === 0 ? undefined : rounds;
+}
+
 function drawerContent(
   view: ReplView,
   width: number,
@@ -8902,7 +8927,8 @@ function drawerContent(
     // Both views use the whole recorded navigation, including positions beyond
     // the selected prefix, without reading their payloads.
     const points = numbered(view.navigation);
-    if (view.state.historyPositions || !points.some((one) => one.point.kind === "entry")) {
+    const rounds = historyRounds(view);
+    if (rounds === undefined) {
       for (const one of [...points].reverse()) {
         content.push({
           described: row(
@@ -8918,18 +8944,14 @@ function drawerContent(
         });
       }
     } else {
-      const outcomes = new Map(
-        points.filter((one) => one.point.kind === "terminal").map((one) => [one.entry, one]),
-      );
-      const rounds = points.filter((one) => one.point.kind === "entry").reverse();
-      for (const [index, input] of rounds.entries()) {
-        const older = rounds[index + 1];
-        const newer = rounds[index - 1];
+      for (const [index, round] of rounds.entries()) {
+        const { input, output } = round;
+        const older = rounds[index + 1]?.input;
+        const newer = rounds[index - 1]?.input;
         const neighbours = {
-          Home: `drawer:marker:${rounds[0].point.marker}`,
-          End: `drawer:marker:${rounds[rounds.length - 1].point.marker}`,
+          Home: `drawer:marker:${rounds[0].input.point.marker}`,
+          End: `drawer:marker:${rounds[rounds.length - 1].input.point.marker}`,
         };
-        const output = outcomes.get(input.entry);
         const control = (point: typeof input, label: string) =>
           row(
             `drawer:marker:${point.point.marker}`,
@@ -8953,7 +8975,7 @@ function drawerContent(
                   : newer === undefined
                     ? {}
                     : {
-                        "Alt+ArrowUp": `drawer:marker:${(outcomes.get(newer.entry) ?? newer).point.marker}`,
+                        "Alt+ArrowUp": `drawer:marker:${(rounds[index - 1].output ?? newer).point.marker}`,
                       }),
                 ...(label === "[Input]" && output !== undefined
                   ? { ArrowRight: `drawer:marker:${output.point.marker}` }
@@ -12316,9 +12338,11 @@ export function admissionFor(input: {
     );
     const rows =
       slot.window === DRAWER_WINDOW
-        ? drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
-            (one) => one.described,
-          )
+        ? view.selection.drawers.at(-1)?.kind === "history"
+          ? undefined
+          : drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
+              (one) => one.described,
+            )
         : slot.window === QUEUE_WINDOW
           ? queueSequence(staged(view) ?? workspaceOf(), queue).map((one) => ({
               key: one.first
@@ -12473,6 +12497,21 @@ function offsetFor(
     return held;
   }
   const requested = view.state.restore;
+  const rounds = window === DRAWER_WINDOW ? historyRounds(view) : undefined;
+  if (rounds !== undefined) {
+    if (requested?.kind === "reveal" && capacity > 0) {
+      const at = rounds.findIndex(
+        (round) =>
+          requested.key === `drawer:marker:${round.input.point.marker}` ||
+          (round.output !== undefined &&
+            requested.key === `drawer:marker:${round.output.point.marker}`),
+      );
+      if (at >= 0) {
+        return Math.min(Math.max(held, at - capacity + 1), at);
+      }
+    }
+    return held;
+  }
   if (
     requested?.kind === "reveal" &&
     capacity > 0 &&
@@ -12615,7 +12654,12 @@ function totalOf(
   }
   // The same prepared rows the drawing pass consumes, so what this window
   // admits and what it draws cannot disagree about how tall a notice is.
-  return drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ?? 0;
+  const rounds = historyRounds(view);
+  return (
+    rounds?.length ??
+    drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ??
+    0
+  );
 }
 
 /**
