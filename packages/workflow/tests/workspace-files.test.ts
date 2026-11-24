@@ -811,6 +811,16 @@ describe("WF workflow document filesystem", () => {
     });
   });
 
+  it("refuses project search when the workspace provider cannot observe text", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const message = yield* reportedBy(database, '<Workspace.Search query="absent" />');
+      expect(message).toContain("supports bounded text observation");
+      expect(yield* workspaceEvents(database)).toHaveLength(0);
+    });
+  });
+
   it("reports a missing file as missing rather than reaching the host for it", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {

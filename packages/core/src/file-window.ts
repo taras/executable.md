@@ -10,6 +10,7 @@ export type FileReadSelection = {
   readonly offset?: number;
   readonly limit?: number;
   readonly revision?: string;
+  readonly scope?: string;
 };
 
 export function fileRevision(text: string): string {
@@ -17,12 +18,12 @@ export function fileRevision(text: string): string {
 }
 
 export function fileReadSelection(value: JsonObject): FileReadSelection {
-  const { path, lines, offset, limit, revision } = value;
+  const { path, lines, offset, limit, revision, scope } = value;
   if (
     typeof path !== "string" ||
     path.length === 0 ||
     Object.keys(value).some(
-      (name) => !["path", "lines", "offset", "limit", "revision"].includes(name),
+      (name) => !["path", "lines", "offset", "limit", "revision", "scope"].includes(name),
     )
   ) {
     throw new Error("Give a File path and an optional range.");
@@ -35,20 +36,22 @@ export function fileReadSelection(value: JsonObject): FileReadSelection {
         !Number.isSafeInteger(limit) ||
         limit < 1 ||
         limit > FILE_WINDOW_LIMIT)) ||
-    (revision !== undefined && (typeof revision !== "string" || !/^[a-f0-9]{24}$/.test(revision)))
+    (revision !== undefined &&
+      (typeof revision !== "string" || !/^[a-f0-9]{24}$/.test(revision))) ||
+    (scope !== undefined && (typeof scope !== "string" || !/^[a-f0-9]{24}$/.test(scope)))
   ) {
     throw new Error(
       "Give a nonnegative offset, a positive bounded limit and a valid file revision.",
     );
   }
   if (lines === undefined) {
-    return { path, offset, limit, revision };
+    return { path, offset, limit, revision, scope };
   }
   if (offset !== undefined) {
     throw new Error("Choose a line range or a character offset.");
   }
   if (typeof lines === "string" && lineRange(lines) !== undefined) {
-    return { path, lines, limit, revision };
+    return { path, lines, limit, revision, scope };
   }
   throw new Error('Give a one-based line such as "42" or an inclusive range such as "38:46".');
 }

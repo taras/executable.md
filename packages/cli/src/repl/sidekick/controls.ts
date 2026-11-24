@@ -297,7 +297,6 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
   "REPL.Search",
-  "REPL.SearchContext",
   "REPL.File.Read",
   ELICIT_CONTROL,
   ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),

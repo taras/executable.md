@@ -36,7 +36,7 @@ export default function* (input: Record<string, Json>): Operation<Json> {
     function* () {
       const page = yield* searchProjectFiles(query, after);
       if (!page.ok) {
-        throw new Error("Project files could not be searched.");
+        throw page.error;
       }
       return page.value;
     },

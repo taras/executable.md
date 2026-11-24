@@ -79,10 +79,12 @@ export interface FileRecorderHandle {
   assemble<K extends keyof DocumentFilesHandler>(method: K): DocumentFilesHandler[K];
 }
 export interface FilesApi extends Api<DocumentFilesHandler> {
+  supportsTextObservation(): Operation<boolean>;
   register(boundary: Layers): Operation<FileRecorderHandle>;
 }
 
 export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
+  const recorders = new WeakSet<Layers>();
   function* around(
     layers: Layers,
     options: { at: "min" | "max" } = { at: "max" },
@@ -147,11 +149,20 @@ export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
   return {
     operations: operations(),
     around,
+    *supportsTextObservation() {
+      const layers = collect(yield* useScope());
+      // A recorder observes a provider’s calls without supplying its capabilities.
+      const provider = layers.find(
+        (layer) => layer.readTextFile !== undefined && !recorders.has(layer),
+      );
+      return provider?.observeTextFile !== undefined;
+    },
     *register(boundary): Operation<FileRecorderHandle> {
       let live = true;
       yield* ensure(() => {
         live = false;
       });
+      recorders.add(boundary);
       yield* around(boundary);
       const selected = operations(boundary, () => live);
       return Object.freeze({

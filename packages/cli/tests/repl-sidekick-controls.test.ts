@@ -44,6 +44,7 @@ import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { Stdio } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { join } from "node:path";
 import { createAcpxProvider } from "../../acp/src/provider.ts";
 import { createAcpxSessionStore } from "../../acp/src/session-store.ts";
@@ -3188,6 +3189,89 @@ function respond(request) {
     });
   });
 
+  it("1428: Sidekick falls back at mount boundaries and honors inherited global ignores", function* () {
+    const project = yield* useTempDirectory("workspace-search-git-");
+    const privateRoot = join(project, "private");
+    yield* ensureDir(privateRoot);
+    yield* writeTextFile(join(project, "visible.txt"), "git discovery marker");
+    yield* writeTextFile(join(project, "excluded.txt"), "git discovery marker");
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    const root = { ...cold(projectedOf([])), projectAccess: access };
+    const source = '<REPL.Search query="git discovery marker" scope="files" />';
+    yield* scoped(function* () {
+      yield* API.Process.around({
+        *exec([input], next) {
+          if (input.command[0] !== "git") {
+            return yield* next(input);
+          }
+          expect(input.command).toEqual([
+            "git",
+            "-c",
+            "core.fsmonitor=false",
+            "rev-parse",
+            "--is-inside-work-tree",
+          ]);
+          yield* Stdio.operations.stderr(
+            new TextEncoder().encode(
+              "fatal: not a git repository (or any parent up to mount point /)\n" +
+                "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n",
+            ),
+          );
+          return { exitCode: 128, stdout: undefined, stderr: undefined };
+        },
+      });
+      const asked = fresh();
+      answered(yield* replyThrough(source, root, asked));
+      expect(observed(asked, 0)).toMatchObject({
+        matches: [{ source: { path: "excluded.txt" } }, { source: { path: "visible.txt" } }],
+        next: null,
+      });
+    });
+    expect(
+      (yield* API.Process.operations.exec({ command: ["git", "init", "--quiet"], cwd: project }))
+        .exitCode,
+    ).toBe(0);
+    const config = join(privateRoot, "synthetic-config");
+    const excludes = join(privateRoot, "synthetic-excludes");
+    yield* writeTextFile(config, '[core]\n  excludesFile = "' + excludes + '"\n');
+    yield* writeTextFile(excludes, "excluded.txt\n");
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    yield* ensure(() => {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    });
+    process.env.GIT_CONFIG_GLOBAL = config;
+    const operations: string[] = [];
+    yield* API.Process.around({
+      *exec([input], next) {
+        if (input.command[0] === "git") {
+          expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+          expect(input.env?.GIT_CONFIG_GLOBAL === config).toBe(true);
+          expect(input.env?.PATH === process.env.PATH).toBe(true);
+          expect(input.env?.LC_ALL).toBe("C");
+          operations.push(input.command[3]);
+        }
+        return yield* next(input);
+      },
+    });
+    const asked = fresh();
+    answered(yield* replyThrough(source, root, asked));
+    expect(observed(asked, 0)).toMatchObject({
+      matches: [{ source: { path: "visible.txt" } }],
+      next: null,
+    });
+    expect(operations).toEqual(["rev-parse", "ls-files"]);
+    expect(JSON.stringify(asked)).not.toContain(config);
+  });
+
   it("1428: Sidekick searches the live project and retained evidence, then opens context without replay", function* () {
     const project = yield* useTempDirectory("workspace-search-");
     const privateRoot = join(project, "private");
@@ -3303,6 +3387,19 @@ function respond(request) {
       answered(yield* replyThrough(`<${reader} request={${JSON.stringify(ref)}} />`, root, asked));
       return asked.settled[0];
     }
+    yield* scoped(function* () {
+      yield* API.Files.around({
+        readTextFile() {
+          throw new Error("An unsupported search must not call the legacy reader");
+        },
+      });
+      const asked = fresh();
+      const response = answered(
+        yield* replyThrough('<REPL.Search query="shared[needle]" scope="files" />', root, asked),
+      );
+      expect(asked.settled[0]?.ok).toBe(false);
+      expect(JSON.stringify(response)).toContain("supports bounded text observation");
+    });
     const hits = (yield* search(shared)).matches;
     expect(hits).toMatchObject([
       {

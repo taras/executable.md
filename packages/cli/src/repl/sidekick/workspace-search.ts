@@ -156,7 +156,7 @@ export function* searchWorkspace(
       });
     });
     if (!filePage.ok) {
-      return Err(new Error("Project files could not be listed for search."));
+      return filePage;
     }
     for (const match of filePage.value.matches) {
       matches.push(match);

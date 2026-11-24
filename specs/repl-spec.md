@@ -3917,8 +3917,11 @@ acknowledged entries.
 
 In a Git worktree, file candidates are tracked files plus nonignored
 untracked files below the launch project, with paths relative to that
-project. Git applies standard ignore rules. Elsewhere, the project Glob
-supplies candidates. Every candidate still passes the provider’s text-read
+project. Git applies standard ignore rules with the filesystem monitor
+disabled. A confirmed non-worktree uses the project Glob. A Git discovery
+or listing failure refuses file search. A provider without bounded text
+observation refuses file search even for an empty candidate set. Every
+candidate still passes the provider’s text-read
 access checks. Direct file reads use their own access checks independently
 of enumeration. Search skips Git metadata, unreadable files and text
 containing NUL. Both search and context

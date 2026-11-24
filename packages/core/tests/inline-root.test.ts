@@ -1,3 +1,4 @@
+import { Stdio } from "@effectionx/process";
 /**
  * Tier IR — root documents supplied as text (issue #76).
  *
@@ -34,6 +35,7 @@ import { useStubFs } from "@executablemd/runtime/test";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -469,6 +471,121 @@ describe("Tier IR — inline root documents", () => {
     expect(reads).toBe(before);
   });
 
+  it("refuses an unavailable observation provider even with an empty listing", function* () {
+    yield* useWorkspace({});
+    const source = '<Workspace.Search query="no match" />';
+    const run = function* () {
+      return asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(source),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+    };
+    expect(yield* run()).not.toContain("unavailable");
+    yield* API.Files.around({
+      *readTextFile([input], next) {
+        throw new Error("An unsupported search must not call the legacy reader");
+      },
+    });
+    expect(
+      failureMessage(
+        yield* completion({
+          ...inlineSource(source),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    ).toContain("supports bounded text observation");
+  });
+
+  it("refuses to substitute an outer file for a reference found inside Dir", function* () {
+    const root = yield* useWorkspace({ "notes.md": "outer same name" });
+    yield* ensureDir(join(root, "sub"));
+    yield* writeTextFile(join(root, "sub", "notes.md"), "inner marker");
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(`
+<Dir path="sub">
+<Workspace.Search query="inner marker" as="page" />
+<File request={page.matches[0].ref} as="opened" />
+<Json value={{opened,ref:page.matches[0].ref}} />
+</Dir>`),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    const result = JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
+    expect(result.opened.text).toBe("inner marker");
+    const moved = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(`<File request={${JSON.stringify(result.ref)}} />`),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    expect(moved).toContain("directory where it was created");
+    expect(moved).not.toContain("outer same name");
+  });
+
+  it("distinguishes Git discovery and listing failures from non-Git fallback", function* () {
+    yield* useWorkspace({ "plain.txt": "fallback witness" });
+    const calls: string[][] = [];
+    const bytes = new TextEncoder();
+    for (const scenario of [
+      "missing",
+      "unsafe",
+      "not-worktree",
+      "mount-boundary",
+      "listing-failed",
+    ] as const) {
+      yield* scoped(function* () {
+        yield* API.Process.around({
+          *exec([input], next) {
+            if (input.command[0] !== "git") {
+              return yield* next(input);
+            }
+            calls.push(input.command);
+            expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+            if (scenario === "missing") {
+              throw new Error("controlled Git startup failure");
+            }
+            if (scenario === "listing-failed" && input.command[3] === "rev-parse") {
+              yield* Stdio.operations.stdout(bytes.encode("true\n"));
+              return { exitCode: 0, stdout: undefined, stderr: undefined };
+            }
+            const diagnostic =
+              scenario === "not-worktree"
+                ? "fatal: not a git repository (or any of the parent directories): .git\n"
+                : scenario === "mount-boundary"
+                  ? "fatal: not a git repository (or any parent up to mount point /)\n" +
+                    "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                  : "fatal: controlled Git discovery or listing failure\n";
+            yield* Stdio.operations.stderr(bytes.encode(diagnostic));
+            return { exitCode: 128, stdout: undefined, stderr: undefined };
+          },
+        });
+        const options = {
+          ...inlineSource(
+            '<Workspace.Search query="fallback witness" as="page" />\n<Output><Json value={page} /></Output>',
+          ),
+          stream: new InMemoryStream(),
+        };
+        if (scenario === "not-worktree" || scenario === "mount-boundary") {
+          expect(asText(yield* collect(yield* execute(options)))).toContain("plain.txt");
+        } else {
+          const failure = failureMessage(yield* completion(options));
+          expect(failure).toContain("Check project access and Git availability");
+          expect(failure).not.toContain("plain.txt");
+        }
+      });
+    }
+    expect(calls.some((command) => command[3] === "ls-files")).toBe(true);
+  });
+
   it("uses Git ignore rules below the working directory and keeps direct File reads", function* () {
     const root = yield* useWorkspace({
       ".gitignore": "ignored*.txt\n",
@@ -485,6 +602,31 @@ describe("Tier IR — inline root documents", () => {
       const result = yield* exec({ command: ["git", ...args], cwd: root });
       expect(result.exitCode).toBe(0);
     }
+    const globalConfig = join(root, ".git", "synthetic-config");
+    const globalExcludes = join(root, ".git", "synthetic-excludes");
+    yield* writeTextFile(globalConfig, '[core]\n  excludesFile = "' + globalExcludes + '"\n');
+    yield* writeTextFile(globalExcludes, "global-excluded.txt\n");
+    yield* writeTextFile(join(root, "sub", "global-excluded.txt"), "project-marker");
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    yield* ensure(() => {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    });
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    yield* API.Process.around({
+      *exec([input], next) {
+        if (input.command[0] === "git") {
+          expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+          expect(input.env?.GIT_CONFIG_GLOBAL === globalConfig).toBe(true);
+          expect(input.env?.PATH === process.env.PATH).toBe(true);
+          expect(input.env?.LC_ALL).toBe("C");
+        }
+        return yield* next(input);
+      },
+    });
     function* search() {
       const output = asText(
         yield* collect(

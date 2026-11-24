@@ -73,7 +73,7 @@ import type { FormDeclaration } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
-import { fileReadArguments } from "../file-window.ts";
+import { fileReadArguments, fileRevision } from "../file-window.ts";
 import { observeFileWindow } from "../file-observation.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { searchDirectory } from "../project-search.ts";
@@ -117,15 +117,25 @@ export function* readBody(
   if (bounded) {
     const selection = fileReadArguments(props);
     const requested = selection.path;
+    const reference = isJsonObject(props.request) && Object.hasOwn(props.request, "reader");
     const directory = selection.revision === undefined ? yield* cwd() : yield* searchDirectory();
     const raw: unknown = yield createDurableOperation<Json>(
       { type: "file-window", name: requested, ...props },
       function* () {
+        if (
+          (reference || selection.scope !== undefined) &&
+          selection.scope !== fileRevision(directory)
+        ) {
+          return false;
+        }
         const page = yield* observeFileWindow(directory, selection);
         return page.ok ? page.value : null;
       },
     );
     const result = parseJson(raw);
+    if (result === false) {
+      throw new FileAccessError("Open a search reference in the directory where it was created.");
+    }
     if (result === null) {
       throw new FileAccessError("This bounded file read is unavailable.");
     }

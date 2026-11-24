@@ -1,6 +1,6 @@
 import { createContext, Err, Ok } from "effection";
 import type { Context, Operation, Result } from "effection";
-import { cwd } from "@executablemd/runtime";
+import { cwd, Files } from "@executablemd/runtime";
 import { fileRevision } from "./file-window.ts";
 import { globFiles } from "./files.ts";
 import { observeFile } from "./file-observation.ts";
@@ -20,7 +20,7 @@ export type FileSearchHit = TextMatch & {
   source: { kind: "file"; path: string };
   ref: {
     reader: "File" | "REPL.File.Read";
-    args: { path: string; offset: number; limit: number; revision: string };
+    args: { path: string; offset: number; limit: number; revision: string; scope?: string };
   };
 };
 
@@ -31,6 +31,7 @@ function* matchProjectFile(
   after: number,
   limit: number,
   reader: FileSearchHit["ref"]["reader"],
+  scope: string | undefined,
 ): Operation<FileSearchHit[]> {
   const result = yield* observeFile<FileSearchHit[]>(directory, path, true, {
     miss: [],
@@ -49,7 +50,13 @@ function* matchProjectFile(
           source: { kind: "file", path },
           ref: {
             reader,
-            args: { path, revision, offset: Math.max(0, hit.offset - 240), limit: 640 },
+            args: {
+              path,
+              revision,
+              offset: Math.max(0, hit.offset - 240),
+              limit: 640,
+              ...(scope === undefined ? {} : { scope }),
+            },
           },
         }));
       };
@@ -72,6 +79,13 @@ export function* searchProjectFiles(
   if (!validSearchQuery(query)) {
     return Err(new Error("Search needs a single-line literal of 1 to 160 characters."));
   }
+  if (!(yield* Files.supportsTextObservation())) {
+    return Err(
+      new Error(
+        "Project file search is unavailable. Use a file provider that supports bounded text observation.",
+      ),
+    );
+  }
   const directory = options?.directory ?? (yield* searchDirectory());
   const listed = yield* globFiles({
     cwd: directory,
@@ -80,8 +94,14 @@ export function* searchProjectFiles(
     exclude: [".git", "**/.git/**"],
   });
   if (!listed.ok) {
-    return listed;
+    return Err(
+      new Error(
+        "Project files could not be listed for search. Check project access and Git availability.",
+      ),
+    );
   }
+  const reader = options?.reader ?? "File";
+  const scope = reader === "File" ? fileRevision(directory) : undefined;
   const matches: FileSearchHit[] = [];
   for (const path of listed.value) {
     if (after !== undefined && path < after.path) {
@@ -94,7 +114,8 @@ export function* searchProjectFiles(
       query,
       after?.path === path ? after.offset : -1,
       remaining + 1,
-      options?.reader ?? "File",
+      reader,
+      scope,
     );
     matches.push(...found.slice(0, remaining));
     if (found.length > remaining) {

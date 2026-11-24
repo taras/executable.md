@@ -926,8 +926,9 @@ const composedFiles: FilesApi = createFilesApi({
   },
 });
 
-export const Files: Api<DocumentFilesHandler> = {
+export const Files: Api<DocumentFilesHandler> & Pick<FilesApi, "supportsTextObservation"> = {
   operations: composedFiles.operations,
   around: composedFiles.around,
+  supportsTextObservation: composedFiles.supportsTextObservation,
 };
 export const registerFileRecorder = composedFiles.register;

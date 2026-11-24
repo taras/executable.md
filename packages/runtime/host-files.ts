@@ -95,6 +95,7 @@ import { mkdtempSync } from "node:fs";
 import { constants, copyFile as nativeCopyFile, readFile, realpath, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { Stdio } from "@effectionx/process";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
@@ -900,22 +901,41 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     return Ok(undefined);
   }
 
-  function* git(cwd: string, args: string[]): Operation<{ exitCode: number; stdout: string }> {
+  function* git(
+    cwd: string,
+    args: string[],
+  ): Operation<{ exitCode: number; stdout: string; stderr: string }> {
     return yield* scoped(function* () {
       const decoder = new TextDecoder();
       let stdout = "";
+      let stderr = "";
+      const errors = new TextDecoder();
       yield* Stdio.around({
         stdout: lift(([bytes]) => {
           stdout += decoder.decode(bytes, { stream: true });
         }),
-        stderr: lift(() => undefined),
+        stderr: lift(([bytes]) => {
+          if (stderr.length < 512) {
+            stderr += errors.decode(bytes.subarray(0, 512 - stderr.length), { stream: true });
+          }
+        }),
       });
+      const inherited = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
       const result = yield* API.Process.operations.exec({
-        command: ["git", ...args],
+        command: ["git", "-c", "core.fsmonitor=false", ...args],
         cwd,
+        env: { ...inherited, LC_ALL: "C" },
         retain: false,
       });
-      return { exitCode: result.exitCode, stdout: stdout + decoder.decode() };
+      return {
+        exitCode: result.exitCode,
+        stdout: stdout + decoder.decode(),
+        stderr: stderr + errors.decode(),
+      };
     });
   }
 
@@ -924,10 +944,23 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     try {
       worktree = yield* git(cwd, ["rev-parse", "--is-inside-work-tree"]);
     } catch {
+      return nonWriteFailure("glob", "traversal", "operation-failed");
+    }
+    const outsideRepository =
+      /^fatal: not a git repository \(or any of the parent directories\): \.git\s*$/.test(
+        worktree.stderr,
+      ) ||
+      /^fatal: not a git repository \(or any parent up to mount point [^\r\n]+\)\r?\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.\s*$/.test(
+        worktree.stderr,
+      );
+    if (
+      (worktree.exitCode === 0 && worktree.stdout.trim() === "false") ||
+      (worktree.exitCode === 128 && outsideRepository)
+    ) {
       return undefined;
     }
     if (worktree.exitCode !== 0 || worktree.stdout.trim() !== "true") {
-      return undefined;
+      return nonWriteFailure("glob", "traversal", "operation-failed");
     }
     try {
       const listed = yield* git(cwd, [
