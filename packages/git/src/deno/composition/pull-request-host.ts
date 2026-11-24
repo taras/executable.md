@@ -18,20 +18,22 @@
  * would make it decide admission too, and would put the credential in its
  * hands to do it with.
  *
- * ## One handle, one memoization, no stored callback
+ * ## Independent read and publication settings
  *
- * The configuration and the transport resolve once per handle and stay inert
- * until something needs a session, which is the existing behavior. Neither the
+ * Each operation resolves its own configuration and transport on first use. Neither the
  * callback nor the continuation a call supplies is kept on the handle: they
  * belong to that one call, so two concurrent reads cannot reach each other's.
  */
 
 import type { Operation } from "effection";
 import {
+  gitHubPullRequestAccess,
   gitHubPullRequestReadHandler,
   gitHubPullRequestReadResolver,
 } from "./pull-request-reads.ts";
 import type { AdmittedReadExecution } from "./pull-request-reads.ts";
+import type { GitHubSource } from "./github.ts";
+import { replGitHubBaseUrl } from "../issue/configuration.ts";
 import { denoGitHubSource } from "./github-host.ts";
 import { pullRequestProvider } from "./github-pull-request.ts";
 import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
@@ -50,6 +52,14 @@ export interface DenoPullRequestOperations {
   provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider>;
 }
 
+export function replGitHubPullRequestReadResolver(
+  host: (endpoint?: string) => GitHubSource = denoGitHubSource,
+) {
+  return gitHubPullRequestReadResolver({ host }, function* () {
+    return { endpoint: yield* replGitHubBaseUrl() };
+  });
+}
+
 /**
  * One inert handle per installation.
  *
@@ -58,7 +68,8 @@ export interface DenoPullRequestOperations {
  * caller.
  */
 export function denoPullRequestOperations(): DenoPullRequestOperations {
-  const resolved = gitHubPullRequestReadResolver({ host: denoGitHubSource });
+  const reads = replGitHubPullRequestReadResolver();
+  const publication = gitHubPullRequestAccess({ host: denoGitHubSource });
 
   return {
     read(
@@ -69,13 +80,13 @@ export function denoPullRequestOperations(): DenoPullRequestOperations {
     ): Operation<PullRequestReadResult> {
       // Built for this call, so what is admitted reaches this caller's own
       // callback and nothing on the shared handle holds it.
-      return gitHubPullRequestReadHandler(resolved, execute)([url, options], next);
+      return gitHubPullRequestReadHandler(reads, execute)([url, options], next);
     },
 
     *provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider> {
-      // Opened inside the attempt that asked, so the session ends with it. The
-      // recipe is the adapter's own — one memoization, shared with the read.
-      const access = yield* (yield* resolved.access()).open();
+      // Opened inside the attempt that asked, so the session ends with it. Publication
+      // uses the workflow GitHub endpoint setting.
+      const access = yield* (yield* publication()).open();
       return pullRequestProvider(access, origin, inputs);
     },
   };

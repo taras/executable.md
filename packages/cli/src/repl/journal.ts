@@ -100,24 +100,33 @@ export class RetainedReplStream implements RetainedStream {
     const recorded = this.bindings.share(sealEvent(event));
 
     const text = serializeDurableEvent(recorded);
-    try {
-      if (this.history === undefined) {
-        yield* ReplHost.operations.appendRecord(this.path, text);
-      } else {
-        yield* ReplHost.operations.appendEntryRecord(this.path, text, this.history.checkAppend());
-      }
-    } catch (cause) {
-      if (this.history !== undefined) {
-        throw this.history.fence(cause instanceof Error ? cause : new Error(String(cause)));
-      }
-      throw cause;
-    }
-
-    this.bindings.remember(recorded);
-    if (this.history === undefined) {
+    const history = this.history;
+    if (history === undefined) {
+      yield* ReplHost.operations.appendRecord(this.path, text);
+      this.bindings.remember(recorded);
       this.events.push(recorded);
     } else {
-      this.history.acknowledge(recorded, text);
+      const check = history.checkAppend();
+      let acknowledged = false;
+      try {
+        yield* ReplHost.operations.appendEntryRecord(this.path, text, {
+          ...check,
+          acknowledged: (version) => {
+            check.acknowledged(version);
+            this.bindings.remember(recorded);
+            history.acknowledge(recorded, text);
+            acknowledged = true;
+          },
+        });
+      } catch (cause) {
+        throw history.fence(cause instanceof Error ? cause : new Error(String(cause)));
+      } finally {
+        if (acknowledged) {
+          this.onAppend?.(recorded);
+          retained?.(recorded);
+        }
+      }
+      return;
     }
     this.onAppend?.(recorded);
     retained?.(recorded);

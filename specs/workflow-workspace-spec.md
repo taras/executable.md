@@ -211,8 +211,7 @@ two.
 `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and the read form of
 `<Git.Commit>` are available to a REPL entry and are retained on the same terms, with one difference that
 follows from what they are: a read changes nothing, so it takes the selected
-placement's ownership of a managed checkout where it has one and no hold on the
-repository at all. An entry committing in a checkout and an entry reading it do
+placement's ownership of a managed checkout where it has one and nothing else. An entry committing in a checkout and an entry reading it do
 not wait for each other. Within one entry they do: every operation of that entry
 that runs `git` against one shared Git directory — the five reads, the three
 transitions and the publication's own observation — takes the same turn, and a
@@ -249,10 +248,9 @@ acknowledged publication of that branch, from that checkout, at that commit
 admits the upsert. A self-closing `<PullRequest />` details read and the three
 collection reads need neither a Repository nor a working directory. Each
 retains the provider's complete result. Restoration passes through live
-composition and the host's current URL admission, so withdrawing a target
-also prevents its retained result from binding. `<Issue>` is available on
-the same terms as publication, and lives at a service rather than in a
-Workspace.
+composition and validates the GitHub PR URL. The workflow allowlist does
+not govern REPL reads or their restoration. `<Issue>` is available on the
+same terms as publication, and lives at a service rather than in a Workspace.
 
 ## 3. Workflow lifecycle
 
@@ -2181,12 +2179,15 @@ the existing persistence failure carrying the adapter's error as its cause.
 
 **Authentication and reach are the host's.** The credential is the host's own,
 acquired for the request and disposed with the invocation. Which pull requests
-may be read at all is operator configuration — the `allowed` list, checked
+may be read by a workflow or ordinary run is operator configuration — the
+`allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`, checked
 before a session is opened, a credential is read or anything is sent — and a
 document names a URL, never a host or a credential. Absence of that
 configuration authorizes no URL read and disables nothing else: the paired `<PullRequest>`
 upserts on this run's own matching Push evidence, which no configuration grants
-or withdraws. Nothing of the credential, the endpoint, the raw
+or withdraws. The [REPL GitHub adapter](repl-spec.md) selects its API base
+from the Git Plugin's REPL settings and admits reads without this allowlist.
+Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
 secret gate. The retained request is the whole normalized question: the operation, the
@@ -3550,7 +3551,7 @@ A request every provider delegated reaches the operation's own base error,
 the document's own words and the thing an author has to fix, and it distinguishes
 a URL nobody recognized from a name nobody answers to.
 
-**The ceiling.** The trusted host installs an adapter-private target ceiling
+**The workflow ceiling.** The trusted host installs an adapter-private target ceiling
 beside provider credentials. A provider that has matched a request admits its
 canonical URL and discriminator against that ceiling *before* it opens a
 connection. A tracker and any nearer middleware select and narrow within it and
@@ -3669,14 +3670,20 @@ decision stays journal evidence. Provider state and later edits are separate
 reads.
 
 **The adapter.** The GitHub Issue middleware lives in `@executablemd/git` and is
-installed with the rest of the Plugin. It reads its configuration when an
-invoked issue operation turns out to be its own; a deployment that authorized
-no tracker handles no destination, and `<Issue>` reaches `IssueApi`'s own base
-error exactly as it did when absence installed no middleware at all. Configuration names the ceiling and
-optionally an endpoint; it is refused rather than narrowed when it cannot be
-used. With no configuration there is no Issue provider, so every request reaches
-`NoIssueProvider` — absence of configuration is fail-closed, never an open
-default.
+installed with the rest of the Plugin. The host supplies the execution mode.
+The middleware reads configuration when an invoked issue operation matches it.
+
+Workflow and ordinary run use `XMD_WORKFLOW_GITHUB_ISSUES`, which specifies a
+repository ceiling and an optional API endpoint. Invalid configuration fails.
+With no configuration, the request reaches `NoIssueProvider`. A target outside
+the ceiling fails before the adapter opens a credential or sends a request.
+
+REPL admits recognized targets without a repository ceiling. It selects the API
+base from `XMD_REPL_GITHUB_BASE_URL`, then the CLI setting
+`--github-base-url`, then `https://api.github.com`. URL matching and validation
+apply independently of the API base. A `github.com` issue URL can therefore
+address a GitHub Enterprise API endpoint. All modes use the same authentication
+and operation permissions.
 
 ### 10.4 Worker Shell
 
@@ -4276,14 +4283,14 @@ unchanged.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
 | the same sixteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
-| `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
-| `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and then the shared Git directory's mutation lease and keeps both until teardown; a completed one takes neither. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
-| `<Git.Push />` inside a REPL entry | built on the #181 stack, Deno and compiled only: the same observe/adopt/fast-forward/refuse reconciliation §7.4 describes, reached under the entry's own owner and core's minted invocation identity rather than a run and an expansion. The request the entry asked for — branch, commit, destination ref and admitted credential-free origin — is published before anything is contacted, so an interrupted publication reconciles that exact request and an accepted push whose result was never recorded is adopted rather than repeated. Objects are read from the caller's own checkout through a control repository with a read-only alternate rather than from an exported Workspace family; no Workspace root, savepoint or frontier takes part, a completed publication reaches no provider, credential or remote, and the publication takes the managed slot and no mutation lease |
+| `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; nothing holds the shared Git directory. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
+| `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and keeps it until teardown; a completed one takes none. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
+| `<Git.Push />` inside a REPL entry | built on the #181 stack, Deno and compiled only: the same observe/adopt/fast-forward/refuse reconciliation §7.4 describes, reached under the entry's own owner and core's minted invocation identity rather than a run and an expansion. The request the entry asked for — branch, commit, destination ref and admitted credential-free origin — is published before anything is contacted, so an interrupted publication reconciles that exact request and an accepted push whose result was never recorded is adopted rather than repeated. Objects are read from the caller's own checkout through a control repository with a read-only alternate rather than from an exported Workspace family; no Workspace root, savepoint or frontier takes part, a completed publication reaches no provider, credential or remote, and the publication takes the managed slot and nothing else |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes a paired `<PullRequest>` write and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
-| self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
+| self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Workflow and ordinary runs check operator configuration before contacting GitHub |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |

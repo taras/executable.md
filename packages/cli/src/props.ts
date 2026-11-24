@@ -200,7 +200,7 @@ function isJsonSchemaInput(value: unknown): value is JsonSchemaInput {
   return typeof value === "boolean" || readRecord(value) !== undefined;
 }
 
-function isStandardSchema(value: unknown): value is StandardSchemaV1<unknown> {
+export function isStandardSchema(value: unknown): value is StandardSchemaV1<unknown> {
   if (typeof value !== "object" || value === null || !("~standard" in value)) {
     return false;
   }
@@ -527,7 +527,11 @@ export interface Extraction {
  * Only the generated bindings are recognized, so this stays a source
  * adapter rather than a second argument parser.
  */
-export function extractPropsArgs(args: string[], bindings: Binding[]): Extraction {
+export function extractPropsArgs(
+  args: string[],
+  bindings: Binding[],
+  reservedOptions: readonly string[] = [],
+): Extraction {
   const byOption = new Map(bindings.map((binding) => [binding.option, binding]));
   const collected = new Map<string, string[]>();
   const individual: { binding: Binding; value: string | string[] }[] = [];
@@ -602,7 +606,7 @@ export function extractPropsArgs(args: string[], bindings: Binding[]): Extractio
       continue;
     }
     const next = args[index + 1];
-    if (next === undefined) {
+    if (next === undefined || reservedOptions.includes(next)) {
       throw new PropsError(`${binding.option} requires a value`);
     }
     record(binding, next);

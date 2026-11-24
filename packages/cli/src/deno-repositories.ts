@@ -30,8 +30,7 @@ import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executab
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { join } from "node:path";
-import { gitPlugin } from "@executablemd/git";
-import { useRunComposition } from "@executablemd/git/deno";
+import { gitPluginWithIssueOptions, useRunComposition } from "@executablemd/git/deno";
 import { replRepositoryInstallation } from "./repl/repositories/deno/provider.ts";
 import { replRepositoryPlugin } from "./repl/repositories/plugin.ts";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
@@ -44,11 +43,10 @@ import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
  *
  * The same Plugin by name and vocabulary as the provider-neutral one — it
  * delegates the whole of that install, declarations and admissions included —
- * with one addition: for the command that runs an ordinary document, it
- * registers what that execution initializes. Node and Bun select the neutral
- * value instead and reach none of this.
+ * with GitHub issue configuration for REPL and native Git initialization for
+ * ordinary runs. Node and Bun select the neutral value.
  *
- * It reads no configuration of its own. The two GitHub variables belong to the
+ * GitHub endpoint and credential environment reads belong to the
  * adapter inside `@executablemd/git`, which reads them when an invoked
  * GitHub-backed operation needs them — so a run that opens no pull request and
  * files no issue reads neither, and an operator who wrote something unusable
@@ -69,12 +67,12 @@ export function denoRunRepositories(
   // The same CLI assembly the default selection uses, constructed once here, so
   // a `repl` request reaches this command's entry-history admission through
   // this configured variant as well.
-  const bundled = replRepositoryPlugin(gitPlugin);
+  const bundled = replRepositoryPlugin(gitPluginWithIssueOptions);
   return {
     // The bundled name, because this *is* the bundled Plugin: an operator
     // selecting `--plugin git` is naming this value, and two values under one
     // name is the collision `admitPlugins()` refuses.
-    name: gitPlugin.name,
+    ...bundled,
     *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
       // The neutral value's own install, whole: this variant adds to the
       // bundled Plugin rather than reimplementing it, so the vocabulary, the

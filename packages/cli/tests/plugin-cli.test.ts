@@ -337,13 +337,43 @@ describe("PC5 — a Plugin reads configuration, never document properties", () =
         expect(result.stdout).toContain("Hello, Ada!");
         expect(result.stdout).toContain("timeout: 30000");
       }
-      for (const value of ["--verbose", "--raw", "-"]) {
+      for (const value of ["--raw", "-"]) {
         const literal = yield* run(["--props-name", value]).expect();
         expect(literal.stdout).toContain("verbose: false");
         expect(literal.stdout).toContain("timeout: undefined");
         expect(literal.stdout).toContain(`Hello, ${value}!`);
       }
     });
+  });
+
+  it("reserves standalone verbosity after a generated property for the host", function* () {
+    yield* useWorkspace(
+      {
+        "boolean.md": "---\nprops:\n  loud: { type: boolean }\n---\n\nLoud: {props.loud}\n",
+        "string.md": "---\nprops:\n  loud: { type: string }\n---\n\nLoud: {props.loud}\n",
+      },
+      function* (dir) {
+        const run = (doc: string, ...args: string[]) =>
+          runCli(["run", `--plugin=${fixture("configured.mjs")}`, doc, ...args], { cwd: dir });
+
+        for (const flag of ["--verbose", "-V"]) {
+          const verbose = yield* run("boolean.md", "--props-loud", flag).expect();
+          expect(verbose.stdout).toContain("verbose: true");
+          expect(verbose.stdout).toContain("Loud: true");
+          expect(verbose.stderr).toContain("[yield] import_component:__root__");
+
+          const literal = yield* run("string.md", `--props-loud=${flag}`).expect();
+          expect(literal.stdout).toContain("verbose: false");
+          expect(literal.stdout).toContain(`Loud: ${flag}`);
+          expect(literal.stderr).not.toContain("[yield]");
+
+          const missing = yield* run("string.md", "--props-loud", flag).join();
+          expect(missing.code).toBe(1);
+          expect(missing.stderr).toContain("--props-loud requires a value");
+          expect(missing.stdout).not.toContain("Loud:");
+        }
+      },
+    );
   });
 
   it("leaves root properties spelled like CLI options out of the configuration", function* () {
@@ -714,6 +744,99 @@ describe("package test plugins", () => {
         expect(yield* exists(journal)).toBe(true);
         expect(result.stdout).toContain("plain test body");
         expect(result.stderr).toContain("1 of 2 documents failed");
+      },
+    );
+  });
+});
+
+function optionPluginSource(name: string, keys: readonly string[]): string {
+  return `
+    const schema = { "~standard": {
+      version: 1,
+      vendor: "fixture",
+      validate: (value) => ({ value }),
+    } };
+    export default {
+      name: ${JSON.stringify(name)},
+      command([cmd, args], next) {
+        const definitions = Object.fromEntries(
+          ${JSON.stringify(keys)}.map((key) => [key, { owner: this.name, schema }]),
+        );
+        return next(cmd, { ...args, ...definitions });
+      },
+      *install({ options }) {
+        console.log(JSON.stringify({ keys: Object.getOwnPropertyNames(options), options }));
+      },
+    };
+  `;
+}
+
+describe("REPL Plugin options", () => {
+  it("parses only selected definitions and gives their settled values to the owner", function* () {
+    yield* useWorkspace(
+      {
+        "other.mjs": optionPluginSource("other-owner", ["otherValue", "optionalValue"]),
+      },
+      function* (dir) {
+        const attachment = ["--attach", "00000000-0000-4000-8000-000000000001"];
+        const location = "xmd://repl/kf39sla2/entries";
+        const args = ["repl", ...attachment, "--probe-value", location];
+        const absent = yield* runCli(args, { cwd: dir }).join();
+        expect(absent.code).toBe(1);
+        expect(absent.stderr).toContain("unrecognized option for xmd repl: --probe-value");
+
+        const owner = `--plugin=${fixture("repl-option.mjs")}`;
+        const stage = `--plugin=${fixture("repl-option-stage.mjs")}`;
+        const passed = yield* runCli(
+          [...args, "--other-value", "second", "--plugin=./other.mjs", owner, stage],
+          { cwd: dir },
+        ).join();
+        expect(passed.code).toBe(1);
+        expect(passed.stdout.trim().split("\n")).toEqual([
+          "probe stage forwarded",
+          JSON.stringify({
+            keys: ["otherValue", "optionalValue"],
+            options: { otherValue: "second" },
+          }),
+        ]);
+        expect(passed.stderr.trim()).toBe(`probe = ${location} (keys: probeValue)`);
+
+        const changed = yield* runCli(
+          [...args, owner, `--plugin=${fixture("repl-option-override.mjs")}`],
+          {
+            cwd: dir,
+          },
+        ).join();
+        expect(changed.code).toBe(1);
+        expect(changed.stderr.trim()).toBe(`probe = overridden ${location} (keys: probeValue)`);
+      },
+    );
+  });
+
+  it("refuses reserved and duplicate flag spellings before installing plugins", function* () {
+    yield* useWorkspace(
+      {
+        "reserved.mjs": optionPluginSource("reserved", ["eval"]),
+        "duplicate.mjs": optionPluginSource("duplicate", ["probeValue", "probe_value"]),
+      },
+      function* (dir) {
+        for (const [plugin, error] of [
+          ["reserved", "xmd repl: conflicting plugin option definition --eval"],
+          ["duplicate", "xmd repl: conflicting plugin option definition"],
+        ]) {
+          const refused = yield* runCli(
+            [
+              "repl",
+              `--plugin=./${plugin}.mjs`,
+              "--attach",
+              "00000000-0000-4000-8000-000000000001",
+            ],
+            { cwd: dir },
+          ).join();
+          expect(refused.code).toBe(1);
+          expect(refused.stderr.trim()).toBe(error);
+          expect(refused.stdout).toBe("");
+        }
       },
     );
   });

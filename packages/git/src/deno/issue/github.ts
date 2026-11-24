@@ -77,7 +77,7 @@ import {
   IssueUnavailableError,
 } from "../../issue/errors.ts";
 import { withinIssueCeiling } from "../../issue/tracker.ts";
-import { gitHubIssuesConfiguration } from "./configuration.ts";
+import { gitHubIssuesConfiguration, replGitHubBaseUrl } from "./configuration.ts";
 import { normalizedTags } from "../../issue/records.ts";
 
 /** The discriminator this adapter answers for. */
@@ -310,16 +310,10 @@ export interface GitHubIssuesConfiguration {
   readonly endpoint?: string;
 }
 
-/**
- * What a host installs this adapter with.
- *
- * Nothing here is an operator's authorization. The ceiling and the endpoint are
- * configuration, and configuration is read when an invoked operation needs it —
- * so what a host supplies is only the substitutions a suite makes for the two
- * things it cannot arrange: the transport, and the configuration a deployment
- * would have written.
- */
+/** Execution policy and transport selected by the host. */
 export interface GitHubIssuesOptions {
+  /** REPL uses the endpoint setting and admits recognized trackers without a ceiling. */
+  readonly mode?: "repl";
   /** An injected transport, which outranks any configured endpoint. */
   readonly access?: GitHubSource;
   /**
@@ -357,12 +351,17 @@ export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<v
   // Memoized including its absence: an unset variable is an answer, and asking
   // the environment again on the next request would be asking a question this
   // adapter has already had answered.
-  let settled: { readonly configuration: GitHubIssuesConfiguration | undefined } | undefined;
+  type ResolvedConfiguration = { ceiling?: readonly string[]; endpoint?: string };
+  let settled: { readonly configuration: ResolvedConfiguration | undefined } | undefined;
   let opened: GitHubSource | undefined;
 
-  function* authorized(): Operation<GitHubIssuesConfiguration | undefined> {
+  function* authorized(): Operation<ResolvedConfiguration | undefined> {
     settled ??= {
-      configuration: options.configuration ?? (yield* gitHubIssuesConfiguration()),
+      configuration:
+        options.configuration ??
+        (options.mode === "repl"
+          ? { endpoint: yield* replGitHubBaseUrl() }
+          : yield* gitHubIssuesConfiguration()),
     };
     return settled.configuration;
   }
@@ -379,7 +378,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<v
    * own access is not asking for a different endpoint as well. With neither,
    * this adapter has no way to reach anything and says so.
    */
-  function transport(configuration: GitHubIssuesConfiguration): GitHubSource {
+  function transport(configuration: ResolvedConfiguration): GitHubSource {
     opened ??= options.access ?? options.host?.(configuration.endpoint);
     if (opened === undefined) {
       throw new IssueUnavailableError();
@@ -408,7 +407,10 @@ export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<v
         // From here this middleware owns the answer, and the ceiling is asked
         // before anything is built: a URL a document wrote is not a place this
         // host authorized until the ceiling says so.
-        if (!withinIssueCeiling(configuration.ceiling, url)) {
+        if (
+          configuration.ceiling !== undefined &&
+          !withinIssueCeiling(configuration.ceiling, url)
+        ) {
           throw new IssueUnavailableError();
         }
         if (issue === undefined) {
@@ -438,7 +440,10 @@ export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<v
         }
         // From here this middleware owns the answer. A refusal is the end of
         // the request rather than a reason to let somebody else try.
-        if (!withinIssueCeiling(configuration.ceiling, upsert.url)) {
+        if (
+          configuration.ceiling !== undefined &&
+          !withinIssueCeiling(configuration.ceiling, upsert.url)
+        ) {
           throw new IssueUnavailableError();
         }
         // Named outright but not a repository issue collection: this adapter

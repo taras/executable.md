@@ -155,7 +155,10 @@ if (isReplSubmit(process.argv.slice(2))) {
       // one. The selection is the capability an entry runs with — its
       // checkouts, its local Git, its publications and its issues; Node and Bun
       // supply neither half.
-      { select: () => selectReplEntryHost(HELPER), install: () => useCompiledRepl() },
+      {
+        select: () => selectReplEntryHost(HELPER),
+        install: () => useCompiledRepl(),
+      },
     );
   });
 }

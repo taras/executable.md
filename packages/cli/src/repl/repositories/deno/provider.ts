@@ -13,11 +13,11 @@ import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
  *
  * It is established inside the scope the invocation already owns, through
  * core's `Execution.init`, so everything it acquires belongs to that execution:
- * the Git session, its isolation directory, the ambient discovery and the lease
- * all end when the entry does. Establishing one while the command is still
- * assembling itself would make a passive view — a cold history somebody is only
- * reading — discover a checkout and take its lease, and a passive view reaches
- * no initialization at all.
+ * the Git session, its isolation directory, the ambient discovery and the
+ * managed slots it holds all end when the entry does. Establishing one while
+ * the command is still assembling itself would make a passive view — a cold
+ * history somebody is only reading — discover a checkout, and a passive view
+ * reaches no initialization at all.
  *
  * ## What it is not
  *
@@ -39,7 +39,7 @@ import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
  *
  * ## Installing it reaches nothing
  *
- * No directory, no lease, no `git`, no filesystem read, no commit identity, no
+ * No directory, no slot, no `git`, no filesystem read, no commit identity, no
  * managed root, no configuration, no credential and no remote. The ambient
  * checkout is discovered by the first mutation that needs to know whether it is
  * inside one, and an entry that mutates nothing never looks. The managed root is created by the first selection, and an entry
@@ -75,7 +75,7 @@ import { useLeases } from "@executablemd/git/deno";
 import type { Leases, SlotKind } from "@executablemd/git/deno";
 import type { RegisteredCheckout } from "@executablemd/git/deno";
 import { selectionRegistry } from "@executablemd/git/deno";
-import { holdManagedPlacement, useCommonDirectoryLease } from "./leases.ts";
+import { holdManagedPlacement } from "./leases.ts";
 import type { ReplAmbientCheckout } from "../records.ts";
 import { currentCoroutine, selectedCheckout } from "./local.ts";
 import { useReplFileRecorder } from "./files.ts";
@@ -253,10 +253,6 @@ export function* replRepositoryInstallation(
     },
   });
 
-  // This entry's own pull-request transport state, built once and inert: naming
-  // it reads no configuration, opens no session and acquires nothing. Its
-  // configuration is the existing one this deployment already states, which is
-  // why no recording option carries it.
   const pullRequests: DenoPullRequestOperations = denoPullRequestOperations();
   const access = () => (usable ? held.entry : undefined);
 
@@ -333,7 +329,7 @@ function* initializeReplRepository(
   const configuredRoot = options.root;
 
   // The entry task. Every capability below is acquired into it, so the session,
-  // its directory and the lease last as long as the entry does rather than as
+  // its directory and the slots last as long as the entry does rather than as
   // long as whichever element first needed them.
   const entry: Scope = yield* useScope();
 
@@ -350,12 +346,6 @@ function* initializeReplRepository(
   const discover = lazily(entry, function* (): Operation<ReplAmbientCheckout | undefined> {
     return yield* operations.ambientCheckout(directory);
   });
-
-  // One lazy acquisition per shared Git directory, so the first mutation takes
-  // the lease and every later one in this entry reuses it. A borrower cancelled
-  // while waiting abandons its own wait and not the hold. Another live entry
-  // opens its own descriptor and is refused by the operating system.
-  const leases = new Map<string, () => Operation<void>>();
 
   // Remembered per durable coroutine, absence included, because that is the
   // grain the record has: the routing a coroutine saves sits at a position in
@@ -398,20 +388,8 @@ function* initializeReplRepository(
       selected.set(coroutine, { checkout });
       return checkout;
     },
-    hold: (commonDirectory: string) => holdCommon(commonDirectory),
     placements: () => placements,
   };
-
-  function holdCommon(commonDirectory: string): Operation<void> {
-    let acquire = leases.get(commonDirectory);
-    if (acquire === undefined) {
-      acquire = lazily(entry, function* (): Operation<void> {
-        yield* useCommonDirectoryLease(commonDirectory);
-      });
-      leases.set(commonDirectory, acquire);
-    }
-    return acquire();
-  }
 
   // The outermost band, so what is recorded is the result the whole composition
   // answered with rather than one layer's own.
@@ -505,7 +483,6 @@ function* initializeReplRepository(
     root: useRoot,
     ambient: useAmbientRepository,
     holdSlot,
-    holdCommon: (commonDirectory: string) => holdCommon(commonDirectory),
     serialize,
     selections,
     remember(registration: ReplPlacementRegistration): void {
@@ -530,7 +507,6 @@ function* initializeReplRepository(
       const subject = placementSubject(registration.placement);
       const placed: ReplManagedPlacement = {
         checkoutRoot,
-        commonDirectory: registration.placement.commonDirectory,
         own(): Operation<void> {
           return holdManagedPlacement(() => holdSlot(placedRoot, slot.kind, slot.path, subject));
         },
@@ -587,7 +563,6 @@ function* initializeReplRepository(
     operations,
     identity: useIdentity,
     holdSlot,
-    holdCommon: (commonDirectory: string) => holdCommon(commonDirectory),
     serialize,
     selections,
     checkouts: () => gitCheckouts,
@@ -620,8 +595,7 @@ function* initializeReplRepository(
 
   // The five reads, at the same slot and on the same terms. They share this
   // entry's registry, its registered checkouts, its slot acquisition and its
-  // native turn, and take no mutation lease: a read changes nothing, so there
-  // is nothing for one to protect.
+  // native turn.
   const observationEntry: ReplObservationEntry = {
     operations,
     verifier: options.verifier ?? denoCommitVerifier(),

@@ -504,12 +504,10 @@ describe("how a REPL entry gets its repository behavior", () => {
     expect(yield* readTextFile(join(directory, "copy.md"))).toBe("original");
   });
 
-  it("uses both placement slots and only the destination mutation hold from a mounted cwd", function* () {
+  it("uses both placement slots from a mounted cwd", function* () {
     const fixture = yield* useFixture();
     const destination = join(fixture.root, "destination");
     yield* ensureDir(destination);
-    const sourceCommon = join(fixture.checkout, ".git");
-    const destinationCommon = join(destination, ".git");
     const calls: string[] = [];
     yield* useHostFiles({
       observe(event) {
@@ -545,21 +543,16 @@ describe("how a REPL entry gets its repository behavior", () => {
           *selection() {
             return undefined;
           },
-          *hold(common) {
-            calls.push(`hold ${common}`);
-          },
           placements() {
             return [
               {
                 checkoutRoot: fixture.checkout,
-                commonDirectory: sourceCommon,
                 *own() {
                   calls.push("source slot");
                 },
               },
               {
                 checkoutRoot: destination,
-                commonDirectory: destinationCommon,
                 *own() {
                   calls.push("destination slot");
                 },
@@ -590,12 +583,10 @@ describe("how a REPL entry gets its repository behavior", () => {
     expect(calls).toEqual([
       "source slot",
       "destination slot",
-      `hold ${destinationCommon}`,
       "target",
       "access",
       "source slot",
       "destination slot",
-      `hold ${destinationCommon}`,
       "target",
       "access",
     ]);

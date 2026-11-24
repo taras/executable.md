@@ -153,10 +153,9 @@ export interface GitHubPullRequestsConfiguration {
   /**
    * The canonical containers whose pull requests this host may read.
    *
-   * Absent authorizes no URL read at all — and disables only reads. An upsert
-   * names a branch this run published rather than a URL a document wrote, and
-   * carries its own Repository, Push evidence and reconciliation admission, so
-   * it is unaffected by what is or is not allowed here.
+   * Workflow and ordinary reads require a nonempty list. A host that admits
+   * reads without a repository list supplies an endpoint-only configuration.
+   * Upsert admission depends on the run's publication evidence.
    */
   readonly allowed?: readonly string[];
   /** The API base every request is built against, when not the default. */
@@ -247,13 +246,11 @@ export function gitHubPullRequestAccess(
 }
 
 function resolver(
-  options: GitHubPullRequestsOptions,
+  resolve: () => Operation<GitHubPullRequestsConfiguration | undefined>,
 ): () => Operation<GitHubPullRequestsConfiguration | undefined> {
   let settled: { readonly configuration: GitHubPullRequestsConfiguration | undefined } | undefined;
-  return function* (): Operation<GitHubPullRequestsConfiguration | undefined> {
-    settled ??= {
-      configuration: options.configuration ?? (yield* gitHubPullRequestsConfiguration()),
-    };
+  return function* () {
+    settled ??= { configuration: yield* resolve() };
     return settled.configuration;
   };
 }
@@ -298,23 +295,34 @@ export type AdmittedReadExecution = (
 /**
  * This adapter's lazily memoized configuration and transport, resolved once.
  *
- * Built once per installation — or, for an entry, once per entry — and inert
- * until something actually needs a session. Naming it reads no configuration
- * and opens nothing.
+ * The default read policy requires the configured repository list. A host can
+ * supply its own read configuration resolver. Returning undefined delegates the
+ * read without opening a session.
  */
-export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions = {}): {
+export function gitHubPullRequestReadResolver(
+  options: GitHubPullRequestsOptions = {},
+  resolveReadConfiguration?: () => Operation<GitHubPullRequestsConfiguration | undefined>,
+): {
   readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
   readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
-  /** The two above in the order a caller that just wants a session needs them. */
   readonly access: () => Operation<GitHubSource>;
 } {
-  const authorized = resolver(options);
+  const configuration = resolver(function* () {
+    return options.configuration ?? (yield* gitHubPullRequestsConfiguration());
+  });
+  const authorized = resolver(
+    resolveReadConfiguration ??
+      function* () {
+        const configured = yield* configuration();
+        return configured?.allowed?.length ? configured : undefined;
+      },
+  );
   const transport = transports(options);
   return {
     authorized,
     transport,
     *access(): Operation<GitHubSource> {
-      return transport((yield* authorized()) ?? {});
+      return transport((yield* configuration()) ?? {});
     },
   };
 }
@@ -322,10 +330,8 @@ export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions
 /**
  * The one admitted-read handler, over whichever execution the host supplies.
  *
- * Matching, the host ceiling and target parsing are this adapter's own and stay
- * exactly where they were — before a session, a credential or a request exists,
- * so a refusal leaves no trace. What happens to an admitted read is the
- * profile's, and that is the only thing this is parameterized by.
+ * The adapter matches, admits and parses targets before opening a session. The
+ * host supplies the read configuration and the execution policy for admitted reads.
  */
 export function gitHubPullRequestReadHandler(
   resolved: {
@@ -349,23 +355,14 @@ export function gitHubPullRequestReadHandler(
       return yield* next(url, read);
     }
 
-    // The URL is this adapter's, so now — and only now — what this deployment
-    // authorized is read. With nothing allowed there is no URL read this host
-    // performs, so the request passes to whatever else is installed and,
-    // finding nothing, reaches the surface's own base error. Upsert is
-    // untouched by this: it is handled below whether or not any URL is
-    // allowed.
     const configuration = yield* authorized();
-    if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
+    if (configuration === undefined) {
       return yield* next(url, read);
     }
 
     const element = ELEMENT[read.kind];
     const kind = read.kind;
-    // From here this middleware owns the answer, and what is allowed is asked
-    // before anything is built: a URL a document wrote is not a place this
-    // host authorized until the configuration says so.
-    if (!pullRequestAllowed(configuration.allowed, url)) {
+    if (configuration.allowed !== undefined && !pullRequestAllowed(configuration.allowed, url)) {
       throw new PullRequestReadError(
         "unavailable",
         element,

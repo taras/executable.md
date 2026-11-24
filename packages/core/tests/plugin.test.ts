@@ -2,7 +2,7 @@
  * Tier PL — the Plugin value and what admits one.
  *
  * A Plugin is plain structural data, so the whole of what makes one is the
- * shape: a non-empty name and, optionally, a callable `install`. These rows
+ * shape: a non-empty name and callable optional `command` and `install` members. These rows
  * hold that the constructor adds nothing to it, and that admission — the
  * decision a loader makes about a value an untyped module exported — refuses
  * everything that is not one and names what failed.
@@ -79,6 +79,13 @@ describe("PL2 — admission reads an untyped export structurally", () => {
   it("refuses a value whose install is not callable, and says what it found", function* () {
     expect(admitted({ name: "broken", install: "yes" })).toBe(
       "a Plugin module's default export carries a callable `install`, and broken carries string",
+    );
+  });
+
+  // deno-lint-ignore require-yield
+  it("refuses a Plugin with a non-callable command member", function* () {
+    expect(admitted({ name: "broken", command: "yes", install: inert })).toBe(
+      "a Plugin module's default export carries a callable `command`, and broken carries string",
     );
   });
 

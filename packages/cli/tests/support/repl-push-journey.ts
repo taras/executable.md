@@ -151,7 +151,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     // Forgotten here, so what the log holds afterwards is what *reopening* ran.
     yield* writeTextFile(shim.log, "");
 
-    const second = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(open(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 
@@ -183,7 +183,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
 
     // A separate new entry: its publication is new work, so it resolves today's
     // branch and advances the destination to what the checkout holds now.
-    const third = yield* allocate(open(["repl", "--deny-all", "--allow-absolute", location]), home);
+    const third = yield* allocate(open(["repl", location, "--deny-all", "--allow-absolute"]), home);
     yield* showing(third, "[exit]", REACH_MS);
     yield* focusPtyDraft(third, ACT_MS);
     yield* third.type(republishing(origin));

@@ -376,7 +376,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     yield* writeTextFile(shim.log, "");
     service.requests.length = 0;
 
-    const second = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const second = yield* allocate(open(["repl", location, "--deny-all"]), home);
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 
@@ -579,10 +579,17 @@ function* bareHead(origin: string, branch: string): Operation<string | undefined
   return undefined;
 }
 
-/** The two variables an operator sets to point this host at that service. */
+/** The REPL read and publication settings point to the same test service. */
 function configured(service: PullRequestServer): string {
-  const stated = JSON.stringify({ allowed: [LOCATOR], endpoint: service.url });
-  return `GH_TOKEN=${shellQuote(TOKEN)} XMD_WORKFLOW_GITHUB_PULL_REQUESTS=${shellQuote(stated)}`;
+  const stated = JSON.stringify({
+    allowed: ["https://github.com/octo/unrelated"],
+    endpoint: service.url,
+  });
+  return [
+    `GH_TOKEN=${shellQuote(TOKEN)}`,
+    `XMD_REPL_GITHUB_BASE_URL=${shellQuote(service.url)}`,
+    `XMD_WORKFLOW_GITHUB_PULL_REQUESTS=${shellQuote(stated)}`,
+  ].join(" ");
 }
 
 /** How many pull requests this service was asked to open. */

@@ -34,21 +34,20 @@
  * the same routing and the same holds again — idempotently — around work that
  * really does run live.
  *
- * ## Two holds and one turn
+ * ## One hold and one turn
  *
- * A live operation takes the selected placement's managed slot and then the
- * mutation lease on the shared Git directory, in that order, and keeps both for
- * the rest of the entry. Both are the entry's existing single-flight
- * acquisitions, so an operation inside a checkout File work already owns takes
+ * A live operation inside a managed placement takes that placement's slot and
+ * keeps it for the rest of the entry. It is the entry's existing single-flight
+ * acquisition, so an operation inside a checkout File work already owns takes
  * nothing new. A no-op Add, a same-branch Switch and a Commit that will refuse
- * take them too: whether native work will change state is not something to
- * predict.
+ * take it too: whether native work will change state is not something to
+ * predict. Nothing holds the shared Git directory: another entry or process
+ * working in the same repository meets only native Git's own locks.
  *
- * Beside them, one turn per shared Git directory serializes this entry's own
- * native Git attempts with each other. It is not a transaction over anything
- * else: concurrent File work, Worktree selection and middleware keep their
- * existing scheduling, and the entry-wide locks are about other entries and
- * other processes rather than about a person's editor.
+ * Beside the slot, one turn per shared Git directory serializes this entry's
+ * own native Git attempts with each other. It is not a transaction over
+ * anything else: concurrent File work, Worktree selection and middleware keep
+ * their existing scheduling.
  */
 
 import { Err, Ok, scoped, until } from "effection";
@@ -149,8 +148,6 @@ export interface ReplGitEntry {
   identity(): Operation<GitCommitIdentity | undefined>;
   /** Hold a managed slot for the entry, single-flight per root and slot. */
   holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
-  /** Hold the shared Git directory this operation is about to mutate in. */
-  holdCommon(commonDirectory: string): Operation<void>;
   /** Run live native Git for one shared Git directory in order within this entry. */
   serialize<T>(key: string, work: () => Operation<T>): Operation<T>;
   /** This entry's private map from the selections it minted to what it holds. */
@@ -216,7 +213,7 @@ function* recordedSwitch(
   // Read once, here, and used by both the request and the performer. The
   // invocation is the caller's own object and this operation suspends several
   // times before Git runs — hashing the request, routing, taking the turn and
-  // taking two holds — so reading it again later would let the record name one
+  // taking the slot — so reading it again later would let the record name one
   // branch while the checkout moved to another.
   const branch = invocation.branch;
   const base = invocation.base;
@@ -454,11 +451,10 @@ function* route(
 /**
  * Take ownership of the checkout this operation is about to change.
  *
- * The managed slot first and the shared Git directory second, because the slot
- * says which entry owns a managed checkout and the lease says which entry is
- * changing a repository — and a restored placement took neither when it
- * replayed. An ambient target has no slot: it is the checkout the person was
- * already in.
+ * The managed slot says which entry owns a managed checkout, and a restored
+ * placement did not take it when it replayed. An ambient target has no slot: it
+ * is the checkout the person was already in, shared with every other entry and
+ * process the way native Git shares it.
  */
 function* own(entry: ReplGitEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;
@@ -471,7 +467,6 @@ function* own(entry: ReplGitEntry, target: ReplGitCheckout): Operation<void> {
       entry.holdSlot(root, slot.kind, slot.path, placementSubject(registration.placement)),
     );
   }
-  yield* entry.holdCommon(registration.placement.commonDirectory);
 }
 
 /**
@@ -479,7 +474,7 @@ function* own(entry: ReplGitEntry, target: ReplGitCheckout): Operation<void> {
  *
  * Joined, so every per-call native child has finished and closed before the
  * outcome exists — the entry's own Git session, its isolation directory, the
- * identity acquisition and both holds stay outside, where the entry owns them.
+ * identity acquisition and the slot stay outside, where the entry owns them.
  *
  * A classified refusal is an answer the document asked for and is written down.
  * Anything else is infrastructure: it publishes no completion, so a continuation

@@ -751,7 +751,7 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/retained-repository-observations-deno.test.ts",
     reason:
-      "the subject is the native side of a REPL entry's repository host: cancelling a finished read's append unwinds a Deno-backed Files provider, a held read excludes the same entry's mutation only once that mutation reaches a real `git` child, and another holder's mutation lease is the same kernel-released advisory lock. The record format, its admission, every refusal and the rest of cancellation and persistence run on every runtime in packages/cli/tests/retained-repository-observations.test.ts",
+      "the subject is the native side of a REPL entry's repository host: cancelling a finished read's append unwinds a Deno-backed Files provider, a held read excludes the same entry's mutation only once that mutation reaches a real `git` child, and a completed read answers after its checkout is repointed only once the native provider recorded it live. The record format, its admission, every refusal and the rest of cancellation and persistence run on every runtime in packages/cli/tests/retained-repository-observations.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
@@ -769,13 +769,13 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/retained-repository-git.test.ts",
     reason:
-      "the subject is a REPL entry's native local Git: it switches branches, stages pathspecs and commits the index with real `git` children in a real checkout, holds that checkout's mutation lease under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts a command whose descendant is holding the inherited pipes. The record format and its admission are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-records.test.ts; that a runtime without the provider refuses <Git.Add>, <Git.Switch> and <Git.Commit> before any native operation is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+      "the subject is a REPL entry's native local Git: it switches branches, stages pathspecs and commits the index with real `git` children in a real checkout and interrupts a command whose descendant is holding the inherited pipes. The record format and its admission are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-records.test.ts; that a runtime without the provider refuses <Git.Add>, <Git.Switch> and <Git.Commit> before any native operation is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
   {
     path: "packages/cli/tests/retained-repository-lifecycle.test.ts",
     reason:
-      "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",
+      "holds managed slots and the retired common-directory sidecar under kernel-released exclusive advisory locks taken through the Deno runtime, and spawns a second Deno process to hold one across processes; Node and Bun expose no equivalent",
     issue: DERIVED_SCOPE,
   },
   {

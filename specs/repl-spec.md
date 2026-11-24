@@ -23,8 +23,13 @@ An unknown/ended reference and a second UI refuse without replacement or takeove
 The normal interactive command retains terminal-before-history preflight; child
 hosting is a separate terminal-free path.
 
-`xmd repl` takes one optional location and the five Agent options `xmd run`
-takes, with the same spellings, the same descriptions and the same defaults:
+`xmd repl LOCATION [options]` opens retained history. Supply the location
+immediately after `repl`, before the options. Without a location in that slot,
+the command starts a fresh execution. A location-shaped option value belongs
+to its option.
+
+The command takes the five Agent options `xmd run` takes, with the same
+spellings, descriptions and defaults:
 `--agent-provider` (default `acpx`), `--default-agent` (falling back to
 `DEFAULT_AGENT_NAME`), and the mutually exclusive `--approve-all`,
 `--approve-reads` and `--deny-all`. An unstated permission line means
@@ -124,24 +129,29 @@ before an effective request or child frame exists. Plain `.` and `..` remain
 document navigation, and the captured host drive root supplies an unmapped
 document root. Native SOURCE spelling remains native.
 
-Everything that can be refused is refused in this order, and each step happens
-before anything the next one would touch:
+Fresh interactive startup checks the command line before entering the terminal.
+Cold startup validates the location and checks for an interactive terminal, then
+restores the project before loading relative plugins and checking the composed
+line. Plugin installation follows strict parsing in either case.
+
+The following checks apply before opening the live profile:
 
 1. **The line.** A token that is not the location or one of its declared options,
    a switch given a value, a value option given none or an empty one, and a
-   second location are each refused here — before a per-user directory is
-   formed, a history file is created or the terminal's modes are touched.
+   second location are each refused here. Locations after options also refuse.
 2. **The Agent configuration.** Two permission switches together and an unknown
    `--agent-provider` are refused next, before any adapter exists.
 3. **The command assembly.** Invocation cwd, configured absolute directories,
    selected Plugins, Agent stack, provider dependencies and permission mode are
    captured once in the command scope. The mount table is admitted at this boundary
-   before any terminal, history or provider adapter exists. After storage supplies the execution id,
+   before the live profile opens. On cold reopen, the restored project is
+   established before composing plugin option definitions. After storage supplies the execution id,
    one immutable execution profile adds session/components and constructs the
    includes-dependent Plan declaration and vocabulary. No Plugin or Agent stack
    is installed again, and every entry uses the same finalized search list.
-4. **The terminal.** Only then is a terminal asked for. Over a pipe the command
-   refuses, having left nothing behind.
+4. **The live terminal.** Fresh interactive startup checks for a terminal after
+   validating its options. Cold startup uses the terminal that presented the
+   restore. Over a pipe the command refuses without opening a live session.
 
 Nothing here starts an agent. An entry that asks for none materializes no
 adapter at all; the provider validates availability the first time a turn wants
@@ -2337,8 +2347,8 @@ ordinary refusals restore before Files composition or target observations.
 
 The host routes each live delegation by its effective resolved operands after
 authorization and containment. The destination's resolved parent and final
-entry determine coverage. Both managed operand slots precede the destination
-checkout's mutation hold. Owned-root coverage requires no Git lease.
+entry determine coverage. Both managed operand slots are acquired before the
+copy. Owned-root coverage takes no slot.
 A covered dispatch cannot insert an outcome ahead of retained history.
 The outer recorder publishes the final composed answer after settlement when
 at least one dispatch reached covered storage. Uncovered and purely synthetic
@@ -2383,7 +2393,7 @@ in any directory outside the selected checkouts and the marked entry's owned
 workspace — is ordinary file work, is retained by nothing here, and happens again
 if the entry is continued. A marked workspace entry retains the same four
 operations in its workspace, including an ensure of the root, through existing
-local-operation records and without a Git lease. Checkout routing and holds take
+local-operation records and without a slot. Checkout routing and slots take
 precedence where they apply. Completed workspace operations restore before live
 resolution or I/O, just as checkout operations do. Searches and temporary directories are ordinary throughout, wherever
 they point. The lexical path rules and the permission a `<File>` already answers
@@ -2400,46 +2410,27 @@ For new work, the most specific managed placement routes first, then the
 captured ambient checkout, then owned-root coverage when neither checkout
 covers the target. Live root and target use the same canonical path basis;
 restored operations perform no canonicalization and answer before current live
-permission or root checks. Work covered only by owned roots takes no Git lease.
+permission or root checks. Work covered only by owned roots takes no slot.
 Glob and path checks remain unrecorded; no filesystem/journal transaction or
 file snapshot is promised.
 
-One entry at a time *changes* one repository. A second entry — in this process
-or another — whose next new write, deletion or directory is in a checkout
-somebody else is changing is told so immediately rather than waiting:
-
-```text
-Another XMD entry or process holds this checkout. End that work before trying
-again. Nothing was read and nothing was changed.
-```
-
-Reading is not changing, so it is not excluded: an entry may read a file in a
-checkout another entry is holding, and reading takes nothing that would stop
-that entry carrying on. Only a new write, deletion or directory waits on the
-hold, and a completed operation of any kind takes nothing at all.
+Entries share a checkout the way two shells do. A second entry — in this
+process or another — may read, write, delete and make directories in a checkout
+another entry is changing, and neither waits for the other or is refused
+because of it. XMD takes no lock on the repository: native Git run by
+concurrent entries meets only Git's own locks, and two entries writing one file
+race as two editors would. A completed operation of any kind takes nothing at
+all.
 
 Starting outside a checkout without an owned workspace retains none of this: the
 entry performs ordinary file work, exactly as it would anywhere else, and never
 looks for a repository twice. Selecting a Repository is a separate matter and
 works from anywhere, which is the next section.
 
-The shared-Git-directory mutation hold is a kernel-released exclusive lock on
-a hashed sidecar outside every checkout. Independently opened handles exclude
-one another, including two in one process. The native descriptor is the live
-resource, with no substitutable acquisition token or holder table. The entry
-acquires it lazily through single-flight acquisition, arms release before
-opening the descriptor, and retains it until joined entry teardown. This
-exclusion applies only to participating sidecar users, not arbitrary Git tools
-or external file edits.
-
-Mutation contention refuses before changes and is fatal and unrecorded rather
-than a completed file/Git outcome. Managed-slot contention likewise refuses
-before selection recording begins. The first new file operation in a restored
-placement, including a read, reacquires its slot without rerunning the selector
-or inspecting the checkout; reacquisition contention is fatal stale state, not
-that operation's saved result. When both placement and mutation holds are
-needed, the slot is acquired first. New Worktree selection takes mutation
-ownership before running its selector.
+Managed-slot contention refuses before selection recording begins. The first
+new file operation in a restored placement, including a read, reacquires its
+slot without rerunning the selector or inspecting the checkout; reacquisition
+contention is fatal stale state, not that operation's saved result.
 
 ### The repositories and worktrees an entry selected
 
@@ -2515,16 +2506,14 @@ because `<Dir>` creates directories and is not checkout validation. A new entry
 selecting the same Repository selects it afresh, which is an ordinary reuse of
 whatever is on disk.
 
-Two holds answer two different questions, and a message tells you which one you
-met. One entry at a time *owns* a managed checkout: a second entry asking for
-the same Repository or Worktree is refused immediately, naming the checkout, and
-may have it once the first entry has been torn down. Separately, one entry at a
-time *changes* one repository, which is the shared-Git-directory hold the
-ambient section describes — a new `<Worktree>` takes it, because creating a
-linked checkout writes into administration every checkout of that repository
-shares, and a new write, deletion or directory takes it too. Neither hold is
-taken to answer a completed selection or a completed file operation, and a read
-takes only the ownership of the checkout it is reading in.
+One hold answers one question. One entry at a time *owns* a managed checkout: a
+second entry asking for the same Repository or Worktree is refused immediately,
+naming the checkout, and may have it once the first entry has been torn down.
+Nothing holds the repository itself. A new `<Worktree>` writes linked-checkout
+administration every checkout of that repository shares, and meets only Git's
+own locks there, as any other Git command would. The hold is not taken to
+answer a completed selection or a completed file operation, and a read takes
+the same ownership a write does.
 
 Clone authentication and per-selection native children are torn down and
 joined before placement acknowledgement, path binding or body expansion.
@@ -2617,10 +2606,9 @@ repository, and a continuation runs that `<Git.Commit>` live. It may then refuse
 adopts the commit that was made, predicts an id or rolls anything back.
 
 The first new Git operation inside a restored placement takes that placement's
-ownership of the managed checkout and then the hold on the repository it is
-changing, in that order, and keeps both until the entry is torn down. A
-completed Git operation takes neither. A no-op Add, a same-branch Switch and a
-Commit that will refuse take them too: whether `git` will change anything is not
+ownership of the managed checkout and keeps it until the entry is torn down. A
+completed Git operation takes none. A no-op Add, a same-branch Switch and a
+Commit that will refuse take it too: whether `git` will change anything is not
 predicted.
 
 ### Reading the repository an entry is standing in
@@ -2682,10 +2670,9 @@ directory under either spelling: `src` and `src/` both refuse, and neither
 answers with something found inside it. None of them quotes
 anything Git printed.
 
-These reads change nothing, so they take no hold on the repository you are
-changing: another entry committing in the same checkout does not wait for a
-read, and a read does not wait for it. Inside *one* entry it is the other way
-round, and deliberately: one read runs several Git commands against one private
+Across entries nothing waits: another entry committing in the same checkout
+does not wait for a read, and a read does not wait for it. Inside *one* entry
+it is the other way round, and deliberately: one read runs several Git commands against one private
 index copy, so that entry's own `<Git.Add>`, `<Git.Switch>` or `<Git.Commit>`
 waits for the read to finish and be written down before it runs. Nothing moves
 under a sequence already in progress. The first new read inside a restored
@@ -2751,9 +2738,8 @@ written into the checkout reaches nothing. The commit a saved request named has
 to still be readable — a missing object refuses rather than being fetched — and a
 moved branch or HEAD alone refuses nothing.
 
-A publication takes ownership of the managed checkout it reads from, and takes
-no hold on the repository itself: it changes no file, index, branch or
-configuration there. Another entry committing in that repository does not stop
+A publication takes ownership of the managed checkout it reads from, and
+nothing else. Another entry committing in that repository does not stop
 it; another entry holding the checkout does, before a request exists.
 
 ### The pull request an entry opened, and the feedback it read
@@ -2842,11 +2828,25 @@ is already there. One issue is filed, not two. A read has no key and reconciles
 nothing — an interrupted one is simply made again, which is what a second
 observation of a live object is.
 
-A refused tracker stays refused. Whether this deployment may reach a target at
-all is the operator's `XMD_WORKFLOW_GITHUB_ISSUES` ceiling, and a target outside
-it sends no request and carries no credential. A conflict, an ambiguity or an
-unavailable service keeps the provider's own vocabulary here exactly as it does
-elsewhere.
+With the Git Plugin active on a host that supplies the GitHub issue provider,
+REPL reads the supplied issue URL and files in the explicitly selected tracker.
+Both work from an empty directory or a Git checkout. REPL uses the caller's
+GitHub authentication and needs no repository allowlist.
+
+When the host supplies the GitHub adapter, the Git Plugin declares
+`--github-base-url` and holds its parsed value in the command scope. The API
+base URL comes from a nonempty `XMD_REPL_GITHUB_BASE_URL`, then
+`xmd repl --github-base-url`, then `https://api.github.com`. A GitHub Enterprise
+API base can serve issue URLs written with `github.com`. The ordinary provider
+rules for URL matching, authentication and operation permissions apply.
+
+On Deno and in the compiled binary, the same Git Plugin API base and
+authentication apply to self-closing `<PullRequest />`, `<PullRequest.Reviews>`,
+`<PullRequest.Comments>` and `<PullRequest.Checks>`. These reads accept any
+repository the credential can read through that API. They work without a
+checkout or `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`. An Enterprise PR URL names
+`provider="github"` explicitly. A paired `<PullRequest>` uses the publication
+configuration and requires matching Push evidence from the entry.
 
 ## What the head says the execution is doing
 
@@ -3250,9 +3250,8 @@ history append.
 Repository and issue behavior belong to the entry that is executing, and to
 nothing wider. The command selects it; the entry's own task prepares it, once, inside
 that task, and everything it takes — the Git session it reads through, where it
-looked for a checkout, the managed checkouts it selected, the hold on each of
-those and the hold on the repository it changes — is released when the entry is
-torn down. The selections an entry made are its own: a continuation rebuilds
+looked for a checkout, the managed checkouts it selected and the hold on each
+of those — is released when the entry is torn down. The selections an entry made are its own: a continuation rebuilds
 which checkouts it was working in from what it recorded, and rebuilding them
 reaches nothing. Each entry reads and writes its own range of the one history, so
 the same text typed twice is two sets of records rather than one replayed, and

@@ -52,8 +52,8 @@ import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.t
  * admission within each execution's own journal read. So a host that retains
  * entry work assembles the contribution itself and adds its admission beside
  * this package's — {@link gitCompositionInstallation} is what it assembles from
- * — and this predicate declines `repl` rather than declaring a vocabulary with
- * no admission next to it.
+ * — and the REPL host selects this plugin and adds that admission to its
+ * installation.
  */
 const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax"]);
 

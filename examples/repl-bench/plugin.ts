@@ -286,7 +286,7 @@ const XmdRepl: FunctionComponent = function* (props, invocation) {
     args.push("--plugin", fileURLToPath(import.meta.url));
   }
   if (resume !== undefined) {
-    args.push(resume.location);
+    args.unshift(resume.location);
   }
   for (const path of wanted.include) {
     args.push(`--include=${path}`);

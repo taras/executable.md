@@ -22,7 +22,8 @@ import { inspectSyntax } from "@executablemd/core";
 import type { ReplPluginExtension } from "./repl-api.ts";
 
 import { ActivePlugins } from "@executablemd/core/api";
-import type { Plugin, PluginInstallRequest } from "@executablemd/core/api";
+import { createApi } from "@effectionx/context-api";
+import type { Plugin, PluginCommandOptions, PluginInstallRequest } from "@executablemd/core/api";
 import { incompleteStructural } from "@executablemd/core/host";
 import type {
   ExecutionDeclaration,
@@ -130,6 +131,26 @@ export function admitPlugins(plugins: readonly Plugin[]): readonly Plugin[] {
   return Object.freeze([...plugins]);
 }
 
+const CommandGrammar = createApi<{
+  command(command: string, args: PluginCommandOptions): Operation<PluginCommandOptions>;
+}>("executablemd.cli.commandGrammar", {
+  *command(_command, args) {
+    return args;
+  },
+});
+
+export function* commandOptions(
+  plugins: readonly Plugin[],
+  command: string,
+): Operation<PluginCommandOptions> {
+  for (const plugin of admitPlugins(plugins)) {
+    if (plugin.command !== undefined) {
+      yield* CommandGrammar.around({ command: plugin.command.bind(plugin) });
+    }
+  }
+  return yield* CommandGrammar.operations.command(command, {});
+}
+
 /**
  * Install the complete list for one command, in order.
  *
@@ -140,6 +161,7 @@ export function admitPlugins(plugins: readonly Plugin[]): readonly Plugin[] {
 export function* installPlugins(
   selected: readonly Plugin[],
   request: PluginInstallRequest,
+  options?: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
 ): Operation<CommandPlugins> {
   const plugins = admitPlugins(selected);
   yield* ActivePlugins.around({ plugins: () => plugins });
@@ -151,7 +173,10 @@ export function* installPlugins(
     if (plugin.install === undefined) {
       continue;
     }
-    const installed = yield* plugin.install(request);
+    const configuration = options?.get(plugin.name);
+    const installed = yield* plugin.install(
+      configuration === undefined ? request : { ...request, options: configuration },
+    );
     if (installed === undefined) {
       continue;
     }

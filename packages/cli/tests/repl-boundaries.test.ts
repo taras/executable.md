@@ -26,6 +26,9 @@ import { unsupportedWorkflowHost } from "../src/workflow.ts";
 import type { UpgradeAssembly } from "../src/upgrade.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
 import { refusedPluginModules } from "./support/plugin-modules.ts";
+import type { PluginModuleLoader } from "../src/plugin-loader.ts";
+import { z } from "zod";
+import { Plugin } from "@executablemd/core/api";
 
 import { replGrammarError, REPL_VALUES } from "../src/cli.ts";
 import { readQuestionForm } from "../src/repl/elicitation.ts";
@@ -768,6 +771,7 @@ const ExitContext = createContext<(result: { status: number }) => Operation<void
 /** What one in-process `xmd` invocation did, and whether it reached the REPL. */
 interface Invocation {
   readonly status: number;
+  readonly diagnostics: readonly string[];
   /** How many times the host's REPL assembly was entered. */
   readonly installed: number;
   /** How many times this host was asked what its entries run with. */
@@ -782,8 +786,12 @@ interface Invocation {
  * no history file, no terminal mode. An installer that is never entered is the
  * only way to see that from outside.
  */
-function* invoke(args: readonly string[]): Operation<Invocation> {
+function* invoke(
+  args: readonly string[],
+  loadPlugin: PluginModuleLoader = refusedPluginModules,
+): Operation<Invocation> {
   let status = 0;
+  const diagnostics: string[] = [];
   let installed = 0;
   let selected = 0;
   const wrote = console.log;
@@ -794,7 +802,7 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
       console.error = warned;
     });
     console.log = () => {};
-    console.error = () => {};
+    console.error = (message) => diagnostics.push(String(message));
     yield* ExitContext.set(function* (result) {
       status = result.status;
     });
@@ -805,7 +813,7 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
         function* () {},
         UPGRADE,
         refusedStandardInput,
-        refusedPluginModules,
+        loadPlugin,
         unsupportedWorkflowHost,
         undefined,
         {
@@ -831,7 +839,7 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
       // whether it got that far, so the failure is an outcome rather than an end.
       status = 1;
     }
-    return { status, installed, selected };
+    return { status, diagnostics, installed, selected };
   });
 }
 
@@ -898,6 +906,38 @@ describe("REPL command: what runs before the host is reached", () => {
       expect(ran.installed).toBe(0);
       expect(ran.selected).toBe(0);
     }
+  });
+
+  it("refuses inline source with a contributed option before attaching", function* () {
+    const load: PluginModuleLoader = function* () {
+      return {
+        default: Plugin({
+          name: "probe",
+          command([cmd, args], next) {
+            return next(cmd, { ...args, probe: { owner: this.name, schema: z.string() } });
+          },
+        }),
+      };
+    };
+    const args = [
+      "repl",
+      "--attach",
+      "00000000-0000-4000-8000-000000000001",
+      "--plugin=./probe.mjs",
+      "--probe",
+      "present",
+    ];
+    expect((yield* invoke(args, load)).installed).toBe(1);
+
+    const refused = yield* invoke([...args, "-e", "value"], load);
+    expect(refused).toEqual({
+      status: 1,
+      diagnostics: [
+        "unrecognized option for xmd repl: --eval — inline documents are exclusive to xmd run",
+      ],
+      installed: 0,
+      selected: 0,
+    });
   });
 
   it("S1: the counter is entered when the command really runs", function* () {

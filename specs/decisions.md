@@ -17,6 +17,7 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | Withdrawn terminal-grid surface | [DEC-016](#dec-016-withdraw-the-unimplemented-terminal-grid-surface); [installed structural syntax](../architecture.md#the-installed-structural-syntax-boundary) remains the extension boundary. |
 | Host-installed Codex CLI for the carried adapter | [Decision record 004](decisions/004-host-installed-codex-cli.md); [ACP Availability](acp-client-spec.md#availability), [Adapter snapshots](acp-client-spec.md#adapter-snapshots) and [the maintained Codex adapter](release-process-spec.md#maintained-codex-adapter) own current behavior. |
 | Session continuation across agent CLI releases | [Decision record 005](decisions/005-current-executable-session-continuation.md); [ACP client sessions](acp-client-spec.md#sessions-ownership-routes-and-attachment) and [native launch executable binding](native-agent-session-launch-spec.md#executable-build-binding) own current behavior. |
+| REPL checkout concurrency | [DEC-018](#dec-018-repl-entries-take-no-shared-git-directory-lock); [the REPL specification](repl-spec.md#the-repositories-and-worktrees-an-entry-selected) owns current behavior. |
 | Structural indentation and standalone lines | [Decision record 006](decisions/006-structural-indentation.md); [the language specification](executable-mdx-spec.md#structural-indentation-and-standalone-lines) owns current behavior. |
 
 ---
@@ -887,3 +888,36 @@ selection and user-approval escalation policy. Existing host containment remains
 in force with its stable-namespace limitation; #227 owns concurrent
 path-replacement hardening. Deferring those decisions does not defer File or
 Glob reads. #679 remains separate evaluation work after product delivery.
+
+## DEC-018: REPL entries take no shared Git directory lock
+
+**Status:** Decided
+
+**Date:** 2026-11-23
+
+### Context
+
+Every new write, deletion, directory, local Git operation and Worktree
+selection in a REPL entry took an exclusive kernel lock on a sidecar keyed by
+the checkout's common Git directory, and held it until the entry was torn
+down. Two real sessions sharing one `.git` each selected a directory
+successfully and then met `CommonDirectoryLeaseError` on their next change, so
+neither could admit successors. The lock excluded only other XMD entries, not
+editors, shells or Git itself, and workflow runs already have their own
+executor lock.
+
+### Decision
+
+A REPL entry, including one a Sidekick submits, takes no lock on a shared Git
+directory. Entries share an ambient checkout and its repository the way two
+shells do, and native Git commands meet only Git's own locks. A managed slot
+remains the one REPL hold: one entry at a time owns a managed checkout, and a
+restored placement reacquires its slot at the first new operation inside it.
+Workflow executor locking, managed checkout ownership, placement admission and
+authorization are unchanged.
+
+### Consequences
+
+`CommonDirectoryLeaseError` and its sidecar path are removed. A sidecar an older
+`xmd` still holds is never opened. Two entries changing one checkout can now
+interleave their edits and their Git commands, as two shells can.

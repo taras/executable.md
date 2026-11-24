@@ -11225,9 +11225,8 @@ does, and a host that can name no identity refuses that one component. Routing
 is private: the received working directory is canonicalized and the entry's own
 registered checkouts are selected among under the whole authenticated Repository
 identity, so a copied or edited selection can misname a target and never reach
-one. A live operation takes the selected placement's managed slot and then the
-hold on the repository it changes, keeps both until the entry is torn down, and
-takes neither to answer a completed one.
+one. A live operation takes the selected placement's managed slot, keeps it
+until the entry is torn down, and takes none to answer a completed one.
 
 It answers the five local reads on the same terms — `<Git.Files>`,
 `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and a `<Git.Commit ref>` read —
@@ -11246,8 +11245,8 @@ page is reused: the selection and the checkout have to be ones a preceding
 placement in that same history made, decided from parsed historical facts
 alone. A record naming a checkout nothing placed ends the attempt, rather than
 answering from a route this entry never took. A read takes the selected
-placement's managed slot and no mutation lease, because it changes nothing: an
-entry mutating a checkout and an entry reading it do not wait for each other.
+placement's managed slot and nothing else: an entry mutating an ambient checkout
+and an entry reading it do not wait for each other.
 A continuation check belongs to a live read rather than to replay — a saved
 `next` used in a new read refuses when the answer has changed, and reopening the
 saved page itself asks the repository nothing.
@@ -11269,7 +11268,7 @@ come from the authenticated common directory through a control repository with a
 read-only alternate, so the checkout's own `pushurl`, URL rewrites, hooks and
 credential helpers reach nothing, and a missing saved source commit refuses
 rather than being fetched. A publication takes the selected placement's managed
-slot and no mutation lease, because it changes nothing in the repository.
+slot and nothing else.
 Dispatch is ordinary Git composition through an operation-local default under
 the stable Api name: a handler that answers without delegating retains nothing
 and is not publication evidence, a second delegation of one invocation is
@@ -11296,13 +11295,13 @@ acknowledged publication of that branch, from that checkout, at that commit: a
 local result, another entry's history, another checkout's publication, a
 synthetic handler answer and a failed or pending publication each authorize
 nothing, and each refuses before a request, a credential or contact exists. The
-upsert takes the selected placement's managed slot and no mutation lease.
+upsert takes the selected placement's managed slot and nothing else.
 
-Its self-closing record read and three evidence reads retain the provider's complete normalized answer and nothing above it.
-Each needs no Repository and no working directory, so an entry with no managed
-root reads an allowed URL and still refuses an upsert for want of local
-capability. Restoration passes the host's current URL admission and the live
-composition around it, and a read authored after a question is a new occurrence
+Its self-closing record read and three evidence reads retain the provider's
+complete normalized answer. Each works without a Repository, working directory
+or managed root. The read uses the configured REPL GitHub API base. Upsert
+requires local capability. Restoration validates the GitHub PR URL and passes
+through live composition. A read authored after a question is a new occurrence
 that reaches the service. Each dispatches through both ordinary chains — the
 semantic one and the transport one beneath it — ending in a default private to
 that one invocation, so a handler that answers without delegating opens no
@@ -11649,14 +11648,27 @@ changes nothing.
 A Plugin is a plain structural value:
 
 ```ts
+interface PluginCommandOption {
+  readonly owner: string;
+  readonly description?: string;
+  readonly schema: unknown;
+}
+
+type PluginCommandOptions = Readonly<Record<string, PluginCommandOption>>;
+
 interface Plugin {
   readonly name: string;
+  command?(
+    request: [command: string, options: PluginCommandOptions],
+    next: (command: string, options: PluginCommandOptions) => Operation<PluginCommandOptions>,
+  ): Operation<PluginCommandOptions>;
   install?(request: PluginInstallRequest): Operation<PluginInstallation | undefined>;
 }
 
 interface PluginInstallRequest {
   readonly command: string;
   readonly args: readonly string[];
+  readonly options?: Readonly<Record<string, unknown>>;
 }
 
 interface PluginInstallation {
@@ -11682,7 +11694,7 @@ they already had. Returning `undefined` contributes no declarative installation
 for that command.
 
 **Refusals happen before the root.** A module exporting no usable default, a
-default carrying no non-empty string `name`, an `install` that is not callable,
+default carrying no non-empty string `name`, a non-callable `command` or `install`,
 a remote specifier, a missing module, and two selections claiming one Plugin
 name are each refused before any `install()` runs and before the root document
 is read. Module top-level code has already executed by then — loading a selected
@@ -11710,6 +11722,28 @@ install failure unwinds the Plugins already installed for that root without
 starting the document. Cancellation joins the scope's teardown. An isolated nested
 `<Execution host="run">` inherits nothing and installs the same Plugin values
 again in its own scope, with command `run`.
+
+#### CLI option contributions
+
+For a REPL execution request, the CLI selects and loads plugins before completing
+argument parsing. On a cold reopen it first restores the project from the
+fixed location slot. Help and version load no plugin module and use the
+built-in grammar.
+
+An optional plugin `command([cmd, args], next)` stage receives the command name
+and a map of option definitions. A passthrough calls `next(cmd, args)`. A stage
+can extend the map or replace a contributed definition. A definition specifies
+an owning plugin name, a Standard Schema v1 value schema and an optional
+description. The CLI resumes the router with these definitions and strictly
+parses the line before calling any plugin's `install()`. Each installation
+receives its own validated values in `request.options`, with an own key for each
+final definition it owns, even when the value is `undefined`. The field is
+absent when the plugin owns no definitions.
+
+Contributions add named value options to the existing command. Built-in option
+spellings and startup selectors are reserved, including the inline-source
+selector `--eval` with short alias `-e`. Two definitions with the same final flag
+spelling are refused.
 
 #### CLI REPL contributions
 
@@ -15467,7 +15501,7 @@ Plugin is the run it always was.
 | # | Test | Verify |
 |---|------|--------|
 | PL1 | The value | `Plugin(input)` returns the value it was given and adds no identity, version or capability; a Plugin with no `install` installs nothing |
-| PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
+| PL2 | Module admission | An object with a non-empty string `name` is admitted when `command` and `install` are each absent or callable; a non-object, a missing, empty or non-string name, or a non-callable `command` or `install` is refused with the specifier and the member that failed |
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name — `repl` included — and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
@@ -15562,7 +15596,7 @@ native completion and acknowledgement.
 | ERC1 | The public journey | A real-terminal source and compiled `xmd repl` each run a Repository-only and a Repository-plus-Worktree entry with `<Dir>`, write, delete and read, leave at the question, have the files changed from a shell, reopen the printed location, answer, and run the suffix once; the Worktree journey uses the self-closing captured path with a sibling `<Dir>`, and a new entry selecting the same placement reads what is there now |
 | ERC2 | Completed selection reaches nothing | An unfinished prefix holding acknowledged Repository and Worktree selections and file results replays with zero selector, clone, `worktree add`, sidecar, credential, lock and document-filesystem calls, after a managed checkout's bytes change and the selected worktree is removed; a new read of a missing file reports its ordinary live failure, and one ordinary selector refusal replays without native work |
 | ERC3 | Position, not name | Nested Repository, Worktree and another Repository restore the enclosing owner and working directory; a captured self-closing path routes a later `<Dir>`; two equal requests consume their own records; two spawned branches keep their records coroutine-local and resume in reverse order; two concurrent requests for one slot take one acquisition and serialize creation without suppressing either record |
-| ERC4 | Two holds, two jobs | A managed slot one entry holds refuses another entry's new selection until teardown; a restored placement records a new read under a held shared-Git-directory lease with zero opens of that lock, while a new mutation refuses before any result is written and succeeds after release |
+| ERC4 | One hold | A managed slot one entry holds refuses another entry's new selection until teardown; a second live entry reads, ensures a directory and writes in an ambient checkout another entry is changing, and an entry does the same while another process holds the retired common-directory sidecar, opening no lock; a restored placement reads, writes and runs new Git beside another entry's linked worktree of the same repository, reacquiring only its own slot |
 | ERC5 | Interruption | A clone and a `worktree add` each interrupted while their child is genuinely running join that child and its descendant before the entry ends, leaving no placement, no body sentinel and no orphan sidecar; what a `worktree add` did write is accounted for by the ordinary interrupted-creation policy rather than recreated or deleted; a metadata open and an isolation-directory creation each cut while still pending are joined before teardown finishes, and what they deliver is closed and removed |
 | ERC6 | Acknowledgement, not completion | A native placement completed before its append is cancelled leaves no record and the continuation runs live; one acknowledged before cancellation bypasses the selector; a rejected placement append preserves the first persistence failure with no body after it |
 | ERC7 | Admission and ceiling | Malformed, unknown-version, misnamed and request-mismatched placement records refuse before native work; an admitted generated `<File>` inside a managed body is retained on the same terms as an authored one while a generated `<Repository>`, `<Worktree>` or `<Dir>` still refuses preflight |
@@ -15595,8 +15629,8 @@ acknowledgement.
 | EPB5 | Identity and dispatch | The owner and the invocation identity name the work, are stable across a reopen and distinct for repeated invocations, concurrent branches and another entry; a synthetic middleware answer retains no request and no receipt; a transforming delegation is retained as both readings; a second delegation of one invocation is refused without repeating acknowledged work; a saved request bypasses the chain it already passed; an independent `Git.operations.push(...)` keeps the ordinary missing-provider refusal |
 | EPB6 | Admission | Portable codec rows refuse an unknown version, a hostile or malformed value, an origin outside the closed locator grammar, inputs belonging to another Repository and an object id of the wrong width, and round-trip both object-id formats; the provider holds every record it reads back to the origin the Repository identity in it was fingerprinted from, on the resolved path and the restored one alike, because that digest is the runtime-named half's; history admission refuses a misnamed request, a foreign owner, a saved place no placement described, an orphan outcome, a request answered twice, a mismatched receipt and a refusal word outside the closed set, while accepting a trailing request with no outcome; a live validation refusal rejects a completion before its append |
 | EPB7 | Acknowledgement, not completion | A refused request append contacts nothing, publishes nothing and fences the work after it; a refused outcome append leaves the remote as it is with no false receipt and no compensating Close, and the next attempt adopts that completion; accepted definitive failures replay provider-free; an unauthored throw is withheld rather than published |
-| EPB8 | Resources and ownership | A fresh and a pending publication each take the selected placement's managed slot before any native read, and contention appends neither a request nor an outcome while preserving a previously saved pending one; a publication proceeds while another entry holds only the shared Git directory's mutation lease; the checkout's own `pushurl`, hooks and credential helpers reach nothing because the transport runs in a control repository with a read-only alternate; one attempt's scratch transport, object source and credential session survive both phases and are closed and joined before publication, and a cleanup that failed acknowledges neither a success nor a worker-authored refusal; a publication cancelled while its scratch space or its credential session is still pending delivers nothing it then leaves behind, releases what it did receive before the halt settles, publishes no outcome and preserves any acknowledged request, and a cancelled blocked native child closes before the entry settles |
-| EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential, no configuration read and no managed root — and declares exactly this entry's six external components: publication, issues, the pull request and its three evidence reads; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root reads an allowed pull-request URL and still reports an absent provider for `<Git.Push />` and for an upsert, and a runtime that installs no entry capability reports an absent provider for `<Git.Push />`, for `<PullRequest>` and for an evidence read before any remote contact, credential read or managed root |
+| EPB8 | Resources and ownership | A fresh and a pending publication each take the selected placement's managed slot before any native read, and contention appends neither a request nor an outcome while preserving a previously saved pending one; the checkout's own `pushurl`, hooks and credential helpers reach nothing because the transport runs in a control repository with a read-only alternate; one attempt's scratch transport, object source and credential session survive both phases and are closed and joined before publication, and a cleanup that failed acknowledges neither a success nor a worker-authored refusal; a publication cancelled while its scratch space or its credential session is still pending delivers nothing it then leaves behind, releases what it did receive before the halt settles, publishes no outcome and preserves any acknowledged request, and a cancelled blocked native child closes before the entry settles |
+| EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential, no configuration read and no managed root — and declares exactly this entry's six external components: publication, issues, the pull request and its three evidence reads; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root reads a GitHub pull-request URL without workflow allowlist configuration and still reports an absent provider for `<Git.Push />` and for an upsert, and a runtime that installs no entry capability reports an absent provider for `<Git.Push />`, for `<PullRequest>` and for an evidence read before any remote contact, credential read or managed root |
 
 ---
 

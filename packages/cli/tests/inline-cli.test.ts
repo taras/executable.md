@@ -11,7 +11,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { runCli } from "@executablemd/test-support/launch";
+import { cliRuntime, runCli } from "@executablemd/test-support/launch";
 import { ensure, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
@@ -277,6 +277,44 @@ describe(
       const { code, stderr } = yield* runCli(["test", "-e", "# Hello"]).join();
       expect(code).toBe(1);
       expect(stderr).toContain("exclusive to xmd run");
+    });
+
+    it("IE21: a REPL plugin option preserves the inline source refusal", function* () {
+      const withGitHub = cliRuntime() === "deno";
+      const root = yield* useWorkspace(
+        withGitHub
+          ? {}
+          : {
+              "probe.mjs": `export default {
+          name: "probe",
+          command([cmd, args], next) {
+            const schema = { "~standard": {
+              version: 1,
+              vendor: "fixture",
+              validate: (value) => ({ value }),
+            } };
+            return next(cmd, { ...args, probe: { owner: this.name, schema } });
+          },
+        };`,
+            },
+      );
+      const result = yield* runCli(
+        [
+          "repl",
+          "--attach",
+          "00000000-0000-4000-8000-000000000001",
+          ...(withGitHub
+            ? ["--github-base-url", "https://ghe.invalid/api/v3"]
+            : ["--plugin=./probe.mjs", "--probe", "present"]),
+          "-e",
+          "value",
+        ],
+        { cwd: root },
+      ).join();
+      expect(result.code).toBe(1);
+      expect(result.stderr.trim().split("\n")).toContain(
+        "unrecognized option for xmd repl: --eval — inline documents are exclusive to xmd run",
+      );
     });
 
     /**

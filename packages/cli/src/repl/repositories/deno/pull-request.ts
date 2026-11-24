@@ -20,11 +20,9 @@
  * ## What it takes, and what it does not
  *
  * The managed slot alone, which says this entry owns the checkout it reads the
- * branch and head from. No mutation lease: a pull request changes no checkout,
- * no index, no branch and no tracking configuration, so an entry holding that
- * lease elsewhere does not stop this one. A detached HEAD, an absent origin and
- * an unregistered selection each refuse before a request, a credential or
- * remote contact exists.
+ * branch and head from. A detached HEAD, an absent origin and an unregistered
+ * selection each refuse before a request, a credential or remote contact
+ * exists.
  *
  * ## Recovery reads what was saved
  *
@@ -552,10 +550,9 @@ function* route(entry: ReplPushEntry, received: ReplPullRequestAsked): Operation
 /**
  * Take ownership of the checkout this pull request reads from.
  *
- * The managed slot alone, which says which entry owns a managed checkout. The
- * mutation lease says which entry is *changing* a repository, and a pull
- * request changes none of it. An ambient target has no slot: it is the checkout
- * the person was already standing in.
+ * The managed slot alone, which says which entry owns a managed checkout. An
+ * ambient target has no slot: it is the checkout the person was already
+ * standing in.
  */
 function* own(entry: ReplPushEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;
