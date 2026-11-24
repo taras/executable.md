@@ -331,6 +331,7 @@ describe("GitHub repository search", () => {
       ],
       [checkout.root, 'query="(is:pr) is:open"', "parentheses"],
       [checkout.root, 'query="is:pr is:open OR label:bug"', "Boolean operators"],
+      [checkout.root, 'query="is:pr NOT label:bug"', "Boolean operators"],
       [checkout.root, 'query="is:pr"', "has not authorized"],
       [local.root, 'query="is:pr"', "does not name a GitHub repository"],
       [outside, 'query="is:pr"', "repository"],
@@ -346,6 +347,28 @@ describe("GitHub repository search", () => {
     }
     expect(provider.credentials).toEqual([]);
     expect(provider.requests).toEqual([]);
+  });
+
+  it("forwards native Boolean operators on search terms", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const provider = searchProvider([REPOSITORY], () => ({
+      status: 200,
+      body: JSON.stringify({ ...FIRST_PAGE, total_count: 1 }),
+    }));
+    const queries = ["is:pr NOT wip", "is:pr foo OR bar"];
+    const source = queries
+      .map((query, index) => `<GitHub.Search query={${JSON.stringify(query)}} as="page${index}" />`)
+      .join("\n");
+    yield* runOrdinaryDocument(source, {
+      cwd: checkout.root,
+      root,
+      gitHubPullRequests: provider.options,
+    });
+    expect(provider.requests.map(({ url }) => new URL(url).searchParams.get("q"))).toEqual(
+      queries.map((query) => `repo:octo/project ${query}`),
+    );
   });
 
   it("binds all 30 items on page 34 when GitHub returns a full terminal page", function* () {
