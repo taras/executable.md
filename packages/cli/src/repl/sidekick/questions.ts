@@ -84,11 +84,7 @@ export interface SidekickAsking {
    * Scoped, so the previous journal is restored however the work ends —
    * including a Stop that halts it mid-question.
    */
-  answering<T>(
-    journal: ControlJournal,
-    work: () => Operation<T>,
-    registered?: () => void,
-  ): Operation<T>;
+  answering<T>(journal: ControlJournal, work: () => Operation<T>): Operation<T>;
 }
 
 /**
@@ -102,11 +98,11 @@ export interface SidekickAsking {
  */
 export function* useSidekickQuestions(): Operation<SidekickAsking> {
   /** The response being evaluated right now, and therefore asking. */
-  let current: { journal: ControlJournal; registered?: () => void } | undefined;
+  let current: ControlJournal | undefined;
 
   yield* Elicitation.around({
     *elicit([request]: [ElicitationRequest], next) {
-      const journal = current?.journal;
+      const journal = current;
       if (journal === undefined) {
         // Fails closed, and before anybody is asked. A question whose answer
         // has nowhere to be recorded is a question the reply that asked it
@@ -153,18 +149,14 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
 
   // No waits reading. `ReplWaits` counts what an *entry* is held on, and a
   // Sidekick question holds no entry: it holds the response that asked it.
-  const questions = yield* useReplElicitation(undefined, () => current?.registered?.());
+  const questions = yield* useReplElicitation();
 
   return {
     questions,
-    answering<T>(
-      journal: ControlJournal,
-      work: () => Operation<T>,
-      registered?: () => void,
-    ): Operation<T> {
+    answering<T>(journal: ControlJournal, work: () => Operation<T>): Operation<T> {
       return scoped(function* () {
         const previous = current;
-        current = { journal, registered };
+        current = journal;
         yield* ensure(() => {
           current = previous;
         });

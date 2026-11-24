@@ -444,9 +444,8 @@ describe("Tier EP — the execution protocol", () => {
 
       const run = (doc: string) =>
         function* (): Operation<string> {
-          return String(
-            yield* collect(yield* execute({ ...inlineSource(doc), stream: new InMemoryStream() })),
-          );
+          const stream = yield* useJournalStream("<eval>");
+          return String(yield* collect(yield* execute({ ...inlineSource(doc), stream })));
         };
       const first = yield* spawn(run("# First\n"));
       const second = yield* spawn(run("# Second\n"));
@@ -598,7 +597,7 @@ describe("Tier EP — the execution protocol", () => {
         }
 
         const execution = yield* executeInstalled(
-          { ...inlineSource(scenario.doc), stream: new InMemoryStream() },
+          { ...inlineSource(scenario.doc), stream: yield* useJournalStream("<eval>") },
           [
             {
               *install(): Operation<void> {
@@ -625,18 +624,16 @@ describe("Tier EP — the execution protocol", () => {
     yield* scoped(function* () {
       const run = (name: string) =>
         function* (): Operation<void> {
-          const execution = yield* executeInstalled(
-            { ...inlineSource(DOC), stream: new InMemoryStream() },
-            [
-              {
-                *install(): Operation<void> {
-                  yield* ensure(() => {
-                    finalized.push(name);
-                  });
-                },
+          const stream = yield* useJournalStream("<eval>");
+          const execution = yield* executeInstalled({ ...inlineSource(DOC), stream }, [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push(name);
+                });
               },
-            ],
-          );
+            },
+          ]);
           yield* execution;
         };
       const first = yield* spawn(run("first"));
@@ -864,6 +861,7 @@ describe("Tier EP — the execution protocol", () => {
   // public chain finishes, and each one materially affects execution — so the
   // accepted snapshot is what the assertions read, not the edited original.
   it("EP26: the accepted options are a detached snapshot", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // Control: replacing the same fields *before* delegating still works.
     const replaced = yield* scoped(function* () {
       yield* Execution.around({
@@ -871,7 +869,7 @@ describe("Tier EP — the execution protocol", () => {
           yield* next(request.withOptions({ ...request.options, ...inlineSource("# Control\n") }));
         },
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
     });
     expect(String(replaced)).toContain("Control");
 
@@ -1082,7 +1080,7 @@ describe("Tier EP — the execution protocol", () => {
           });
         }
         const execution = yield* executeInstalled(
-          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          { ...inlineSource(DOC), stream: yield* useJournalStream("<eval>") },
           [
             {
               *install(): Operation<void> {
@@ -1516,7 +1514,7 @@ describe("Tier EP — the execution protocol", () => {
     yield* scoped(function* () {
       const retained: InvocationObservers = { observed: () => seen.push("observed:A") };
       const replaced = yield* executeObserved(
-        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        { ...inlineSource(DOC), stream: yield* useJournalStream("<eval>") },
         [],
         retained,
       );
@@ -1542,9 +1540,10 @@ describe("Tier EP — the execution protocol", () => {
         },
       });
 
-      const start = (name: string, observing: { resolve(): void }) =>
-        executeObserved(
-          { ...inlineSource(DOC), stream: new InMemoryStream() },
+      function* start(name: string, observing: { resolve(): void }) {
+        const stream = yield* useJournalStream("<eval>");
+        return yield* executeObserved(
+          { ...inlineSource(DOC), stream },
           [
             {
               *install(): Operation<void> {
@@ -1561,6 +1560,7 @@ describe("Tier EP — the execution protocol", () => {
             },
           },
         );
+      }
 
       const first = yield* start("first", observingFirst);
       yield* reachedFirst.operation;
@@ -1859,6 +1859,7 @@ describe("Tier EP — the execution protocol", () => {
  * and none of those may decide what the document was.
  */
 describe("Tier DP — the document protocol", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** `<Mutate />` — edits the caller's own containers while the document runs. */
   function useMutate(edit: () => void): Operation<void> {
     return registerComponents([
@@ -2155,6 +2156,7 @@ describe("Tier DP — the document protocol", () => {
 
       function side(index: number): Operation<string> {
         return scoped(function* () {
+          const stream = yield* useJournalStream("<eval>");
           yield* useMark(expanded);
           yield* Execution.around({
             *document([request], next) {
@@ -2165,11 +2167,7 @@ describe("Tier DP — the document protocol", () => {
               yield* next(request);
             },
           });
-          return String(
-            yield* collect(
-              yield* execute({ ...inlineSource("<Mark />\n"), stream: new InMemoryStream() }),
-            ),
-          );
+          return String(yield* collect(yield* execute({ ...inlineSource("<Mark />\n"), stream })));
         });
       }
 
@@ -2292,6 +2290,7 @@ describe("Tier DP — the document protocol", () => {
       ].join("\n");
 
       const captured: Array<Record<string, Json>> = [];
+      const stream = yield* useJournalStream("<eval>");
       const output = yield* scoped(function* () {
         yield* registerComponents([
           {
@@ -2310,9 +2309,7 @@ describe("Tier DP — the document protocol", () => {
             yield* next(request.withProps(props));
           },
         });
-        return String(
-          yield* collect(yield* execute({ ...inlineSource(source), stream: new InMemoryStream() })),
-        );
+        return String(yield* collect(yield* execute({ ...inlineSource(source), stream })));
       });
 
       // Carried as data: not dropped, and not installed as the copy's prototype.
@@ -2334,6 +2331,7 @@ describe("Tier DP — the document protocol", () => {
         },
       );
 
+      const stream = yield* useJournalStream("<eval>");
       const output = yield* scoped(function* () {
         yield* Execution.around({
           *document([request], next) {
@@ -2342,9 +2340,7 @@ describe("Tier DP — the document protocol", () => {
             yield* next(request.withProps({}));
           },
         });
-        return yield* collect(
-          yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }),
-        );
+        return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
       });
 
       expect(refusals.length).toEqual(1);
@@ -2413,6 +2409,7 @@ describe("Tier DP — the document protocol", () => {
       for (const attack of attacks) {
         const refusals: unknown[] = [];
         const output = yield* scoped(function* () {
+          const stream = yield* useJournalStream("<eval>");
           yield* useMutate(() => {});
           yield* Execution.around({
             *document([request], next) {
@@ -2428,11 +2425,7 @@ describe("Tier DP — the document protocol", () => {
               yield* next(current);
             },
           });
-          return String(
-            yield* collect(
-              yield* execute({ ...inlineSource(PROPS_DOC), stream: new InMemoryStream() }),
-            ),
-          );
+          return String(yield* collect(yield* execute({ ...inlineSource(PROPS_DOC), stream })));
         });
 
         expect(refusals[0]).toBeInstanceOf(DocumentProtocolError);
@@ -2533,6 +2526,7 @@ describe("Tier DP — the document protocol", () => {
 
       for (const scenario of cases) {
         const result = yield* scoped(function* () {
+          const stream = yield* useJournalStream("<eval>");
           if (scenario.canonical !== undefined) {
             yield* useBoom(scenario.canonical);
           }
@@ -2554,7 +2548,7 @@ describe("Tier DP — the document protocol", () => {
           });
           const source =
             scenario.canonical !== undefined ? BOOM_DOC : scenario.failing ? FAILING_DOC : DOC;
-          return yield* yield* execute({ ...inlineSource(source), stream: new InMemoryStream() });
+          return yield* yield* execute({ ...inlineSource(source), stream });
         });
         scenario.expect(result);
       }

@@ -154,7 +154,6 @@ import { sidekickRequests, finishedRound } from "./requests.ts";
 import type { RootReading } from "./requests.ts";
 import type { ControlJournal, SubmitReceipt } from "./controls.ts";
 import { useSidekickQuestions } from "./questions.ts";
-import { SidekickQuestionObserver } from "./question-observer.ts";
 import type { ReplElicitations } from "../elicitation.ts";
 import {
   designatedResults,
@@ -803,7 +802,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * installed above it. An entry's questions keep reaching the session's
      * provider, in the session's scope, and nothing routes between them.
      */
-    const observeQuestion = yield* SidekickQuestionObserver.get();
     const asking = yield* useSidekickQuestions();
     /**
      * The storage this owner writes to, once something explicit established it.
@@ -2974,23 +2972,20 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // It also ends with the call. A question is only pending while the root
       // that asked it is suspended, so once this returns — answered, failed or
       // halted and joined — there is nothing left that could be filed.
-      const evaluated = yield* asking.answering(
-        journal,
-        () =>
-          // Named for the length of this one evaluation, and given up only once
-          // the evaluation and everything it registered have joined — so the
-          // controls that ran file their pairs under this response and a control
-          // kept past it reaches no response at all. The request carries no
-          // table: what this root may write is the selection its execution
-          // captured when the conversation opened.
-          servingThrough(responding, () =>
-            handle.evaluateGeneratedXmdRoot({
-              id: response,
-              source: replied.value,
-              allow: [...ceiling.allow],
-            }),
-          ),
-        observeQuestion && (() => observeQuestion({ ...at, turn: actual })),
+      const evaluated = yield* asking.answering(journal, () =>
+        // Named for the length of this one evaluation, and given up only once
+        // the evaluation and everything it registered have joined — so the
+        // controls that ran file their pairs under this response and a control
+        // kept past it reaches no response at all. The request carries no
+        // table: what this root may write is the selection its execution
+        // captured when the conversation opened.
+        servingThrough(responding, () =>
+          handle.evaluateGeneratedXmdRoot({
+            id: response,
+            source: replied.value,
+            allow: [...ceiling.allow],
+          }),
+        ),
       );
       if (contributedFailure !== undefined) {
         throw contributedFailure;

@@ -1068,14 +1068,7 @@ The required `repl-bench` job runs the ReplBench and XMD Profile tool tests on
 Ubuntu for pull requests. Pushes to `main` run the tools, the driver exit and
 teardown tests, and the ReplBench Markdown terminal journeys on macOS and
 Ubuntu. Those terminal tests exercise the host's pseudo-terminal and retain
-screen and terminal evidence on failure. The macOS held-answer journey adds
-`sidekick-answer-timing.jsonl` to its launch directory. It records the answer
-control's opening wait, live registration, frame write and PTY consumption
-using the same host monotonic clock. Registration and writes name the
-conversation, turn and response from the Sidekick journal. The trace contains no
-reply text. A pull request labeled `repl-bench-macos` also runs the scripted
-Sidekick journeys on macOS and uploads their evidence on success or failure.
-`green` requires each matrix job.
+screen and terminal evidence on failure. `green` requires the job on both events.
 
 ### Remeasurement and calibration
 

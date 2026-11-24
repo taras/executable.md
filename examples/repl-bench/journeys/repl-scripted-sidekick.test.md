@@ -44,6 +44,7 @@
       <ReplBench.WaitForText text="question" />
     </ReplBench.Region>
     <ReplBench.Key key="Enter" />
+    <ReplBench.WaitForText text="[answer sidekick]" timeout="30s" />
     <Repl.Sidekick.OpenAnswer />
     <ReplBench.Type text="held-value" />
     <ReplBench.WaitForText text="= held-value" />

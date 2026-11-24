@@ -582,14 +582,7 @@ describe("MGW9 — the main-green workflow job", () => {
    */
   it("grants the exception by that label and nothing else", function* () {
     const text = yield* source();
-    const gateJobs = text
-      .split(/(?=^  [\w-]+:\s*$)/m)
-      .filter((job) => /^  (main-green|composability|green):$/m.test(job));
-    expect(gateJobs).toHaveLength(3);
-
-    const conditions = gateJobs.flatMap((job) =>
-      job.split("\n").filter((line) => line.includes("contains(")),
-    );
+    const conditions = text.split("\n").filter((line) => line.includes("contains("));
 
     expect(conditions.length).toBeGreaterThan(0);
     for (const condition of conditions) {
