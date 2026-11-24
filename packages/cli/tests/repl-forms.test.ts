@@ -2136,7 +2136,7 @@ describe("F3 — the History drawer is a window over every position (#875 R1)", 
   it("TL3: the final position is absent until the window reaches it", function* () {
     const engine = yield* useReplRenderer(NARROW);
     const model = withPositions();
-    const last = `drawer:marker:${POSITIONS[POSITIONS.length - 1].marker}`;
+    const last = `drawer:marker:${POSITIONS[0].marker}`;
 
     const first = yield* markerKeys(openHistory(), model, engine);
     expect(first.length).toBeGreaterThan(0);
