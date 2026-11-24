@@ -21,10 +21,24 @@ export function caretFor(value: string, held: ReplCaret | undefined): ReplCaret 
   if (held === undefined || held.value !== value) {
     return { value, offset: value.length };
   }
-  const offset =
-    held.offset >= value.length
-      ? value.length
-      : (GRAPHEMES.segment(value).containing(held.offset)?.index ?? 0);
+  if (held.offset >= value.length) {
+    return { ...held, offset: value.length };
+  }
+  const segment = GRAPHEMES.segment(value).containing(held.offset);
+  let offset = 0;
+  if (segment !== undefined && segment.index === Math.trunc(held.offset)) {
+    offset = segment.index;
+  } else if (segment !== undefined) {
+    // Bun can include the preceding grapheme at an emoji boundary. Iteration
+    // resolves that small segment without scanning the whole draft.
+    for (const one of GRAPHEMES.segment(segment.segment)) {
+      const at = segment.index + one.index;
+      if (at > held.offset) {
+        break;
+      }
+      offset = at;
+    }
+  }
   return { ...held, offset };
 }
 
