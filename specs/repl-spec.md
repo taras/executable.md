@@ -1841,7 +1841,9 @@ position, and `[live]` returns from any of them to the head. The selected
 position keeps its own surface and the head its own colour, so the two can sit
 side by side.
 
-The History drawer shows one row per admitted round, newest first. Each row
+The History drawer shows one row per admitted round, newest first, prefixed
+with its existing round number as `n:`. The History heading is followed directly
+by the list, with no instructional row reserved beneath it. Each row
 has distinct Input and Output controls. Input selects that round's retained
 entry-admission marker; Output selects its retained root-outcome marker. An
 unfinished round has Input but no Output control until its outcome is retained.

@@ -8992,7 +8992,7 @@ function drawerContent(
           );
         const heading = line(
           `drawer:round:${input.point.marker}`,
-          `Round ${input.entry}:`,
+          `${input.entry}:`,
           styleOf("history"),
         );
         const read = readDescription(heading.description);

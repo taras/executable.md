@@ -443,8 +443,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
     yield* pasteDraft(page, "entry draft remains");
     yield* page.until("the entry draft", (one) => one.shows("entry draft remains"));
     yield* page.press("[History]");
-    yield* page.until("the history round", (one) => one.shows("Round 1:"));
-    yield* page.press("[Input]", { onRow: "Round 1:" });
+    yield* page.until("the history round", (one) => one.shows("1:"));
+    yield* page.press("[Input]", { onRow: "1:" });
     yield* page.until("the frozen earlier entry", (one) => one.shows("[live]"));
     yield* page.press("[close]");
     yield* page.until("the checkpoint drawer closing", (one) => !one.shows("[close]"));

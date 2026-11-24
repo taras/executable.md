@@ -5823,7 +5823,10 @@ export function* prepareFrame(
   }
   const drawerRoom = widths.drawer ?? 0;
   const help =
-    !workspace || !modalOpen(view) || drawerRoom < 1
+    !workspace ||
+    !modalOpen(view) ||
+    view.selection.drawers.at(-1)?.kind === "history" ||
+    drawerRoom < 1
       ? Ok([])
       : yield* fitPlain(
           renderer,
