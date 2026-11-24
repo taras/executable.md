@@ -513,6 +513,7 @@ export function replUnsupportedPullRequest(repl: ReplCommand): Operation<void> {
     expect(yield* logged(shim.log)).toEqual([]);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
+    yield* settledEntry(pty, 1, "ok", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
