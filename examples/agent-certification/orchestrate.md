@@ -10,9 +10,9 @@ required: [config, prompt]
 <Let as="configuration" value={local.configuration} />
 
 <Output>
-<Agent name={configuration.command}>
-  <Session name="local-work" model={configuration.model} effort={configuration.effort}>
-    <Prompt text={props.prompt} timeout="60s" />
-  </Session>
-</Agent>
+  <Agent name={configuration.command}>
+    <Session name="local-work" model={configuration.model} effort={configuration.effort}>
+      <Prompt text={props.prompt} timeout="60s" />
+    </Session>
+  </Agent>
 </Output>

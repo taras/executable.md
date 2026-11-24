@@ -9,10 +9,7 @@ Dotted names map to directory paths: `<Tips.Formatting />` lives at
 </Section>
 
 <Test name="Feature expands its nested Note">
-<Let as="featureOutput"><Feature
-  title="Recursive Expansion"
-  description="Components expand bottom-up: children first, then the parent body."
-/></Let>
+<Let as="featureOutput"><Feature title="Recursive Expansion" description="Components expand bottom-up: children first, then the parent body." /></Let>
 <AssertEquals actual={featureOutput} expected={"\n**Recursive Expansion** — Components expand bottom-up: children first, then the parent body.\n\n\n> 📝 **info:** This note was generated inside the Feature component."} />
 </Test>
 

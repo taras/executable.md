@@ -1127,6 +1127,9 @@ describe("the correctness jobs composability no longer duplicates", () => {
     const site = jobs.site;
 
     expect(site).toBeDefined();
+    expect(runs(site!)).toContain(
+      "deno install --entrypoint --frozen site/main.ts site/client.ts site/vite.config.ts",
+    );
     expect(runs(site!)).toContain("deno task check");
     expect(runs(site!)).toContain("deno task build");
   });

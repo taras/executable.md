@@ -709,8 +709,8 @@ jobs:
         with:
           deno-version: v2.9.5
 
-      - name: Install workspace deps
-        run: deno install
+      - name: Install site dependencies
+        run: deno install --entrypoint --frozen site/main.ts site/client.ts site/vite.config.ts
 
       - name: Check (fmt + lint + typecheck)
         run: deno task check

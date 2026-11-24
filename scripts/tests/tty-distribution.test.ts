@@ -151,7 +151,10 @@ describe("the prepared terminal runtime in the canonical host binary", () => {
   });
 
   it("embeds the notice and no producer input", function* () {
-    expect(PREPARED_NOTICES).toEqual([`${RUNTIME}/NOTICE.txt`]);
+    expect(PREPARED_NOTICES).toEqual([
+      `${RUNTIME}/NOTICE.txt`,
+      "packages/core/markdown-boundary-NOTICE.txt",
+    ]);
     const bytes = new Uint8Array(yield* until(readFile(binary)));
     const notice = yield* readTextFile(new URL(`${RUNTIME}/NOTICE.txt`, REPO));
     const contains = (text: string): boolean =>

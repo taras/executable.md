@@ -55,13 +55,13 @@ its signed commit and focused evidence requirements.
   <Fail message="Implementation needs a saved focused evidence receipt." />
   </If>
   <Let as="checkout" value={null} />
-  <If condition={completed && !discovery}>
-    <Ticket.Checkout repository={pending.call.assignment.repository} as="checkout" />
-    <Dir path={pending.call.record}><File path="checkout.json"><Json value={checkout} /></File></Dir>
-    <If condition={checkout.head !== result.revision || !checkout.clean}>
-    <Fail message="Feedback must identify actual clean HEAD descended from the accepted source revision." />
-    </If>
-  </If>
+      <If condition={completed && !discovery}>
+        <Ticket.Checkout repository={pending.call.assignment.repository} as="checkout" />
+        <Dir path={pending.call.record}><File path="checkout.json"><Json value={checkout} /></File></Dir>
+        <If condition={checkout.head !== result.revision || !checkout.clean}>
+          <Fail message="Feedback must identify actual clean HEAD descended from the accepted source revision." />
+        </If>
+      </If>
   <Let as="revision" value={completed ? result.revision : pending.checkpoint.revision} />
   <Let as="ancestry" value={null} />
   <Let as="changes" value={{paths:[]}} />
@@ -81,13 +81,13 @@ git merge-base --is-ancestor {pending.manifest.assignment.revision} {revision}
   <Fail message="The migration changed an API-owned path. Preserve the commit and return an API conflict to the original Planner instead of accepting an unvalidated API change." />
   </If>
   <Dir path={pending.call.record}><File path="changes.json"><Json value={changes} /></File></Dir>
-  <If condition={completed}>
-    <Ticket.Signature repository={pending.call.assignment.repository} revision={revision} as="signature" />
-    <Dir path={pending.call.record}><File path="signature.json"><Json value={signature} /></File></Dir>
-    <If condition={signature.exitCode !== 0}>
-    <Fail message={"Feedback signature verification failed; inspect " + pending.call.record + "/signature.json"} />
-    </If>
-  </If>
+        <If condition={completed}>
+          <Ticket.Signature repository={pending.call.assignment.repository} revision={revision} as="signature" />
+          <Dir path={pending.call.record}><File path="signature.json"><Json value={signature} /></File></Dir>
+          <If condition={signature.exitCode !== 0}>
+            <Fail message={"Feedback signature verification failed; inspect " + pending.call.record + "/signature.json"} />
+          </If>
+        </If>
   <If condition={completed && pending.call.role === "implementor" && pending.checkpoint.exactApproval}>
 <ExactCorrection.Verify repository={pending.call.assignment.repository} approval={pending.checkpoint.exactApproval} revision={result.revision} as="exactReceipt" />
 <Dir path={pending.call.record}><File path="exact-correction.json"><Json value={exactReceipt} /></File></Dir>

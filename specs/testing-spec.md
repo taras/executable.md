@@ -1060,6 +1060,10 @@ out, or unexpectedly skips makes that dependency non-success.
 
 Concurrency inside a shard is not enabled.
 
+The required `site` job installs the site's dependency graph from its server,
+client and Vite configuration entry points. The site's checks and production
+build run without preparing the Core runtime.
+
 The required `repl-bench` job runs the ReplBench and XMD Profile tool tests on
 Ubuntu for pull requests. Pushes to `main` run the tools, the driver exit and
 teardown tests, and the ReplBench Markdown terminal journeys on macOS and

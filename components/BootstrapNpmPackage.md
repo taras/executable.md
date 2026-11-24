@@ -480,7 +480,7 @@ and that stops the run here, before the placeholder is published. A refusal
 leaves npm exactly as it was.
 
   ```bash exec as="trustList"
-  npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
+npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
   ```
 
   ```ts eval
@@ -582,7 +582,7 @@ would have given, from the party that decides it.
 so each of the three answers is reported in npm's own terms.
 
   ```bash exec as="publishResult"
-  npm_config_otp={otp.code} npm publish --access public --tag bootstrap --registry {registry}
+npm_config_otp={otp.code} npm publish --access public --tag bootstrap --registry {registry}
   ```
 
   ```ts eval
@@ -676,7 +676,7 @@ cache and answered truthfully throughout: it carries the id that revokes this
 configuration, which is worth printing while you are here.
 
   ```bash exec as="finalTrustList"
-  npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
+npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
   ```
 
   ```ts eval
