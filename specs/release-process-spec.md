@@ -840,7 +840,8 @@ Two fresh preparations reproduce the recipe's runtime. Distribution checks inspe
 ## 13. Prepared Markdown boundary module
 
 Core uses the Rust Markdown boundary crate from
-`packages/core/vendor/markdown-boundary/`. Its recipe pins the Rust release,
+`packages/core/vendor/markdown-boundary/` for Markdown boundary tracking and
+formatter edit planning. Its recipe pins the Rust release,
 compiler commit, `wasm32-unknown-unknown` target, and the hashes of the stripped
 WASM and its generated module. Cargo's committed lock pins and verifies the crate
 inputs. The Rustup launcher is a setup prerequisite.

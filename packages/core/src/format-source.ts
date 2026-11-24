@@ -1,69 +1,29 @@
 import { Err, Ok, type Result } from "effection";
+import { indentationEdits } from "./markdown.ts";
+import type { SourceRange } from "./document-targets.ts";
 import { scanSegments } from "./scanner.ts";
 import type { ScanDiagnostic, SourceElement, SourceFence, UnfinishedConstruct } from "./scanner.ts";
 import { envelopeBody } from "./source-inspection.ts";
 import type { Segment } from "./types.ts";
 
-function afterLine(text: string, offset: number): number {
-  const newline = text.indexOf("\n", offset);
-  return newline === -1 ? text.length : newline + 1;
-}
-
 function startOfLine(text: string, offset: number): number {
   return offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
 }
 
-function proposeIndentation(text: string, elements: SourceElement[]): string {
-  const depthChanges = new Map<number, number>();
-  const headerLines = new Set<number>();
-  for (const { opening, closing } of elements) {
-    const bodyStart = afterLine(text, opening.end);
-    for (
-      let line = afterLine(text, opening.start);
-      line < opening.end;
-      line = afterLine(text, line)
-    ) {
-      headerLines.add(line);
-    }
-    if (closing === undefined) {
-      continue;
-    }
-    const beforeTag = text.slice(startOfLine(text, opening.start), opening.start);
-    const afterTag = text.slice(opening.end, bodyStart);
-    if (!/^[ \t]*$/.test(beforeTag) || !/^[ \t]*\n$/.test(afterTag)) {
-      continue;
-    }
-    const closeLine = startOfLine(text, closing.start);
-    const beforeClose = text.slice(closeLine, closing.start);
-    const bodyEnd = /^[ \t]*$/.test(beforeClose) ? closeLine : afterLine(text, closing.end);
-    if (bodyStart < bodyEnd) {
-      depthChanges.set(bodyStart, (depthChanges.get(bodyStart) ?? 0) + 1);
-      depthChanges.set(bodyEnd, (depthChanges.get(bodyEnd) ?? 0) - 1);
-    }
+function applyEdits(text: string, edits: Uint32Array): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (let at = 0; at < edits.length; at += 3) {
+    const start = edits[at]!;
+    parts.push(text.slice(cursor, start), " ".repeat(edits[at + 2]!));
+    cursor = start + edits[at + 1]!;
   }
-  let depth = 0;
-  const lines = [];
-  for (let start = 0; start < text.length; ) {
-    depth += depthChanges.get(start) ?? 0;
-    const end = afterLine(text, start);
-    const line = text.slice(start, end);
-    const prefix = "  ".repeat(depth);
-    if (headerLines.has(start)) {
-      lines.push(line);
-    } else if (line === prefix + "\n" || line === prefix + "\r\n") {
-      lines.push(line.slice(prefix.length));
-    } else {
-      lines.push(
-        line.startsWith(prefix) || line === "\n" || line === "\r\n" ? line : prefix + line,
-      );
-    }
-    start = end;
-  }
-  return lines.join("");
+  return parts.join("") + text.slice(cursor);
 }
 
 function scan(text: string, envelope: string) {
   const elements: SourceElement[] = [];
+  const blocks: SourceRange[] = [];
   const unfinished: UnfinishedConstruct[] = [];
   const diagnostics: ScanDiagnostic[] = [];
   const fences: SourceFence[] = [];
@@ -81,6 +41,7 @@ function scan(text: string, envelope: string) {
     0,
     diagnostics,
     fences,
+    blocks,
   );
   const openExecutableFences = new Set(
     fences
@@ -88,7 +49,8 @@ function scan(text: string, envelope: string) {
       .map(({ marker }) => startOfLine(text, marker)),
   );
   return {
-    elements,
+    headers: elements.map(({ opening }) => opening),
+    blocks,
     segments,
     diagnostic: diagnostics[0],
     incomplete: unfinished.find(
@@ -129,17 +91,18 @@ export function formatSource(source: string): Result<string> {
     return Err(new Error(`Incomplete ${construct} at ${line}:${column}`));
   }
 
-  const formatted = proposeIndentation(text, before.elements);
-  if (formatted === text) {
+  const edits = indentationEdits(text, before.blocks, before.headers);
+  if (edits.length === 0) {
     return Ok(source);
   }
+  const formatted = applyEdits(text, edits);
   const after = scan(formatted, envelope);
   if (
     after.diagnostic !== undefined ||
     after.incomplete !== undefined ||
     JSON.stringify(withoutPositions(before.segments)) !==
       JSON.stringify(withoutPositions(after.segments)) ||
-    proposeIndentation(formatted, after.elements) !== formatted
+    indentationEdits(formatted, after.blocks, after.headers).length !== 0
   ) {
     return Ok(source);
   }

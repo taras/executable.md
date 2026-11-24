@@ -20,6 +20,9 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { indentationEdits } from "../src/markdown.ts";
+import type { SourceRange } from "../src/document-targets.ts";
+import type { SourceElement } from "../src/scanner.ts";
 import { formatSource } from "../src/format-source.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { asText } from "./helpers.ts";
@@ -383,6 +386,47 @@ describe("Formatter preservation", () => {
 
     const passive = "> ~~~bash exec\n> <Output>\n";
     expect(formatSource(passive)).toEqual({ ok: true, value: passive });
+  });
+
+  it("plans exact UTF-16 edits without treating literal fence text as XMD", function* () {
+    const lines = [
+      "<Output>\n",
+      "😀 body\n",
+      "  \r\n",
+      "> ~~~xmd\n",
+      "> <File />\n",
+      "> 🌱  \n",
+      "> ~~~\n",
+      "</Output>",
+    ];
+    const source = lines.join("");
+    const elements: SourceElement[] = [];
+    const blocks: SourceRange[] = [];
+    scanSegments(
+      source,
+      undefined,
+      undefined,
+      elements,
+      undefined,
+      0,
+      0,
+      undefined,
+      undefined,
+      blocks,
+    );
+    expect(elements.map(({ name }) => name)).toEqual(["Output"]);
+    expect(blocks).toEqual([{ start: 9, end: 54 }]);
+    expect([
+      ...indentationEdits(
+        source,
+        blocks,
+        elements.map(({ opening }) => opening),
+      ),
+    ]).toEqual([9, 0, 2, 17, 2, 0, 21, 0, 2, 30, 0, 2, 41, 0, 2, 48, 0, 2]);
+    const expected =
+      "<Output>\n  😀 body\n\r\n  > ~~~xmd\n  > <File />\n  > 🌱  \n  > ~~~\n</Output>";
+    expect(formatSource(source)).toEqual({ ok: true, value: expected });
+    expect(formatSource(expected)).toEqual({ ok: true, value: expected });
   });
 
   it("keeps significant file whitespace and literal and executable fence payloads", function* () {

@@ -41,7 +41,13 @@ remain in place when another file fails.
 The formatter reads the same lexical frontmatter envelope as source inspection
 and preserves its bytes, including a UTF-8 byte-order mark when present.
 It uses the production XMD scanner and its shared Markdown boundaries for the
-body. An incomplete component or executable fence, or a scanner refusal such
+body. The scanner supplies authored UTF-16 ranges for committed block bodies
+and opening tags. The prepared Rust/WASM module uses those ranges and the
+authored body to propose ordered, non-overlapping edits. Each edit inserts or
+removes spaces at a physical line start. TypeScript applies the edits and
+rescans the candidate with the production scanner.
+
+An incomplete component or executable fence, or a scanner refusal such
 as a multiline opening tag that crosses its list item, is malformed. Markdown
 that the scanner treats as passive stays passive, including a passive fence at
 EOF and a backtick with no matching run. A later matching backtick run can
