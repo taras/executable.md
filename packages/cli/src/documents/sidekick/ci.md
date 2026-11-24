@@ -8,4 +8,4 @@ Sidekick responses and the REPL entries they submit.
 
 ## Instructions
 
-Use the pull request URL and choose a time budget. Look up `<PullRequest.Checks>` with `<REPL.Syntax names={["PullRequest.Checks"]} />`. Submit the watch in one entry and read its outcome before filtering for failures. An empty list can mean checks are still pending.
+Use the pull request URL and choose a time budget. If you need the props or return shape, look up `PullRequest.Checks` with `REPL.Syntax`. Submit the watch in one entry and read its outcome before filtering for failures. An empty list can mean checks are still pending.
