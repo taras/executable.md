@@ -901,7 +901,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     let installArity = -1;
     let named: string[] = [];
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     let output = "";
 
     const result = yield* scoped(function* () {

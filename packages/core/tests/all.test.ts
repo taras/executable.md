@@ -1026,7 +1026,7 @@ describe("Tier ALL — PA6: a failure cancels its siblings and publishes nothing
 
   it("ALL10: cancelling the document leaves no spawned work alive", function* () {
     const shared = harness();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("test.md");
     const outcome = yield* scoped(function* () {
       yield* useHostFiles();
       yield* useStubFs({
@@ -1608,10 +1608,11 @@ const TWO_SESSIONS = [
 
 describe("Tier PA10a — two ordinary Sessions at the same time", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
 
   it("PA10a: both conversations are live, and releasing the second first renders in source order", function* () {
     const held = conversations({ gated: true });
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("<eval>");
     // The journal says when a record lands, so the second release waits on the
     // first append rather than on a clock.
     const recordedOne = signal();
@@ -1657,9 +1658,11 @@ describe("Tier PA10a — two ordinary Sessions at the same time", () => {
 
 describe("Tier PA10c — nesting and replay with ordinary Sessions", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
 
   it("PA10c: a nested <All> resolves two capability-backed children concurrently", function* () {
     const held = conversations();
+    const stream = yield* useJournalStream("<eval>");
     const result = yield* talking(
       [
         "<All>",
@@ -1673,6 +1676,7 @@ describe("Tier PA10c — nesting and replay with ordinary Sessions", () => {
         "</All>",
       ].join("\n"),
       held,
+      { stream },
     );
 
     expect(result.ok).toBe(true);
