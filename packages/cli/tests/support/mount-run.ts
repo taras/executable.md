@@ -106,9 +106,6 @@ export function mountedRun(
               *selection() {
                 return undefined;
               },
-              *hold() {
-                throw new Error("the synthetic session recorder has no Git lease");
-              },
               placements: () => [],
             },
             options.ownedFileCoverage.root,
