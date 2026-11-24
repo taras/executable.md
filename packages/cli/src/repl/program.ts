@@ -229,6 +229,7 @@ import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { inertCommandText } from "./command-output.ts";
 import { sourceRuns } from "./presentation-text.ts";
+import { draftHighlighter } from "./draft-highlighting.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { admitRows, capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
@@ -6308,7 +6309,7 @@ export function* prepareFrame(
           editorWidth,
           view.focused === "footer:input",
           draftStore,
-          sourceRuns,
+          draftHighlighter(view.state.draft),
           "horizontal",
         );
   if (!drafted.ok) {
@@ -6473,7 +6474,7 @@ export function* prepareFrame(
             room - prefix.value.cells,
             focused,
             undefined,
-            input?.["purpose"] === "draft" ? sourceRuns : undefined,
+            input?.["purpose"] === "draft" ? draftHighlighter(value) : undefined,
           );
           if (!editor.ok) {
             return editor;

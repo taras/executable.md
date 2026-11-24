@@ -1253,7 +1253,9 @@ export function* fitEditor(
   room: number,
   focused: boolean,
   store?: ReplPlainFitStore,
-  classify: (text: string) => readonly ReplTokenRun[] = (text) => [{ text, token: "field-value" }],
+  classify: (text: string, offset?: number) => readonly ReplTokenRun[] = (text) => [
+    { text, token: "field-value" },
+  ],
   mode?: "horizontal",
 ): Operation<Result<ReplEditor>> {
   const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
@@ -1308,7 +1310,7 @@ export function* fitEditor(
       stops: geometry.stops.map((stop) => ({ offset: from + stop.offset, column: stop.column })),
     });
     const own = `${" ".repeat(line.indent)}${line.text}`;
-    display.push({ text: own, runs: classify(own) });
+    display.push({ text: own, runs: classify(own, from) });
     offsets.set(line.line, from + line.text.length);
   }
   store?.keepCarets(retained, Math.max(1, room - 1), size);
@@ -1324,10 +1326,10 @@ export function* fitEditor(
     display[active] = {
       text: before + glyph + after,
       runs: tokenRuns([
-        ...slicedRuns(classify(before + glyph + after), 0, before.length),
+        ...slicedRuns(classify(before + glyph + after, from), 0, before.length),
         { text: glyph, token: "caret" },
         ...slicedRuns(
-          classify(before + glyph + after),
+          classify(before + glyph + after, from),
           before.length + glyph.length,
           before.length + glyph.length + after.length,
         ),
