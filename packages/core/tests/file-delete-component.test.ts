@@ -570,9 +570,11 @@ describe("Tier FD — File.Delete", () => {
 });
 
 function patchDocument(path: string, diff: string): string {
-  return ["<File.Patch path=" + JSON.stringify(path) + ">", "", diff, "", "</File.Patch>"].join(
-    "\n",
-  );
+  return [
+    "<File.Patch path=" + JSON.stringify(path) + ">",
+    ...diff.split("\n").map((line) => "  " + line),
+    "</File.Patch>",
+  ].join("\n");
 }
 
 const SMALL_PATCH = [
@@ -592,12 +594,50 @@ describe("File.Patch", () => {
     const fixture = yield* useFixture();
     const target = join(fixture.workspace, "target.txt");
     const suffix = "unchanged café\r\n".repeat(200) + "last";
-    yield* writeTextFile(target, "\uFEFFfirst\nold\r\n" + suffix);
-    const output = yield* run(fixture, patchDocument("target.txt", SMALL_PATCH));
+    const context = "\uFEFFfirst\n    indented  \r\n\r\n";
+    yield* writeTextFile(target, context + "old\r\n" + suffix);
+    const diff = SMALL_PATCH.replace("@@ -2 +2 @@", "@@ -2,3 +2,3 @@\n     indented  \n ");
+    const output = yield* run(fixture, patchDocument("target.txt", diff));
     expect(output.trim()).toBe("");
     expect(new Uint8Array(yield* until(readFile(target)))).toEqual(
-      new TextEncoder().encode("\uFEFFfirst\nnew\r\n" + suffix),
+      new TextEncoder().encode(context + "new\r\n" + suffix),
     );
+  });
+
+  it("diagnoses omitted fence prefixes at the marker before accessing the target", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const before = new TextEncoder().encode("first\n    indented\n\nold\n");
+    yield* until(writeFile(target, before));
+    const flat =
+      '<File.Patch path="target.txt">\n' +
+      ["```diff", "@@ -2,3 +2,3 @@", "     indented", " ", "-old", "+new", "```"].join("\n") +
+      "\n</File.Patch>";
+    const missingClosePrefix = patchDocument("target.txt", SMALL_PATCH).replace(
+      "\n  ```\n",
+      "\n```\n",
+    );
+    for (const [source, location, marker] of [
+      [flat, "2:1", "opening"],
+      [missingClosePrefix, "8:1", "closing"],
+    ]) {
+      let diagnostic = "";
+      try {
+        yield* run(fixture, source, function* () {
+          yield* API.Files.around({
+            *readTextFile() {
+              throw new Error("patch reached the file provider");
+            },
+          });
+        });
+      } catch (error) {
+        diagnostic = String(error);
+      }
+      expect(diagnostic).toContain(
+        `at ${location}. Indent the ${marker} diff fence with exactly 2 spaces.`,
+      );
+      expect(new Uint8Array(yield* until(readFile(target)))).toEqual(before);
+    }
   });
 
   it("refuses the entire edit for stale, malformed or wrong-target diffs", function* () {
@@ -625,7 +665,9 @@ describe("File.Patch", () => {
     const other = join(fixture.workspace, "other.txt");
     const probe = "<Probe />";
     const encoder = new TextEncoder();
-    const before = encoder.encode("```\r\n</File.Patch>\r\n" + probe + "  \r\nold\r\nlast");
+    const before = encoder.encode(
+      "```\r\n</File.Patch>\r\n" + probe + "  \r\n    indented  \r\n\r\nold\r\nlast",
+    );
     const unrelated = encoder.encode("unchanged\r\n");
     yield* until(writeFile(target, before));
     yield* until(writeFile(other, unrelated));
@@ -695,10 +737,12 @@ describe("File.Patch", () => {
       fixture,
       wrap([
         "    ````diff",
-        "    @@ -1,4 +1,4 @@",
+        "    @@ -1,6 +1,6 @@",
         "     ```",
         "     </File.Patch>",
         "     " + probe + "  ",
+        "         indented  ",
+        "     ",
         "    -old",
         "    +new",
         "    ````",
@@ -709,7 +753,9 @@ describe("File.Patch", () => {
     expect(events).toEqual(["wrapper"]);
     expect(valid.trim()).toBe("before patch\nwrapper content\nafter patch");
     expect(new Uint8Array(yield* until(readFile(target)))).toEqual(
-      encoder.encode("```\r\n</File.Patch>\r\n" + probe + "  \r\nnew\r\nlast"),
+      encoder.encode(
+        "```\r\n</File.Patch>\r\n" + probe + "  \r\n    indented  \r\n\r\nnew\r\nlast",
+      ),
     );
     expect(new Uint8Array(yield* until(readFile(other)))).toEqual(unrelated);
   });

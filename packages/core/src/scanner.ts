@@ -612,10 +612,13 @@ function readPatchBody(
 ): number {
   const { text } = walk;
   const closeTag = "</File.Patch>";
-  const refuse = () => {
-    const position = positionAt(walk.index, openingStart);
+  const refuse = (
+    offset = openingStart,
+    detail = "Use an explicit closing fence and align </File.Patch> with its opening tag.",
+  ) => {
+    const position = positionAt(walk.index, offset);
     walk.diagnostics?.push({
-      message: `File.Patch requires exactly one passive fenced unified diff with an explicit, aligned fence close and an aligned </File.Patch> at ${position.line}:${position.column}`,
+      message: `File.Patch requires exactly one passive fenced unified diff at ${position.line}:${position.column}. ${detail}`,
       position,
     });
     return -1;
@@ -636,6 +639,9 @@ function readPatchBody(
     if (opensAt === undefined) {
       return refuse();
     }
+    if (text.slice(rawLine, opensAt) !== prefix) {
+      return refuse(opensAt, `Indent the opening diff fence with exactly ${prefix.length} spaces.`);
+    }
     const lineEnd = endOfLine(text, opensAt);
     const info = text
       .slice(opensAt, lineEnd)
@@ -650,14 +656,13 @@ function readPatchBody(
     if (end !== "marker") {
       return refuse();
     }
-    const fenceIndent = text.slice(rawLine, opensAt);
-    const closeLine = text.slice(contentEnd, endOfLine(text, contentEnd));
+    const closeMarker = skipWhitespace(text, contentEnd);
     // Markdown permits the diff context marker as indentation before a fence.
-    if (
-      (fenceIndent !== "" && fenceIndent !== prefix) ||
-      closeLine.match(/^[ \t]*/)?.[0] !== fenceIndent
-    ) {
-      return refuse();
+    if (text.slice(contentEnd, closeMarker) !== prefix) {
+      return refuse(
+        closeMarker,
+        `Indent the closing diff fence with exactly ${prefix.length} spaces.`,
+      );
     }
 
     const close = skipWhitespace(text, fenceEnd);
