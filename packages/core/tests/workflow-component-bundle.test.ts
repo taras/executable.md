@@ -21,8 +21,9 @@
  * `execute()` has none and behaves exactly as it always did.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
@@ -76,8 +77,9 @@ function* run(
   source: string,
   components: readonly WorkflowBundleComponent[] = BUNDLE,
   extra: readonly ExecutionInstallation[] = [],
-  stream: InMemoryStream = new InMemoryStream(),
+  suppliedStream?: InMemoryStream,
 ): Operation<Json> {
+  const stream = suppliedStream ?? (yield* useJournalStream(ROOT_PATH));
   return yield* collect(
     yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, [
       installation(components),
@@ -124,10 +126,11 @@ function* attempted(
   source: string,
   components: readonly WorkflowBundleComponent[] = BUNDLE,
 ): Operation<{ readonly failure: string; readonly output: string }> {
+  const stream = yield* useJournalStream(ROOT_PATH);
   const execution = yield* executeInstalled(
     {
       ...retainedSource(ROOT_PATH, source),
-      stream: new InMemoryStream(),
+      stream,
       includes: [],
     },
     [installation(components)],
@@ -151,6 +154,7 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
 }
 
 describe("Tier WB — a bundled name resolves to its pinned source", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/workflow-component-bundle.test.ts"));
   it("WB1: a declared name resolves with no component search path", function* () {
     expect(yield* run("<Discovery />\n")).toContain("Discovery ran.");
   });
@@ -263,6 +267,7 @@ describe("Tier WB — a bundled name resolves to its pinned source", () => {
 });
 
 describe("Tier WB — public import middleware cannot widen a bundle", () => {
+  beforeEach(journalBeforeEach("packages/core/tests/workflow-component-bundle.test.ts"));
   /** A document that renders a marker after the invocation under test. */
   const AFTER = "<Discovery />\n\nafter\n";
 
@@ -503,7 +508,7 @@ describe("Tier WB — public import middleware cannot widen a bundle", () => {
       return yield* collect(
         yield* execute({
           ...retainedSource(ROOT_PATH, "<Anything />\n"),
-          stream: new InMemoryStream(),
+          stream: yield* useJournalStream(ROOT_PATH),
           includes: [],
         }),
       );
