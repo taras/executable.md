@@ -126,11 +126,9 @@ import type { ReplPlacementRegistration } from "./selections.ts";
  * of it is published through Context, returned to a host, or reachable from a
  * document, a prop or middleware.
  *
- * There is no mutation lease here, and that is deliberate. A publication reads
- * authenticated objects and changes a branch on a remote; it changes no
- * checkout, index, branch or tracking configuration, so it takes the managed
- * slot that says which entry owns a checkout and nothing that excludes another
- * entry from changing a repository.
+ * A publication reads authenticated objects and changes a branch on a remote,
+ * so it takes the managed slot that says which entry owns a checkout and
+ * nothing else.
  */
 export interface ReplPushEntry {
   /** The native repository work this entry asks for, credential-free. */
@@ -664,10 +662,8 @@ function* route(entry: ReplPushEntry, received: ReplPushPlace): Operation<ReplGi
  * Take ownership of the checkout this publication reads from.
  *
  * The managed slot alone. It says which entry owns a managed checkout, which is
- * what a publication needs in order to read its objects; the mutation lease
- * says which entry is changing a repository, and a publication changes none of
- * it. An ambient target has no slot: it is the checkout the person was already
- * standing in.
+ * what a publication needs in order to read its objects. An ambient target has
+ * no slot: it is the checkout the person was already standing in.
  */
 function* own(entry: ReplPushEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;

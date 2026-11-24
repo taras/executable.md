@@ -26,24 +26,20 @@
  * about. The saved facts are parsed, their relationships are checked against
  * this call with pure arithmetic, and that is all.
  *
- * ## Two holds, two jobs
+ * ## One hold
  *
  * A **slot lease** says one entry at a time owns a managed checkout. A live
  * selection takes it before it inspects or creates anything, and it is held
  * until the entry tears down so a later `<Dir>` inside the same entry is still
  * protected. A completed replay takes none; the first genuinely new file
  * operation inside a restored placement reacquires it then, without revalidating
- * the checkout.
+ * the checkout. It is acquired inside the recorded operation, so a replayed
+ * selection does not acquire it.
  *
- * The **common-directory lease** is PR 1's kernel lock on the shared Git
- * directory, and only a *new* Worktree selector takes it here: `worktree add`
- * writes refs and linked administration into the repository everybody else's
- * checkouts share. Whether it will create or reuse is not predicted, because
- * finding out is the selector's own job. A Repository clone creates its own
- * repository under its slot lease and takes no common hold.
- *
- * Both are acquired inside the recorded operation, so a replayed selection
- * acquires neither. When both are needed the slot comes first.
+ * Nothing holds the shared Git directory. A new Worktree selector's `worktree
+ * add` writes refs and linked administration that every checkout of the
+ * repository shares, and native Git's own locks govern that write exactly as
+ * they do for any other Git command another entry or process runs there.
  *
  * ## The selector finishes before its answer is written down
  *
@@ -161,8 +157,6 @@ export interface ReplSelectionEntry {
    * under a different one excludes nobody.
    */
   holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
-  /** Hold the shared Git directory a new Worktree selector may change. */
-  holdCommon(commonDirectory: string): Operation<void>;
   /** Run live selector work for one slot in order within this entry. */
   serialize<T>(key: string, work: () => Operation<T>): Operation<T>;
   /** This entry's private map from the selections it minted to what it holds. */
@@ -274,11 +268,6 @@ export function* selectReplWorktree(
     origin: () => held.origin(),
     *acquire(root, slot) {
       yield* entry.holdSlot(root, "worktree", slot, `worktree ${JSON.stringify(request.name)}`);
-      // Before the selector, not after: `worktree add` writes refs and linked
-      // administration into the Git directory every checkout of that repository
-      // shares, and whether this call creates or reuses is the selector's own
-      // answer rather than something to predict.
-      yield* entry.holdCommon(owner.commonDirectory);
     },
     *perform(root, slot) {
       {
@@ -519,7 +508,7 @@ function* attempted(
     // one task, so a credential would still be being torn down while the
     // placement was already acknowledged and the body had begun. What stays
     // outside is what the entry owns: the Git session, its isolation directory
-    // and both holds, each acquired into the entry's own scope above.
+    // and the slot, each acquired into the entry's own scope above.
     return Ok(yield* scoped(() => selector.perform(root, slot)));
   } catch (error) {
     const refusal = classified(request, error);

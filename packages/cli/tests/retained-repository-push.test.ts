@@ -70,7 +70,6 @@ import {
 import type { ReplPushRequestRecord } from "../src/repl/repositories/push-records.ts";
 import { parseGitPushInputs } from "@executablemd/git";
 import { useLeases } from "@executablemd/git/deno";
-import { useCommonDirectoryLease } from "../src/repl/repositories/deno/leases.ts";
 import type { SlotKind } from "@executablemd/git/deno";
 import { repositorySlot } from "@executablemd/git/deno";
 import type { GitPushInputs } from "@executablemd/git";
@@ -1211,46 +1210,6 @@ describe("one entry's publication", () => {
     );
     expect(again.refusal).toBe(undefined);
     expect(yield* remoteCommit(fixture, "review/pendlock")).toBe(asked);
-  });
-
-  it("P12: publishes while another entry holds only the mutation lease", function* () {
-    const fixture = yield* useFixture();
-    const counted = counters();
-    const stream = new InMemoryStream();
-
-    // A publication reads authenticated objects and changes a branch on a
-    // remote. It changes nothing in the repository, so the lease that says
-    // which entry is changing one is not its to take — and another holder of
-    // that lease does not stop it.
-    const first = yield* run(
-      fixture,
-      publishing(fixture, "review/leased", "one.md"),
-      stream,
-      counted,
-    );
-    expect(first.refusal).toBe(undefined);
-    const common = join(managedCheckout(yield* stream.readAll()), ".git");
-
-    const second = new InMemoryStream();
-    const held = counters();
-    const published = yield* scoped(function* (): Operation<Run> {
-      yield* useCommonDirectoryLease(common);
-      return yield* run(
-        fixture,
-        [
-          `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
-          `  <Git.Push />`,
-          `</Repository>`,
-          "",
-        ].join("\n"),
-        second,
-        held,
-      );
-    });
-    expect(published.refusal).toBe(undefined);
-    const saved = requests(yield* second.readAll())[0];
-    expect(saved).not.toBe(undefined);
-    expect(yield* remoteCommit(fixture, "review/leased")).toBe(saved?.resolved.inputs.sourceCommit);
   });
 
   it("P14: a real unfinished prefix replays after the checkout and the remote are gone", function* () {

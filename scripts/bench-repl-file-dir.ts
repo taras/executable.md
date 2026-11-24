@@ -143,7 +143,7 @@ interface Counters {
   records: number;
   /** The UTF-8 size of the whole journal this run produced. */
   journalBytes: number;
-  /** Lock descriptors this run opened on a common-directory sidecar. */
+  /** Lock descriptors this run opened on any lock sidecar. */
   lease: number;
   /** Every durable event this run appended, engine events included. */
   appends: number;
@@ -525,8 +525,8 @@ await main(function* (argv): Operation<void> {
         (mode === "ordinary" ? ordinary : entry).push(measured);
         if (mode === "entry") {
           // The continuation runs against the journal that entry just wrote, in
-          // the checkout it wrote it in. The sidecar stays exactly where the
-          // live run left it: whether this run takes a lease is observed at the
+          // the checkout it wrote it in. Any sidecar stays exactly where the
+          // live run left it: whether this run takes a lock is observed at the
           // descriptor, so there is nothing to clear to make an acquisition
           // visible.
           continuation.push(

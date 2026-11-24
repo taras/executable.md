@@ -26,10 +26,6 @@ import { Permissions } from "@executablemd/runtime";
  * routing would resolve it, find it inside none of the checkouts this entry
  * registered, and fail admission. A continuation that answers normally has
  * therefore resolved nothing and selected nothing.
- *
- * Ownership is proven the same way round. A continuation runs while this suite
- * holds the checkout's own mutation lease, which the operating system would
- * refuse a second descriptor on. One that answers has taken no lock.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -68,7 +64,6 @@ import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { GitOperationInfrastructureError } from "@executablemd/git";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
-import { useCommonDirectoryLease } from "../src/repl/repositories/deno/leases.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
 import { useCompositionComponents } from "@executablemd/git";
 import { parseReplGitRecord, REPL_REPOSITORY_GIT } from "../src/repl/repositories/git-records.ts";
@@ -586,15 +581,11 @@ describe("one entry's local Add, Switch and Commit", () => {
 
     const replayed = counters();
     const asked = { asked: 0 };
-    const again = yield* scoped(function* () {
-      // Held by this suite for the whole continuation. A continuation taking
-      // the mutation lease would open a second descriptor on the same sidecar
-      // and be refused by the operating system.
-      yield* useCommonDirectoryLease(yield* until(realpath(join(fixture.checkout, ".git"))));
-      return yield* run(fixture, source, new InMemoryStream([...prefix]), replayed, {
+    const again = yield* scoped(() =>
+      run(fixture, source, new InMemoryStream([...prefix]), replayed, {
         between: () => answered(asked),
-      });
-    });
+      }),
+    );
 
     expect(again.refusal).toBe(undefined);
     // The saved commit, not today's HEAD.
