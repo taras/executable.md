@@ -29,10 +29,12 @@ status is 0 for success, 1 when check mode finds a difference, and 2 for
 invalid arguments, invalid UTF-8, malformed source, or an I/O failure.
 An error is reported on stderr with the input path or `<stdin>` when known.
 Scanner errors include the authored line and column. A malformed file is left
-unchanged and a malformed stdin document produces no stdout. The first error
-stops the invocation. Check mode emits its list only after all selected inputs
-have been read and checked. Earlier successful directory writes remain in place
-if a later file fails.
+unchanged and a malformed stdin document produces no stdout. Once directory
+selection succeeds, the command attempts every selected file in path order and
+reports each failure on stderr. Check mode then lists every valid file that
+would change, even if some files failed. Any failure takes precedence over
+check differences and sets exit status 2. In write mode, successful writes
+remain in place when another file fails.
 
 ## Structural indentation
 
@@ -42,7 +44,11 @@ It uses the production XMD scanner and its shared Markdown boundaries for the
 body. An incomplete component or executable fence, or a scanner refusal such
 as a multiline opening tag that crosses its list item, is malformed. Markdown
 that the scanner treats as passive stays passive, including a passive fence at
-EOF and a tag-like spelling the scanner treats as prose.
+EOF and a backtick with no matching run. A later matching backtick run can
+close an inline code span across lines, so subsequent text is scanned from
+that closing run. In `Result<T>`, execution leaves the text passive and draft
+inspection records an unfinished `<T>`. The formatter reports that unfinished
+opening. The paired spelling `Result<T>x</T>` contains an executable element.
 
 The [structural indentation rules](executable-mdx-spec.md#structural-indentation-and-standalone-lines)
 and [examples](formatter-examples.md) define the body edits. At the start of

@@ -18,7 +18,8 @@ const HELP =
     "  -          Read UTF-8 from stdin and write only formatted source to stdout.",
     "  -h, --help Show this usage.",
     "",
-    "File and directory writes are silent. Errors go to stderr.",
+    "Writes are silent. Directory runs visit every selected file and report",
+    "each error on stderr. Check mode also lists differences when a file fails.",
     "Exit 0 for success, 1 for check differences, or 2 for errors.",
   ].join("\n") + "\n";
 const UTF8 = { fatal: true, ignoreBOM: true };
@@ -67,36 +68,50 @@ export function* runFmt(
           .toSorted()
       : [path];
     const changed: string[] = [];
+    let failed = false;
     for (const relative of paths) {
       const file = info.isDirectory ? join(path, relative) : relative;
-      label = file;
-      const bytes = yield* until(readFile(file));
-      let source: string;
       try {
-        source = new TextDecoder("utf-8", UTF8).decode(bytes);
-      } catch {
-        throw new Error("expected UTF-8 text");
-      }
-      const result = formatted(source);
-      if (result !== source) {
-        if (check) {
+        if (yield* formatFile(file, check)) {
           changed.push(relative);
-        } else {
-          yield* writeTextFile(file, result);
         }
+      } catch (error) {
+        reportError(stderr, file, error);
+        failed = true;
       }
     }
     if (changed.length > 0) {
       label = "";
       yield* send(stdout, changed.join("\n") + "\n");
-      return 1;
     }
-    return 0;
+    return failed ? 2 : changed.length > 0 ? 1 : 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    stderr(`xmd fmt: ${label === "" ? "" : label + ": "}${message}`);
+    reportError(stderr, label, error);
     return 2;
   }
+}
+
+function reportError(stderr: (text: string) => void, label: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  stderr(`xmd fmt: ${label === "" ? "" : label + ": "}${message}`);
+}
+
+function* formatFile(file: string, check: boolean): Operation<boolean> {
+  const bytes = yield* until(readFile(file));
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", UTF8).decode(bytes);
+  } catch {
+    throw new Error("expected UTF-8 text");
+  }
+  const result = formatted(source);
+  if (result === source) {
+    return false;
+  }
+  if (!check) {
+    yield* writeTextFile(file, result);
+  }
+  return check;
 }
 
 function formatted(source: string): string {

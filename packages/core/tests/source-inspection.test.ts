@@ -271,6 +271,50 @@ describe("Markdown boundary inspection", () => {
     expect(inspectSource(text, "document").ok).toBe(false);
   });
 
+  it("reports each unfinished prose opening once at its authored offset", function* () {
+    const prefix = "\uFEFF---\nlabel: 😀\n---\n";
+    const line = "Press <Enter> to continue.\n";
+    const count = 8192;
+    const source = prefix + line.repeat(count) + "\n";
+    const draft = inspectSourceDraft(source, "document");
+    expect(draft.elements).toEqual([]);
+    expect(draft.diagnostics).toEqual([]);
+    expect(draft.unfinished).toHaveLength(count);
+    for (const [index, fact] of draft.unfinished.entries()) {
+      const start = prefix.length + (count - index - 1) * line.length + line.indexOf("<");
+      expect(fact).toEqual({
+        start,
+        name: "Enter",
+        attributed: false,
+        contentStart: start + "<Enter>".length,
+        contentDepth: 0,
+      });
+    }
+  });
+
+  it("reuses failed bodies without losing the refusal or shifting later elements", function* () {
+    const source =
+      '\uFEFF---\nlabel: 😀\n---\nA <Missing>\nB <Missing>\n😀 <Bad\n x="1"\n>\n<Probe />\n';
+    const draft = inspectSourceDraft(source, "document");
+    expect(draft.diagnostics).toEqual([
+      {
+        message: "Multiline XMD opening tag starts after prose at 6:4",
+        position: { path: undefined, offset: source.indexOf("<Bad"), line: 6, column: 4 },
+      },
+    ]);
+    expect(draft.unfinished.map(({ start }) => start)).toEqual([
+      source.lastIndexOf("<Missing>"),
+      source.indexOf("<Missing>"),
+    ]);
+    const start = source.indexOf("<Probe />");
+    expect(draft.elements).toEqual([
+      {
+        name: "Probe",
+        opening: { start, end: start + "<Probe />".length },
+      },
+    ]);
+  });
+
   it("exposes implicit list exits and never guesses a tag inside an open fence", function* () {
     const passive = '  ~~~\n  <File path="absent.txt" />\n';
     const prefix = "- item\n\n" + passive;
