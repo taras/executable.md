@@ -14,11 +14,11 @@
  * - output shape (empty output from daemon blocks)
  * - error propagation via component-scoped daemon + children
  */
-import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { race, sleep } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { Stdio } from "@effectionx/process";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -36,7 +36,10 @@ function* writeFiles(dir: string, files: Record<string, string>): Operation<void
   }
 }
 
+const OWNER = "packages/core/tests/daemon-integration.test.ts";
+
 describe("Tier Q — Daemon integration", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
   // Q4/Q5: daemon forked into eval scope, process cleaned up on completion
   // Verified by: execute completes without hanging (daemon terminated),
@@ -48,10 +51,11 @@ describe("Tier Q — Daemon integration", () => {
       "doc.md": ["before", "", "```bash daemon exec", "sleep 300", "```", "", "after"].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     const output = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -80,7 +84,8 @@ describe("Tier Q — Daemon integration", () => {
       "doc.md": ["<Holder />", "", "```bash exec", "echo probe", "```"].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     let displayed = "";
     const decoder = new TextDecoder();
     yield* Stdio.around({
@@ -90,7 +95,7 @@ describe("Tier Q — Daemon integration", () => {
     });
     yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
@@ -129,7 +134,8 @@ describe("Tier Q — Daemon integration", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     let displayed = "";
     const decoder = new TextDecoder();
     yield* Stdio.around({
@@ -139,7 +145,7 @@ describe("Tier Q — Daemon integration", () => {
     });
     yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
@@ -158,10 +164,11 @@ describe("Tier Q — Daemon integration", () => {
       "doc.md": ["before", "", "```bash daemon exec", "sleep 300", "```", "", "after"].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     const output = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -181,10 +188,11 @@ describe("Tier Q — Daemon integration", () => {
       "doc.md": ["```bash daemon exec", "sleep 300", "```"].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -212,10 +220,11 @@ describe("Tier Q — Daemon integration", () => {
       "doc.md": ["before", "", "```bash daemon exec", "exit 1", "```", "", "after"].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     const output = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -251,10 +260,11 @@ describe("Tier Q — Daemon integration", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     const output = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -283,9 +293,10 @@ describe("Tier Q — Daemon integration", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     const execution = yield* execute({
-      path: path.join(tmpDir, "doc.md"),
+      path: document,
       stream,
     });
     const result = yield* execution;
@@ -318,11 +329,12 @@ describe("Tier Q — Daemon integration", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
     // Golden run
     const output1 = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -334,7 +346,7 @@ describe("Tier Q — Daemon integration", () => {
     // daemon spawns a fresh process with the restored interpolated value.
     const output2 = yield* collect(
       yield* execute({
-        path: path.join(tmpDir, "doc.md"),
+        path: document,
         stream,
       }),
     );
@@ -372,12 +384,13 @@ describe("Tier Q — Daemon integration", () => {
       ].join("\n"),
     });
 
-    const stream = new InMemoryStream();
+    const document = path.join(tmpDir, "doc.md");
+    const stream = yield* useJournalStream(document);
 
     const result = yield* race([
       collect(
         yield* execute({
-          path: path.join(tmpDir, "doc.md"),
+          path: document,
           stream,
         }),
       ),

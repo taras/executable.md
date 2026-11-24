@@ -13,7 +13,8 @@
  * the provider to perform.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -46,6 +47,9 @@ import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts
 import baseline1178 from "./fixtures/syntax-generated-base.json" with { type: "json" };
 import { expectAvailability, syntaxInstallation } from "./support/syntax-availability.ts";
 import { admittedSymbols } from "../src/syntax-admitted.ts";
+
+const ROOT_PATH = "evaluate.md";
+const OWNER = "packages/core/tests/evaluate-component.test.ts";
 
 function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
   const fn = answer.fn;
@@ -109,7 +113,10 @@ function coreFilesystemAnswers(...names: readonly string[]): ResolvedAnswers {
 }
 
 describe("protected generated component answers", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("routes delegated Syntax through both wrappers and renders its ordinary output", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const profile = syntaxProfile();
     // syntax_symbols retains rendered text, so sourceKind must be checked on
     // the captured profile's structured symbols before rendering drops that
@@ -139,7 +146,6 @@ describe("protected generated component answers", () => {
       lifetime.revoke();
       identity.identities.revoke();
     }
-    const stream = new InMemoryStream();
     const source = '<Syntax names={["Syntax", "File"]} />';
     // Written without `as` inside the fragment, so the delegated answer's own
     // text is the fragment's output and Evaluate emits exactly that.
@@ -349,9 +355,9 @@ describe("protected generated component answers", () => {
   });
 
   it("exposes no route to middleware and rejects a generated-import wrapper replacement", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const seen: FunctionComponentDefinition[] = [];
     const surfaces: string[][] = [];
-    const stream = new InMemoryStream();
     const failed = yield* refusal(
       scoped(function* () {
         yield* Component.around({
@@ -390,8 +396,8 @@ describe("protected generated component answers", () => {
   });
 
   it("rebuilds routes on continuation and cannot resurrect a retained callable", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const source = `<Evaluate text={'<Syntax names={["File"]} />'} as="answer" />\n<Json value={answer} />`;
-    const stream = new InMemoryStream();
     const retained: FunctionComponentDefinition[] = [];
     const original = yield* run(source, [syntaxProfile({ retained })], stream);
     const events = yield* stream.readAll();
@@ -429,8 +435,6 @@ describe("protected generated component answers", () => {
     inspect(events);
   });
 });
-
-const ROOT_PATH = "evaluate.md";
 
 const NOTE = "the retained note\n";
 
@@ -488,12 +492,16 @@ function admissions(events: readonly DurableEvent[]): DurableEvent[] {
 }
 
 describe("Tier FE — a program the document holds", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE1: `text` runs, and its observations bind by name and order", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n\\n<File path="other.md" />\\n'} as="answer" />` +
         `\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     const rendered = String(output);
@@ -504,23 +512,28 @@ describe("Tier FE — a program the document holds", () => {
   });
 
   it("FE1: an element with no program and no content is refused", function* () {
-    expect(yield* refusal(run(`<Evaluate />\n`, [reading(recordedFiles())]))).toContain(
+    const stream = yield* useJournalStream(ROOT_PATH);
+    expect(yield* refusal(run(`<Evaluate />\n`, [reading(recordedFiles())], stream))).toContain(
       "requires the program as a string",
     );
   });
 
   it("FE1: `text` beside content is refused rather than resolved by precedence", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     expect(
       yield* refusal(
-        run(`<Evaluate text="<File path='a.md' />">\ncontent\n</Evaluate>\n`, [
-          reading(recordedFiles()),
-        ]),
+        run(
+          `<Evaluate text="<File path='a.md' />">\ncontent\n</Evaluate>\n`,
+          [reading(recordedFiles())],
+          stream,
+        ),
       ),
     ).toContain("does not also carry `text`");
   });
 });
 
 describe("Tier FE — a fragment reaches the captured operations and nothing else", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /**
    * One chain, crossed by both.
    *
@@ -537,6 +550,7 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
    * effective `Permissions` of the scope the operation runs in.
    */
   it("FE13: one Files middleware sees the document's read and the fragment's", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "renamed.md": "the renamed note\n" });
     const crossed: string[] = [];
 
@@ -552,6 +566,7 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
       return yield* run(
         `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -563,9 +578,10 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
   });
 
   it("FE13: a fragment cannot glob, however the document's provider is arranged", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)]),
+      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)], stream),
     );
 
     // Not "globbing failed" — `<Glob>` is not a name this fragment has at all.
@@ -574,8 +590,9 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
   });
 
   it("FE13: an operation retained past its execution refuses rather than acting", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
-    yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n`, [reading(files)]);
+    yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n`, [reading(files)], stream);
     const during = [...files.performed];
 
     // The execution has ended. Whatever a fragment body, a handler or a
@@ -587,14 +604,16 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
 });
 
 describe("Tier FE — the paired form produces its own program", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE2: the exact bytes the producer rendered are the admitted source", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // Not "contains" and not "after trimming": the retained admission is a
     // decision about one exact fragment, and a continuation is held to those
     // bytes. A projection that trimmed, re-indented or normalised newlines
     // would make the retained text disagree with what the producer wrote.
     const PROGRAM = `\n<File path="notes.md" />\n\n<File path="other.md" />\n`;
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       yield* registerComponents([
         {
@@ -628,6 +647,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE2: content renders once, and what it rendered is the program", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const rendered: string[] = [];
     const output = yield* scoped(function* () {
@@ -646,6 +666,7 @@ describe("Tier FE — the paired form produces its own program", () => {
       return yield* run(
         `<Evaluate as="answer">\n<Producer />\n</Evaluate>\n\n<Json value={answer} />\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -655,6 +676,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE2: a producer keeps its own permission while the fragment does not", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The producer's content runs at the document's site, so its `<File />` is
     // the ordinary component written where an author wrote it. The program it
     // renders runs under the admitted tables instead. Both now cross the same
@@ -679,6 +701,7 @@ describe("Tier FE — the paired form produces its own program", () => {
         `<Evaluate as="answer">\n<File path="producer-input.md" />\n</Evaluate>\n\n` +
           `<Json value={answer} />\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -689,7 +712,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE2: a producer that fails stops the evaluation before any fragment work", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const failed = yield* refusal(
       scoped(function* () {
@@ -714,7 +737,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE17: cancelling inside the producer waits for its cleanup and admits nothing", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const cleanup: string[] = [];
     const reached = withResolvers<void>();
@@ -758,12 +781,12 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE17: cancelling after fragment work starts records no terminal result", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The other half of FE17. That row cancels while the *producer* is running,
     // so it proves the projector side and nothing about the evaluation. This one
     // cancels after the admission committed and an admitted operation is
     // actually in flight, which is the only state where a fragment effect is
     // interrupted rather than never started.
-    const stream = new InMemoryStream();
     const reached = withResolvers<void>();
     const files = recordedFiles(
       { "notes.md": NOTE, "second.md": "the second note\n" },
@@ -803,7 +826,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE17: cancellation before the producer enters is the negative control", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const entered: string[] = [];
 
@@ -838,6 +861,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE3: the producer is told the narrowed vocabulary, not the site's", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const told: string[] = [];
     yield* scoped(function* () {
@@ -870,6 +894,7 @@ describe("Tier FE — the paired form produces its own program", () => {
       return yield* run(
         `<Evaluate>\n<Syntax as="vocab" />\n\n<Peek text={vocab} />\n\n<Program />\n</Evaluate>\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -887,6 +912,7 @@ describe("Tier FE — the paired form produces its own program", () => {
   });
 
   it("FE3: hostile content middleware does not reach the producer projection", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const intercepted: string[] = [];
     const output = yield* scoped(function* () {
@@ -936,6 +962,7 @@ describe("Tier FE — the paired form produces its own program", () => {
         `<Evaluate as="answer">\n<Producer />\n</Evaluate>\n\n<Ordinary>ignored</Ordinary>\n\n` +
           `<Json value={answer} />\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -951,10 +978,13 @@ describe("Tier FE — the paired form produces its own program", () => {
 });
 
 describe("Tier FE — allow selects, and never adds", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE4: omitting `allow` admits exactly the read table", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const failed = yield* refusal(
-      run(`<Evaluate text={'<File path="out.md">x</File>\\n'} />\n`, [both(files)]),
+      run(`<Evaluate text={'<File path="out.md">x</File>\\n'} />\n`, [both(files)], stream),
     );
 
     expect(failed).toContain("admitted only in its self-closing form");
@@ -962,7 +992,7 @@ describe("Tier FE — allow selects, and never adds", () => {
   });
 
   it("FE4: a class this host installed nothing for is refused before any program", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const failed = yield* refusal(
       run(
@@ -978,11 +1008,13 @@ describe("Tier FE — allow selects, and never adds", () => {
   });
 
   it("FE4: an admitted write reaches the captured write operations and binds nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const output = yield* run(
       `<Evaluate text={'<Dir path="nested">\\n\\n<File path="nested/out.md">made</File>\\n\\n</Dir>\\n'} ` +
         `allow={["write"]} as="answer" />\n\n<Json value={answer} />\n`,
       [both(files)],
+      stream,
     );
 
     expect(files.performed).toEqual([
@@ -1020,17 +1052,21 @@ describe("Tier FE — allow selects, and never adds", () => {
   });
 
   it("FE4: a selection this component does not have is refused", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     expect(
       yield* refusal(
-        run(`<Evaluate text="<File path='a.md' />" allow={["exec"]} />\n`, [
-          reading(recordedFiles()),
-        ]),
+        run(
+          `<Evaluate text="<File path='a.md' />" allow={["exec"]} />\n`,
+          [reading(recordedFiles())],
+          stream,
+        ),
       ),
     ).toMatch(/allow|enum/i);
   });
 });
 
 describe("Tier FE — an execution with no selection has no evaluation", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FE5: a host that selected nothing refuses at the element, not at startup", function* () {
     expect(String(yield* run(`nothing asked for\n`, []))).toContain("nothing asked for");
 
@@ -1049,10 +1085,12 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
    * host assembled, and there is no contributor count to refuse on.
    */
   it("FE5: two handlers offering a selection compose rather than refusing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files), reading(files)],
+      stream,
     );
 
     expect(String(output)).toContain("the retained note");
@@ -1072,10 +1110,12 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
    * exactly where it is fatal for an authored element.
    */
   it("FE5: a file entry states no operations, and reads what the provider has", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     expect(String(output)).toContain("the retained note");
@@ -1146,9 +1186,11 @@ describe("Tier FE — what the element itself may say", () => {
 });
 
 describe("Tier FE — one occurrence, one durable decision", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE16: two occurrences do not consume one another's records", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "one.md": "first\n", "two.md": "second\n" });
-    const stream = new InMemoryStream();
     yield* run(
       `<Evaluate text={'<File path="one.md" />\\n'} />\n\n` +
         `<Evaluate text={'<File path="two.md" />\\n'} />\n`,
@@ -1166,8 +1208,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   });
 
   it("FE10: a continuation resumes the exact admitted text", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const first = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n`;
     yield* run(source, [reading(first)], stream);
     const complete = yield* stream.readAll();
@@ -1189,6 +1231,7 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   });
 
   it("FE10: a continuation offering different text refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // The document is byte-identical across both attempts, so the occurrence
     // identity — and therefore the durable name — is the same. What differs is
     // the program the producer rendered, which is exactly the case a retained
@@ -1213,7 +1256,6 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     }
 
     const first = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       yield* producing(`<File path="notes.md" />\n`)();
       yield* run(DOCUMENT, [reading(first)], stream);
@@ -1239,8 +1281,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   });
 
   it("FE10: a continuation whose ceiling moved refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const first = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
     yield* run(source, [reading(first)], stream);
     const complete = yield* stream.readAll();
@@ -1267,8 +1309,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   });
 
   it("FE11: a completed evaluation replays without performing anything again", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const first = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
     const original = yield* run(source, [reading(first)], stream);
     expect(first.performed).toEqual(["read notes.md"]);
@@ -1289,8 +1331,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   });
 
   it("FE12: a retained record this version cannot read fails closed", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
     yield* run(source, [reading(files)], stream);
     const complete = yield* stream.readAll();
@@ -1318,34 +1360,41 @@ describe("Tier FE — one occurrence, one durable decision", () => {
 });
 
 describe("Tier FE — protection settles which implementation runs, and grants nothing", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE26: protection adds no class and no identity to what `allow` selects", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // A profile with no write table. `<Evaluate>` being canonical core's does
     // not add one, and no spelling of `allow` conjures one.
     const files = recordedFiles();
     expect(
       yield* refusal(
-        run(`<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`, [
-          reading(files),
-        ]),
+        run(
+          `<Evaluate text={'<File path="a.md">x</File>\\n'} allow={["write"]} />\n`,
+          [reading(files)],
+          stream,
+        ),
       ),
     ).toContain("installed no write table");
     expect(files.performed).toEqual([]);
   });
 
   it("FE23: a name in the enclosing symbols is still not admitted", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     // `<Glob>` is an ordinary core component and appears in the document's own
     // vocabulary. Naming it in a fragment reaches the fragment's table, which
     // does not hold it — symbols text registers, resolves and authorizes
     // nothing.
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)]),
+      run(`<Evaluate text={'<Glob pattern="*.md" />\\n'} />\n`, [reading(files)], stream),
     );
     expect(failed).toContain("did not admit");
     expect(files.performed).toEqual([]);
   });
 
   it("FE29: nothing a document controls reads, replaces or widens the profile", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* scoped(function* () {
       // A component that binds every composable channel it has before the
@@ -1373,6 +1422,7 @@ describe("Tier FE — protection settles which implementation runs, and grants n
         `<Forge>\n<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
           `<Json value={answer} />\n</Forge>\n`,
         [reading(files)],
+        stream,
       );
     });
 
@@ -1393,6 +1443,7 @@ describe("Tier FE — protection settles which implementation runs, and grants n
    * reachable from anything a document holds.
    */
   it("FE29: a document that answers the operation still admits no name", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
       scoped(function* () {
@@ -1431,6 +1482,7 @@ describe("Tier FE — protection settles which implementation runs, and grants n
         return yield* run(
           `<Forge>\n<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} />\n</Forge>\n`,
           [reading(files)],
+          stream,
         );
       }),
     );
@@ -1457,7 +1509,10 @@ describe("Tier FE — protection settles which implementation runs, and grants n
  * with the recorder's log still empty.
  */
 describe("Tier FE35 — structural constructs in a generated fragment", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("FE35: branching, binding and bounded iteration compose with admitted reads", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "second\n" });
     const output = yield* run(
       `<Evaluate text={'<Let as="wanted" value={["notes.md"]} />\\n` +
@@ -1466,6 +1521,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
         `<If condition={true}>\\n<Json value={seen} />\\n<Else>\\nnot taken\\n</Else>\\n</If>\\n'} ` +
         `as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     const rendered = String(output);
@@ -1531,11 +1587,13 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
   });
 
   it("FE35: Loop, a valid Break and PrintErrors run around an admitted read", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<Loop max={3}>\\n<PrintErrors>\\n<File path="notes.md" />\\n` +
         `</PrintErrors>\\n<Break />\\n</Loop>\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     // Each of these has its own handler rather than falling through to the
@@ -1614,12 +1672,14 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
    * consumed from a per-name queue in walk order.
    */
   it("FE35: a selected write does not consume an untaken read's plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "untaken.md": NOTE, "written.md": "before\n" });
     const output = yield* run(
       `<Evaluate text={'<If condition={false}>\\n<File path="untaken.md" />\\n` +
         `<Else>\\n<File path="written.md">written by the fragment</File>\\n</Else>\\n</If>\\n'} ` +
         `allow={["read", "write"]} />\n`,
       [both(files)],
+      stream,
     );
 
     // Every line of the fragment is a delimiter or a write, so it renders
@@ -1634,11 +1694,13 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
   });
 
   it("FE35: one authored occurrence invoked twice reuses its own plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<Each in={["a", "b"]} let="item">\\n<File path="notes.md" />\\n</Each>\\n'} ` +
         `as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     // Two iterations of one element: the second import finds the same plan
@@ -1648,11 +1710,13 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
   });
 
   it("FE35: a zero-iteration occurrence consumes no plan", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "after.md": "after\n" });
     const output = yield* run(
       `<Evaluate text={'<Each in={[]} let="item">\\n<File path="notes.md" />\\n</Each>\\n` +
         `<File path="after.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [reading(files)],
+      stream,
     );
 
     // The empty iteration invoked nothing, and the element after it still
@@ -1694,6 +1758,8 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
  * provider, so a search that appears in its log went through the profile.
  */
 describe("Tier FE34 — the shared read profile", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   /** The read table `xmd run` states, over one recorder. */
   function shared(files: RecordedFiles): ExecutionInstallation {
     return {
@@ -1710,8 +1776,8 @@ describe("Tier FE34 — the shared read profile", () => {
   }
 
   it("FE34: one fragment binds Glob, File and Syntax and renders chosen findings", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "unused\n" });
-    const stream = new InMemoryStream();
     const output = yield* run(
       `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
         `<File path="notes.md" as="note" />\\n` +
@@ -1737,11 +1803,13 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: an empty result is the answer to a search that matched nothing", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<Glob include={["absent.md"]} as="paths" />\\n` +
         `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [shared(files)],
+      stream,
     );
 
     expect(String(output)).toContain("[]");
@@ -1750,9 +1818,10 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: a search written without `as` is refused before any traversal", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Glob include={["notes.md"]} />\\n'} />\n`, [shared(files)]),
+      run(`<Evaluate text={'<Glob include={["notes.md"]} />\\n'} />\n`, [shared(files)], stream),
     );
 
     // The entry declares what it binds, so the ordinary value-component rule
@@ -1797,14 +1866,17 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: a provider failure becomes one safe sentence that names no path", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles(
       { "notes.md": NOTE },
       { found: () => Err(new Error("EACCES: permission denied, scandir '/private/host/root'")) },
     );
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} as="answer" />\n`, [
-        shared(files),
-      ]),
+      run(
+        `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} as="answer" />\n`,
+        [shared(files)],
+        stream,
+      ),
     );
 
     expect(failed).toContain("cannot search the working directory");
@@ -1814,6 +1886,7 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: the search reaches the captured operation and the captured directory", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const searched: string[] = [];
     const reachedDocumentProvider: string[] = [];
@@ -1848,6 +1921,7 @@ describe("Tier FE34 — the shared read profile", () => {
             },
           },
         ],
+        stream,
       );
     });
 
@@ -1859,10 +1933,13 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: bare Syntax reports composition plus the read vocabulary, and nothing else", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
-    const output = yield* run(`<Evaluate text={'<Syntax />\\n'} allow={["read"]} />\n`, [
-      shared(files),
-    ]);
+    const output = yield* run(
+      `<Evaluate text={'<Syntax />\\n'} allow={["read"]} />\n`,
+      [shared(files)],
+      stream,
+    );
 
     const rendered = String(output);
     for (const name of ["`<Json>`", "`<File>`", "`<Glob>`", "`<Syntax>`"]) {
@@ -1909,6 +1986,7 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: canonical core publishes the Syntax answer, and a replacement loses it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const seen: FunctionComponentDefinition[] = [];
     const failed = yield* refusal(
@@ -1923,7 +2001,7 @@ describe("Tier FE34 — the shared read profile", () => {
             return answer;
           },
         });
-        return yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, [shared(files)]);
+        return yield* run(`<Evaluate text={'<Syntax />\\n'} />\n`, [shared(files)], stream);
       }),
     );
 
@@ -2148,16 +2226,21 @@ describe("Tier FE34 — the shared read profile", () => {
   });
 
   it("FE34: `<Evaluate>` offers no generated form, so it cannot admit itself", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
-      run(`<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`, [
-        {
-          *install(): Operation<void> {
-            yield* useSelection({ Evaluate: ["self-closing"] });
-            yield* useRecordedFiles(files);
+      run(
+        `<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`,
+        [
+          {
+            *install(): Operation<void> {
+              yield* useSelection({ Evaluate: ["self-closing"] });
+              yield* useRecordedFiles(files);
+            },
           },
-        },
-      ]),
+        ],
+        stream,
+      ),
     );
 
     // Canonical resolution answers for `Evaluate` — it is a protected name —
@@ -2186,6 +2269,8 @@ describe("Tier FE34 — the shared read profile", () => {
  * satisfy an error-shape assertion and none of these.
  */
 describe("Tier FE14 — the chain answers, and the answer is held to what it offers", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
   /** The entry a host states for a provider-backed name. */
@@ -2232,19 +2317,20 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   }
 
   it("FE14: the final chain answer is the implementation a fragment runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     // Nothing registers `Open`, no file supplies it, and the provider answers
     // without delegating — so the chain's final answer is this implementation
     // or the import fails. There is no second place it could have come from.
-    const output = yield* run(OPEN, [backed(A)]);
+    const output = yield* run(OPEN, [backed(A)], stream);
 
     expect(String(output)).toContain("A ran");
     expect(A.invoked).toEqual(["A ran"]);
   });
 
   it("FE14: a fresh admission records the URL the admitted spelling runs under", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
-    const stream = new InMemoryStream();
     yield* run(OPEN, [backed(A)], stream);
 
     const events = yield* stream.readAll();
@@ -2267,10 +2353,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an inner publication and an outer unpublished answer refuse before any body", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const files = recordedFiles({ "notes.md": NOTE });
-    const stream = new InMemoryStream();
 
     const failed = yield* refusal(
       scoped(function* () {
@@ -2308,6 +2394,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an inner published A and an outer published B compose, and only B runs", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const delegated: unknown[] = [];
@@ -2320,21 +2407,25 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // the refusal above is only that the publication travels with the object
     // the chain finally gives back, which is what makes the substitution
     // honest.
-    const output = yield* run(OPEN, [
-      {
-        install: admits,
-        componentAnswers: [
-          answerProvider("Open", B.definition, {
-            delegatesFirst: true,
-            delegated,
-            whileResolving(request) {
-              outerRequests.push(request.name);
-            },
-          }),
-          answerProvider("Open", A.definition, {}),
-        ],
-      },
-    ]);
+    const output = yield* run(
+      OPEN,
+      [
+        {
+          install: admits,
+          componentAnswers: [
+            answerProvider("Open", B.definition, {
+              delegatesFirst: true,
+              delegated,
+              whileResolving(request) {
+                outerRequests.push(request.name);
+              },
+            }),
+            answerProvider("Open", A.definition, {}),
+          ],
+        },
+      ],
+      stream,
+    );
 
     // The inner half really answered: what delegation returned is the exact
     // object the inner provider published. So A was resolvable, and the row
@@ -2347,6 +2438,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an answer whose contract reads differently each time cannot substitute", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const reads: string[] = [];
     // The published contract accepts one prop; the substitution accepts none.
     const A = implementation("Open", "A ran", {
@@ -2360,19 +2452,23 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // not run the trap. So the reading the capture *keeps* decides what a
     // fragment is validated against: the publication-time schema admits `flag`,
     // and the substitution refuses it.
-    const output = yield* run(`<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`, [
-      {
-        install: admits,
-        componentAnswers: [
-          answerProvider("Open", A.definition, {
-            alternating: {
-              substitute: { type: "object", properties: {}, additionalProperties: false },
-              reads,
-            },
-          }),
-        ],
-      },
-    ]);
+    const output = yield* run(
+      `<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`,
+      [
+        {
+          install: admits,
+          componentAnswers: [
+            answerProvider("Open", A.definition, {
+              alternating: {
+                substitute: { type: "object", properties: {}, additionalProperties: false },
+                reads,
+              },
+            }),
+          ],
+        },
+      ],
+      stream,
+    );
 
     expect(String(output)).not.toContain("Error");
     expect(A.invoked).toEqual(["A ran"]);
@@ -2382,9 +2478,9 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: a provider still answering when a fragment resolves is refused there", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
-    const stream = new InMemoryStream();
 
     // A provider settles at the capture: the profile sealed what it retained,
     // and a fragment runs that snapshot. One that keeps answering is answering
@@ -2412,8 +2508,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: a provider still publishing when a fragment resolves is refused earlier", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
-    const stream = new InMemoryStream();
 
     // The same substitution, one step earlier. The resolution this provider
     // answered settled during the capture, so there is no window left to
@@ -2473,8 +2569,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an answer stating forms this engine does not have refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
-    const stream = new InMemoryStream();
     // The same reading as the unit row, at the live boundary: the provider
     // answers honestly with a definition whose stated forms are not a
     // declaration this engine has, so the spelling it offers cannot be held to
@@ -2505,8 +2601,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an answer offering no generated use of the admitted spelling refuses", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
-    const stream = new InMemoryStream();
     // The provider answers honestly, with a definition whose own declaration
     // offers no generated use of the spelling this host admitted. There is no
     // identity for a continuation to be compared against, so the entry refuses
@@ -2535,8 +2631,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: a continuation whose outer provider now answers B runs neither", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
-    const stream = new InMemoryStream();
     yield* run(OPEN, [backed(A)], stream);
     const complete = yield* stream.readAll();
     const admitted = admittedAt(complete);
@@ -2581,8 +2677,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: an unchanged continuation resumes and invokes A once", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
-    const stream = new InMemoryStream();
     yield* run(OPEN, [backed(A)], stream);
     const complete = yield* stream.readAll();
     const partial = complete.slice(0, admittedAt(complete) + 1);
@@ -2597,10 +2693,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: two occurrences share one capture lookup and reach no chain again", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const lookups: string[] = [];
-    const stream = new InMemoryStream();
 
     const asked: string[] = [];
     const output = yield* run(
@@ -2628,6 +2724,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   });
 
   it("FE14: a capability-only profile resolves no name at all", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const lookups: string[] = [];
     const files = recordedFiles({ "notes.md": NOTE });
 
@@ -2647,6 +2744,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
           ],
         },
       ],
+      stream,
     );
 
     expect(lookups).toEqual([]);
@@ -2655,6 +2753,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
 });
 
 describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () => {
+  beforeEach(journalBeforeEach(OWNER));
   /** The question the fragment asks, and the shape its answer must have. */
   const SCHEMA =
     '{ type: "object", properties: { decision: { type: "string", enum: ["Approve", "Decline"] } }, ' +
@@ -2737,8 +2836,8 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   }
 
   it("EL2: `write` admits the question, the host provider answers it, and the answer writes", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
-    const stream = new InMemoryStream();
     const requests: ElicitationRequest[] = [];
 
     const output = yield* scoped(function* () {
@@ -2772,6 +2871,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL7: a selected question is resolved at capture even when nothing writes it", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
     const asksFor: string[] = [];
@@ -2790,7 +2890,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
         },
       });
       yield* producing(`<File path="out.md">just a write</File>\n`);
-      return yield* run(DOCUMENT, [writing(files)]);
+      return yield* run(DOCUMENT, [writing(files)], stream);
     });
 
     // Resolved before the root import, which is what "at capture" means here.
@@ -2802,6 +2902,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL8: a surrounding `<Answers>` answers the generated question, and asks nobody", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
 
@@ -2817,6 +2918,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
         `<Answers>\n<Answer value={{ decision: "Decline" }}>\nApprove this write?\n</Answer>\n` +
           `${DOCUMENT}</Answers>\n`,
         [writing(files)],
+        stream,
       );
     });
 
@@ -2826,6 +2928,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL3: `read` refuses the same fragment before the provider or a write is reached", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles({ "notes.md": NOTE });
     const requests: ElicitationRequest[] = [];
 
@@ -2833,9 +2936,11 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
       scoped(function* () {
         yield* asked(requests);
         yield* producing(ASKING);
-        return yield* run(`<Evaluate allow={["read"]}>\n<Program />\n</Evaluate>\n`, [
-          writing(files),
-        ]);
+        return yield* run(
+          `<Evaluate allow={["read"]}>\n<Program />\n</Evaluate>\n`,
+          [writing(files)],
+          stream,
+        );
       }),
     );
 
@@ -2848,6 +2953,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL3: a write selection that omits the entry refuses it too", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
 
@@ -2855,7 +2961,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
       scoped(function* () {
         yield* asked(requests);
         yield* producing(ASKING);
-        return yield* run(DOCUMENT, [withoutElicit(files)]);
+        return yield* run(DOCUMENT, [withoutElicit(files)], stream);
       }),
     );
 
@@ -2865,6 +2971,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL4: a prohibited sibling refuses the whole fragment before the question is asked", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
 
@@ -2874,7 +2981,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
       scoped(function* () {
         yield* asked(requests);
         yield* producing(`${ASKING}\n<Fetch url="https://example.test/data" />\n`);
-        return yield* run(DOCUMENT, [writing(files)]);
+        return yield* run(DOCUMENT, [writing(files)], stream);
       }),
     );
 
@@ -2966,8 +3073,8 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   });
 
   it("EL5: a continuation that no longer admits Elicit refuses before any effect", function* () {
+    const stream = yield* useJournalStream(ROOT_PATH);
     const files = recordedFiles();
-    const stream = new InMemoryStream();
     yield* scoped(function* () {
       yield* asked([]);
       yield* producing(ASKING);

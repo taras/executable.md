@@ -23,14 +23,20 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { execute, executeInstalled } from "../src/execute.ts";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import type { HostExecution } from "../src/execute.ts";
-import { inlineSource } from "../src/root-source.ts";
+import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText, completion, failureMessage } from "./helpers.ts";
 import type { ComponentDefinition, EvalEnv, JsonObject, Segment } from "../src/types.ts";
 import type { ExecutionInstallation } from "../src/execute.ts";
+
+const OWNER = "packages/core/tests/let.test.ts";
 
 function markdownComponent(name: string, body: string): ComponentDefinition {
   return {
@@ -148,92 +154,112 @@ describe("Tier LET — passive source", () => {
     }
   });
 
-  it("LET15: saved source runs with fresh inputs and its mismatch arm really fails", function* () {
+  const savedVerifier =
+    "LET15: saved source runs with fresh inputs and its mismatch arm really fails";
+  it(savedVerifier, function* () {
     yield* useHostFiles();
     const temporary = yield* API.Files.operations.temporaryDirectory();
     if (!temporary.ok) {
       throw temporary.error;
     }
     const directory = temporary.value;
-    yield* API.Env.around(
-      {
-        *cwd() {
-          return directory;
+    const installCwd = () =>
+      API.Env.around(
+        {
+          *cwd() {
+            return directory;
+          },
         },
-      },
-      { at: "min" },
-    );
-    const program = [
-      "---",
-      "props:",
-      "  type: object",
-      "  properties:",
-      "    sourcePath: { type: string }",
-      "    copyPath: { type: string }",
-      "  required: [sourcePath, copyPath]",
-      "  additionalProperties: false",
-      "---",
-      '<File path={props.sourcePath} as="source" />',
-      '<File path={props.copyPath} as="copied" />',
-      "```ts eval",
-      "const matches = source === copied;",
-      "```",
-      "<Output>",
-      "<If condition={matches}>MATCHED {source}<Else>",
-      '<Fail message="SAVED_VERIFIER_MISMATCH_1050" />',
-      "</Else></If>",
-      "</Output>",
-    ].join("\n");
-    const capture = yield* executeInstalled(
-      {
-        ...inlineSource(
-          [
-            '<Let as="matches" value={true} />',
-            '<Let as="source" value="CAPTURE_TIME_SOURCE" />',
-            '<Let as="copied" value="CAPTURE_TIME_SOURCE" />',
-            '<Let as="props" value={{ sourcePath: "old.txt", copyPath: "old-copy.txt" }} />',
-            '<Let as="program" select="code">',
-            ...["````xmd", ...program.split("\n"), "````"].map((line) => `  ${line}`),
-            "</Let>",
-            '<File path="verifier.md">{program}</File>',
-            '<File path="verifier.md" as="readback" />',
-          ].join("\n"),
-        ),
-        stream: new InMemoryStream(),
-      },
-      [],
-    );
-    expect((yield* capture).ok).toBe(true);
-    const bindings = yield* capture.bindings();
-    if (!bindings.ok) {
-      throw bindings.error;
-    }
-    expect(bindings.value.program).toBe(program);
-    expect(bindings.value.readback).toBe(program);
-    expect(yield* readTextFile(join(directory, "verifier.md"))).toBe(program);
-
-    for (const data of [
-      { source: "FIRST_1050", copied: "FIRST_1050", passes: true },
-      { source: "CHANGED_1050", copied: "CHANGED_1050", passes: true },
-      { source: "CHANGED_1050", copied: "DELIBERATE_MISMATCH", passes: false },
-    ]) {
-      yield* writeTextFile(join(directory, "source.txt"), data.source);
-      yield* writeTextFile(join(directory, "copy.txt"), data.copied);
-      const result = yield* scoped(function* () {
-        yield* useNormalizedOutput();
-        return yield* completion({
-          path: join(directory, "verifier.md"),
-          stream: new InMemoryStream(),
-          props: { sourcePath: "source.txt", copyPath: "copy.txt" },
+        { at: "min" },
+      );
+    yield* captureTestJournal(
+      { owner: OWNER, name: savedVerifier, suite: "program producer" },
+      INLINE_SOURCE_PATH,
+      function* (producerStream) {
+        yield* scoped(function* () {
+          yield* installCwd();
+          const program = [
+            "---",
+            "props:",
+            "  type: object",
+            "  properties:",
+            "    sourcePath: { type: string }",
+            "    copyPath: { type: string }",
+            "  required: [sourcePath, copyPath]",
+            "  additionalProperties: false",
+            "---",
+            '<File path={props.sourcePath} as="source" />',
+            '<File path={props.copyPath} as="copied" />',
+            "```ts eval",
+            "const matches = source === copied;",
+            "```",
+            "<Output>",
+            "<If condition={matches}>MATCHED {source}<Else>",
+            '<Fail message="SAVED_VERIFIER_MISMATCH_1050" />',
+            "</Else></If>",
+            "</Output>",
+          ].join("\n");
+          const capture = yield* executeInstalled(
+            {
+              ...inlineSource(
+                [
+                  '<Let as="matches" value={true} />',
+                  '<Let as="source" value="CAPTURE_TIME_SOURCE" />',
+                  '<Let as="copied" value="CAPTURE_TIME_SOURCE" />',
+                  '<Let as="props" value={{ sourcePath: "old.txt", copyPath: "old-copy.txt" }} />',
+                  '<Let as="program" select="code">',
+                  ...["````xmd", ...program.split("\n"), "````"].map((line) => `  ${line}`),
+                  "</Let>",
+                  '<File path="verifier.md">{program}</File>',
+                  '<File path="verifier.md" as="readback" />',
+                ].join("\n"),
+              ),
+              stream: producerStream,
+            },
+            [],
+          );
+          expect((yield* capture).ok).toBe(true);
+          const bindings = yield* capture.bindings();
+          if (!bindings.ok) {
+            throw bindings.error;
+          }
+          expect(bindings.value.program).toBe(program);
+          expect(bindings.value.readback).toBe(program);
+          expect(yield* readTextFile(join(directory, "verifier.md"))).toBe(program);
         });
-      });
-      expect(result.ok).toBe(data.passes);
-      if (result.ok) {
-        expect(asText(result.value).trim()).toBe(`MATCHED ${data.source}`);
-      } else {
-        expect(failureMessage(result)).toContain("SAVED_VERIFIER_MISMATCH_1050");
-      }
-    }
+
+        let variant = 0;
+        for (const data of [
+          { source: "FIRST_1050", copied: "FIRST_1050", passes: true },
+          { source: "CHANGED_1050", copied: "CHANGED_1050", passes: true },
+          { source: "CHANGED_1050", copied: "DELIBERATE_MISMATCH", passes: false },
+        ]) {
+          yield* captureTestJournal(
+            { owner: OWNER, name: savedVerifier, suite: `verifier ${++variant}` },
+            join(directory, "verifier.md"),
+            function* (stream) {
+              yield* installCwd();
+              yield* writeTextFile(join(directory, "source.txt"), data.source);
+              yield* writeTextFile(join(directory, "copy.txt"), data.copied);
+              const result = yield* scoped(function* () {
+                yield* useNormalizedOutput();
+                return yield* completion({
+                  path: join(directory, "verifier.md"),
+                  stream,
+                  props: { sourcePath: "source.txt", copyPath: "copy.txt" },
+                });
+              });
+              expect(result.ok).toBe(data.passes);
+              if (result.ok) {
+                expect(asText(result.value).trim()).toBe(`MATCHED ${data.source}`);
+              } else {
+                expect(failureMessage(result)).toContain("SAVED_VERIFIER_MISMATCH_1050");
+              }
+            },
+          );
+        }
+      },
+    );
   });
 });
 
@@ -496,6 +522,7 @@ describe("Tier LET — a whole document", () => {
   });
 
   it("LET11: a partial replay rebinds by reference and records nothing of its own", function* () {
+    const stream = yield* useJournalStream("README.md");
     const document = [
       "```ts eval",
       "const source = { id: 7 };",
@@ -508,7 +535,6 @@ describe("Tier LET — a whole document", () => {
       "```",
     ].join("\n");
 
-    const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": document });
 
     const golden = asText(yield* collect(yield* execute({ path: "README.md", stream })));
@@ -755,11 +781,12 @@ describe("Tier LET — the ordinary inventory, and which values are eligible", (
   });
 });
 describe("Tier LET — the computed root data an execution hands back", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   it("C1: the owner reports every actual root capture, and output and value stay separate", function* () {
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
     const counted: Produced = { calls: 0 };
-    const stream = new InMemoryStream();
     const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_ROOT), stream }, [
       readingComponent(counted),
     ]);
@@ -791,7 +818,7 @@ describe("Tier LET — the computed root data an execution hands back", () => {
   });
 
   it("C1: a value root's typed return is distinct from its computed data", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
     const execution = yield* executeInstalled({ ...inlineSource(VALUE_ROOT), stream }, []);
     const settled = yield* execution;
     expect(settled.ok).toBe(true);
@@ -802,7 +829,7 @@ describe("Tier LET — the computed root data an execution hands back", () => {
   });
 
   it("C5: a halted execution's own handle refuses the root it was reading", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
     const arrived = withResolvers<void>();
     const reached = { open: () => arrived.resolve() };
     let retained: HostExecution | undefined;
@@ -837,8 +864,8 @@ describe("Tier LET — the computed root data an execution hands back", () => {
   });
 
   it("C2: an ordinary failure keeps its computed data, and a cold reader finds both", function* () {
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
     const counted: Produced = { calls: 0 };
-    const stream = new InMemoryStream();
     const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_THEN_FAILS), stream }, [
       readingComponent(counted),
     ]);
