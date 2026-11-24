@@ -429,23 +429,7 @@ function scanTrackedBody(
         codeSpanEnd = -1;
         flush(pos);
         const contentStart = afterLine(facts.opensAt);
-        let contentEnd = contentStart;
-        let fenceEnd = contentStart;
-        let end: SourceFence["end"] = "unfinished";
-        while (fenceEnd < text.length) {
-          const next = feedPhysical(fenceEnd);
-          if (next.fenceExit) {
-            end = "container";
-            break;
-          }
-          contentEnd = fenceEnd;
-          fenceEnd = afterLine(fenceEnd);
-          if (next.fenceClose) {
-            end = "marker";
-            break;
-          }
-          contentEnd = fenceEnd;
-        }
+        const { contentEnd, fenceEnd, end } = readFenceExtent(text, contentStart, feedPhysical);
         if (end === "unfinished") {
           recordUnfinished(walk, { start: pos });
         }
@@ -597,6 +581,106 @@ function scanTrackedBody(
   }
   flush(text.length);
   return text.length;
+}
+
+function readFenceExtent(
+  text: string,
+  contentStart: number,
+  feed: (line: number) => { fenceExit: boolean; fenceClose: boolean },
+): { contentEnd: number; fenceEnd: number; end: SourceFence["end"] } {
+  let pos = contentStart;
+  while (pos < text.length) {
+    const facts = feed(pos);
+    if (facts.fenceExit) {
+      return { contentEnd: pos, fenceEnd: pos, end: "container" };
+    }
+    const next = Math.min(endOfLine(text, pos) + 1, text.length);
+    if (facts.fenceClose) {
+      return { contentEnd: pos, fenceEnd: next, end: "marker" };
+    }
+    pos = next;
+  }
+  return { contentEnd: pos, fenceEnd: pos, end: "unfinished" };
+}
+
+function readPatchBody(
+  walk: Walk,
+  openingStart: number,
+  openingEnd: number,
+  depth: number,
+  children: Segment[],
+): number {
+  const { text } = walk;
+  const closeTag = "</File.Patch>";
+  const refuse = () => {
+    const position = positionAt(walk.index, openingStart);
+    walk.diagnostics?.push({
+      message: `File.Patch requires exactly one passive fenced unified diff with an explicit, aligned fence close and an aligned </File.Patch> at ${position.line}:${position.column}`,
+      position,
+    });
+    return -1;
+  };
+
+  const openLine = text.lastIndexOf("\n", openingStart - 1) + 1;
+  const tagIndent = text.slice(openLine, openingStart);
+  const fenceLine = skipWhitespace(text, openingEnd);
+  const rawLine = text.lastIndexOf("\n", fenceLine - 1) + 1;
+  if (!/^[ \t]*$/.test(tagIndent) || rawLine < openingEnd) {
+    return refuse();
+  }
+
+  const prefix = STRUCTURAL_INDENT.repeat(depth);
+  const markdown = markdownStream(text, prefix, readHeader, closeTag);
+  try {
+    const { opensAt } = markdown.line(rawLine);
+    if (opensAt === undefined) {
+      return refuse();
+    }
+    const lineEnd = endOfLine(text, opensAt);
+    const info = text
+      .slice(opensAt, lineEnd)
+      .replace(/^(?:`+|~+)/, "")
+      .trim();
+    if (info !== "" && info !== "diff" && info !== "patch") {
+      return refuse();
+    }
+
+    const contentStart = Math.min(lineEnd + 1, text.length);
+    const { contentEnd, fenceEnd, end } = readFenceExtent(text, contentStart, markdown.line);
+    if (end !== "marker") {
+      return refuse();
+    }
+    const fenceIndent = text.slice(rawLine, opensAt);
+    const closeLine = text.slice(contentEnd, endOfLine(text, contentEnd));
+    // Markdown permits the diff context marker as indentation before a fence.
+    if (
+      (fenceIndent !== "" && fenceIndent !== prefix) ||
+      closeLine.match(/^[ \t]*/)?.[0] !== fenceIndent
+    ) {
+      return refuse();
+    }
+
+    const close = skipWhitespace(text, fenceEnd);
+    const closeStart = text.lastIndexOf("\n", close - 1) + 1;
+    if (
+      !text.startsWith(closeTag, close) ||
+      text.slice(closeStart, close) !== tagIndent ||
+      !/^[ \t]*\r?$/.test(text.slice(close + closeTag.length, endOfLine(text, close)))
+    ) {
+      return refuse();
+    }
+
+    walk.fences?.push({
+      range: { start: rawLine, end: fenceEnd },
+      marker: opensAt,
+      executable: false,
+      end,
+    });
+    children.push({ type: "text", content: dedentLines(text, contentStart, contentEnd, prefix) });
+    return close + closeTag.length;
+  } finally {
+    markdown.close();
+  }
 }
 
 function endOfLine(text: string, pos: number): number {
@@ -886,7 +970,7 @@ function parseComponentTag(
   // next line, one structural level deeper.
   const opening = begins ? lineEndingAfter(text, openingEnd) : undefined;
   const block = opening?.newline === true;
-  if (unfinishedTail !== undefined) {
+  if (unfinishedTail !== undefined && name !== "File.Patch") {
     if (walk.unfinished !== undefined) {
       unfinishedTail.push({
         start,
@@ -909,19 +993,19 @@ function parseComponentTag(
   const nestedFences: SourceFence[] | undefined = walk.fences === undefined ? undefined : [];
   const nestedBlocks: SourceRange[] | undefined = walk.blocks === undefined ? undefined : [];
   const closer = `</${name}>`;
-  const childEnd = scanBody(
-    { ...walk, elements: nested, fences: nestedFences, blocks: nestedBlocks },
-    block
-      ? {
-          pos: opening.end,
-          depth: depth + 1,
-          lineContent: opening.end,
-          delimiterIndent: text.slice(text.lastIndexOf("\n", start - 1) + 1, start),
-        }
-      : { pos: openingEnd, depth, lineContent },
-    closer,
-    children,
-  );
+  const body = block
+    ? {
+        pos: opening.end,
+        depth: depth + 1,
+        lineContent: opening.end,
+        delimiterIndent: text.slice(text.lastIndexOf("\n", start - 1) + 1, start),
+      }
+    : { pos: openingEnd, depth, lineContent };
+  const childWalk = { ...walk, elements: nested, fences: nestedFences, blocks: nestedBlocks };
+  const childEnd =
+    name === "File.Patch"
+      ? readPatchBody(childWalk, start, openingEnd, body.depth, children)
+      : scanBody(childWalk, body, closer, children);
   if (childEnd === -1) {
     // The opening tag completed and the closing one never arrived, so the text
     // already delivered holds content belonging to a known element. Reported

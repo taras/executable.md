@@ -177,13 +177,3 @@ export function applyUnifiedDiff(source: string, patch: string, path: string): s
   }
   return renderSourceLines(output);
 }
-
-export function fencedUnifiedDiff(source: string): string | undefined {
-  const match = /^\s*(`{3,}|~{3,})(?:diff|patch)?[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*\s*$/.exec(
-    source,
-  );
-  if (match === null || /^(?:`{3,}|~{3,})/m.test(match[2])) {
-    return undefined;
-  }
-  return match[2] + "\n";
-}

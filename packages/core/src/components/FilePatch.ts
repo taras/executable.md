@@ -4,7 +4,7 @@ import { printErrors } from "../component-failures.ts";
 import { writeFileText } from "../files.ts";
 import type { FormDeclaration } from "../invocation-identity.ts";
 import type { Json, Segment } from "../types.ts";
-import { applyUnifiedDiff, fencedUnifiedDiff, UnifiedDiffError } from "../unified-diff.ts";
+import { applyUnifiedDiff, UnifiedDiffError } from "../unified-diff.ts";
 import { FileAccessError, readRequestedText, report } from "./File.ts";
 
 const FENCE = "File.Patch requires exactly one passive fenced unified diff.";
@@ -14,15 +14,8 @@ export function* patchBody(
   children: readonly Segment[] | undefined,
 ): Operation<string> {
   const requested = String(props.path);
-  const source: string[] = [];
-  for (const child of children ?? []) {
-    if (child.type !== "text") {
-      throw new FileAccessError(FENCE);
-    }
-    source.push(child.content);
-  }
-  const patch = fencedUnifiedDiff(source.join(""));
-  if (patch === undefined) {
+  const diff = children?.[0];
+  if (children?.length !== 1 || diff?.type !== "text") {
     throw new FileAccessError(FENCE);
   }
 
@@ -30,7 +23,7 @@ export function* patchBody(
   const before = yield* readRequestedText(input);
   let content: string;
   try {
-    content = applyUnifiedDiff(before, patch, requested);
+    content = applyUnifiedDiff(before, diff.content, requested);
   } catch (error) {
     if (!(error instanceof UnifiedDiffError)) {
       throw error;
