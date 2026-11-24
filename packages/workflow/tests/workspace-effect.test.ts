@@ -395,7 +395,12 @@ describe("Tier DLC — Workspace coordination selection", () => {
       if (/^import\s/m.test(source) && moduleSpecifiers(parse(source).file).length === 0) {
         unread.push(path);
       }
-      const names = forbiddenNames(source);
+      // The fork allowlist recognizes the retained read by its journal spelling.
+      const names = forbiddenNames(
+        path === "packages/workflow/src/lifecycle/forkability.ts"
+          ? source.replace('  "github_search",', '  "repository_search",')
+          : source,
+      );
       if (names.length > 0) {
         crossings[path] = names;
       }

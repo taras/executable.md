@@ -28,6 +28,16 @@ import { glob } from "@executablemd/runtime";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 
+// The bundled vocabulary names GitHub.Search. Only its declaration,
+// registration and execution contract may use these names outside the adapter.
+const SEARCH_NAMES: Readonly<Record<string, RegExp>> = {
+  "packages/git/src/composition/components/GitHubSearch.ts":
+    /\b(?:GitHubSearch|GitHubSearchApi|githubSearchRegistration|GitHub\.Search|GitHub(?= search provider|'s| repository| response object)|executablemd\.git\.github\.search)\b/gu,
+  "packages/git/src/composition/installation.ts":
+    /\b(?:githubSearchRegistration|GitHubSearch\.ts)\b/gu,
+  "packages/git/src/composition/pull-request-read-execution.ts": /\bGitHubSearch\.ts\b/gu,
+};
+
 describe("the Git package's provider-neutral surface", () => {
   it("names no host, no runtime, no storage engine and no Git host", function* () {
     // The scan has to be able to fail, or an empty report says nothing. These
@@ -102,7 +112,10 @@ describe("the Git package's provider-neutral surface", () => {
       if (/^import\s/m.test(source) && moduleSpecifiers(parse(source).file).length === 0) {
         unread.push(path);
       }
-      const names = forbiddenNames(source);
+      const vocabulary = SEARCH_NAMES[path];
+      const names = forbiddenNames(
+        vocabulary === undefined ? source : source.replace(vocabulary, "Search"),
+      );
       if (names.length > 0) {
         crossings[path] = names;
       }
