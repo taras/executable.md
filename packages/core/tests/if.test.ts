@@ -21,7 +21,13 @@ import { Sample } from "../src/sample-api.ts";
 import { readTextFile } from "@effectionx/fs";
 import type { ComponentElement, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { asText } from "./helpers.ts";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
+
+const OWNER = "packages/core/tests/if.test.ts";
 
 interface IfRun {
   segments: Segment[];
@@ -517,6 +523,7 @@ describe("Tier IF — document execution", () => {
   });
 
   it("IF42: <If> selects the same branch from a restored binding on partial replay", function* () {
+    const stream = yield* useJournalStream("test.md");
     const REPLAY_DOC = [
       "```js eval",
       "const findings = ['stale doc'];",
@@ -533,7 +540,6 @@ describe("Tier IF — document execution", () => {
       "</If>",
     ].join("\n");
 
-    const stream = new InMemoryStream();
     yield* useStubFs({ "test.md": REPLAY_DOC });
     yield* useEchoExec();
 
@@ -630,11 +636,10 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
    * The stub records rather than wrapping for the same reason — a recorder
    * layered around a terminal handler never sees the call.
    */
-  function runProbe(condition: boolean): Operation<ProbeRun> {
+  function runProbe(condition: boolean, stream: InMemoryStream): Operation<ProbeRun> {
     return scoped(function* () {
       const reads: string[] = [];
       const commands: string[] = [];
-      const stream = yield* useJournalStream("test.md");
       const files: Record<string, string> = {
         "components/Probe.md": "PROBE_BODY",
         "test.md": PROBE_DOC(condition),
@@ -677,47 +682,87 @@ describe("Tier IF — the unselected branch reaches no external mechanism", () =
   // never runs. Its body is the observable: PROBE_BODY appears only when the
   // branch was selected. An expansion log would say the same thing less
   // directly, and only a claim could print one.
-  it("IF44: no component in the unselected branch expands", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.output).not.toContain("PROBE_BODY");
+  const name = "IF44: no component in the unselected branch expands";
+  it(name, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runProbe(false, skippedStream);
+        expect(skipped.output).not.toContain("PROBE_BODY");
 
-    const selected = yield* runProbe(true);
-    expect(selected.output).toContain("PROBE_BODY");
+        const selected = yield* runProbe(true, selectedStream);
+        expect(selected.output).toContain("PROBE_BODY");
+      },
+    );
   });
 
-  it("IF45: no component file is looked up or read for the unselected branch", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.reads).toEqual(["test.md"]);
+  const secondName = "IF45: no component file is looked up or read for the unselected branch";
+  it(secondName, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name: secondName, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runProbe(false, skippedStream);
+        expect(skipped.reads).toEqual(["test.md"]);
 
-    const selected = yield* runProbe(true);
-    expect(selected.reads).toContain("stat:components/Probe.md");
-    expect(selected.reads).toContain("components/Probe.md");
+        const selected = yield* runProbe(true, selectedStream);
+        expect(selected.reads).toContain("stat:components/Probe.md");
+        expect(selected.reads).toContain("components/Probe.md");
+      },
+    );
   });
 
-  it("IF46: the process runtime is never invoked for an unselected exec block", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.commands).toHaveLength(0);
+  const thirdName = "IF46: the process runtime is never invoked for an unselected exec block";
+  it(thirdName, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name: thirdName, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runProbe(false, skippedStream);
+        expect(skipped.commands).toHaveLength(0);
 
-    const selected = yield* runProbe(true);
-    expect(selected.commands.some((command) => command.includes("THEN_RAN"))).toBe(true);
+        const selected = yield* runProbe(true, selectedStream);
+        expect(selected.commands.some((command) => command.includes("THEN_RAN"))).toBe(true);
+      },
+    );
   });
 
-  it("IF47: an unselected branch writes no exec or eval durable event", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.events.filter(isExecYield)).toHaveLength(0);
-    expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
+  const fourthName = "IF47: an unselected branch writes no exec or eval durable event";
+  it(fourthName, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name: fourthName, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runProbe(false, skippedStream);
+        expect(skipped.events.filter(isExecYield)).toHaveLength(0);
+        expect(skipped.events.filter(isEvalYield)).toHaveLength(0);
 
-    const selected = yield* runProbe(true);
-    expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
-    expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
+        const selected = yield* runProbe(true, selectedStream);
+        expect(selected.events.filter(isExecYield).length).toBeGreaterThan(0);
+        expect(selected.events.filter(isEvalYield).length).toBeGreaterThan(0);
+      },
+    );
   });
 
-  it("IF48: an unselected branch creates no binding for later content", function* () {
-    const skipped = yield* runProbe(false);
-    expect(skipped.output).toContain("[{thenBinding}]");
+  const fifthName = "IF48: an unselected branch creates no binding for later content";
+  it(fifthName, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name: fifthName, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runProbe(false, skippedStream);
+        expect(skipped.output).toContain("[{thenBinding}]");
 
-    const selected = yield* runProbe(true);
-    expect(selected.output).toContain("[then]");
+        const selected = yield* runProbe(true, selectedStream);
+        expect(selected.output).toContain("[then]");
+      },
+    );
   });
 });
 
@@ -831,9 +876,13 @@ describe("Tier IF — error observation", () => {
  * to be observed, so this counts calls at the Sample Api.
  */
 describe("Tier IF — provider boundary", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
-  function runSampleProbe(condition: boolean): Operation<{ calls: string[]; output: string }> {
+  function runSampleProbe(
+    condition: boolean,
+    stream: InMemoryStream,
+  ): Operation<{ calls: string[]; output: string }> {
     return scoped(function* () {
       const calls: string[] = [];
       // Read the real component before the stub filesystem replaces it.
@@ -857,23 +906,29 @@ describe("Tier IF — provider boundary", () => {
         },
       });
 
-      const output = asText(
-        yield* collect(yield* execute({ path: "test.md", stream: new InMemoryStream() })),
-      );
+      const output = asText(yield* collect(yield* execute({ path: "test.md", stream })));
       return { calls, output };
     });
   }
 
-  it("IF54: an unselected branch makes zero provider calls", function* () {
-    const skipped = yield* runSampleProbe(false);
-    expect(skipped.calls).toEqual([]);
-    expect(skipped.output).toContain("alternative");
-    expect(skipped.output).not.toContain("[sampled]");
+  const name = "IF54: an unselected branch makes zero provider calls";
+  it(name, function* () {
+    const skippedStream = yield* useJournalStream("test.md");
+    yield* captureTestJournal(
+      { owner: OWNER, name, suite: "selected control" },
+      "test.md",
+      function* (selectedStream) {
+        const skipped = yield* runSampleProbe(false, skippedStream);
+        expect(skipped.calls).toEqual([]);
+        expect(skipped.output).toContain("alternative");
+        expect(skipped.output).not.toContain("[sampled]");
 
-    // The same probe records a call when the branch is selected, so the empty
-    // result above is non-execution rather than a probe that stopped working.
-    const selected = yield* runSampleProbe(true);
-    expect(selected.calls).toEqual(["BRANCH_PROMPT"]);
-    expect(selected.output).toContain("[sampled]");
+        // The same probe records a call when the branch is selected, so the empty
+        // result above is non-execution rather than a probe that stopped working.
+        const selected = yield* runSampleProbe(true, selectedStream);
+        expect(selected.calls).toEqual(["BRANCH_PROMPT"]);
+        expect(selected.output).toContain("[sampled]");
+      },
+    );
   });
 });

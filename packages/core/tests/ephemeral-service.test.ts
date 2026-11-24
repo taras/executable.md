@@ -17,7 +17,11 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { LiveBindingCollisionError } from "../src/live-env.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 
 const SAMPLE = `---
 meta:
@@ -112,7 +116,7 @@ describe("ephemeral eval and attached-service bindings", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("reconstructs live bindings without exposing them to durable consumers", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useStubFs({
       "doc.md": `<Provider><Sample /></Provider>\n`,
       "components/Provider.md": `---
@@ -164,7 +168,7 @@ yield* Sample.around({
   it("publishes the exact frozen attached-service endpoint only to ephemeral eval", function* () {
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 43_210 });
     const lifecycle = { starts: 0, stops: 0 };
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useServiceStub(endpoint, lifecycle);
     yield* useStubFs({
       "doc.md": `<Provider>
@@ -226,7 +230,7 @@ yield* Sample.around({
   it("completed replay starts neither attached services nor ephemeral eval", function* () {
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 41_001 });
     const lifecycle = { starts: 0, stops: 0 };
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     const files = {
       "doc.md": `\`\`\`bash service=server exec
 handshake-compatible-server
@@ -297,38 +301,47 @@ done
     ];
 
     for (const [modifier, expectedMessage, expectedStarts] of cases) {
-      const lifecycle = { starts: 0, stops: 0 };
-      const failure = yield* scoped(function* () {
-        yield* useServiceStub(
-          Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_001 + expectedStarts }),
-          lifecycle,
-        );
-        const prefix =
-          modifier === "service=taken"
-            ? "```js eval\nconst taken = 1;\n```\n\n"
-            : modifier === "service=server"
-              ? "```bash service=server exec\none\n```\n\n"
-              : "";
-        yield* useStubFs({
-          "doc.md": `<Output>\n\n${prefix}\`\`\`bash ${modifier} exec\ntwo\n\`\`\`\n\n</Output>\n`,
-        });
-
-        try {
-          yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() }));
-        } catch (error) {
-          return error;
-        }
-        return undefined;
-      });
-      expect(String(failure)).toContain(expectedMessage);
-      expect(lifecycle.starts).toBe(expectedStarts);
-      expect(lifecycle.stops).toBe(expectedStarts);
+      yield* captureTestJournal(
+        {
+          owner: "packages/core/tests/ephemeral-service.test.ts",
+          name: "validates attached-service binding collisions before spawning",
+          suite: modifier,
+        },
+        "doc.md",
+        function* (stream) {
+          const lifecycle = { starts: 0, stops: 0 };
+          const failure = yield* scoped(function* () {
+            yield* useServiceStub(
+              Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_001 + expectedStarts }),
+              lifecycle,
+            );
+            const prefix =
+              modifier === "service=taken"
+                ? "```js eval\nconst taken = 1;\n```\n\n"
+                : modifier === "service=server"
+                  ? "```bash service=server exec\none\n```\n\n"
+                  : "";
+            yield* useStubFs({
+              "doc.md": `<Output>\n\n${prefix}\`\`\`bash ${modifier} exec\ntwo\n\`\`\`\n\n</Output>\n`,
+            });
+            try {
+              yield* collect(yield* execute({ path: "doc.md", stream }));
+            } catch (error) {
+              return error;
+            }
+            return undefined;
+          });
+          expect(String(failure)).toContain(expectedMessage);
+          expect(lifecycle.starts).toBe(expectedStarts);
+          expect(lifecycle.stops).toBe(expectedStarts);
+        },
+      );
     }
   });
 
   it("prints a live durable-export collision, skips its Yield, and continues durably", function* () {
     const lifecycle = { starts: 0, stops: 0 };
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     const executions: string[] = [];
     yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_100 }), lifecycle);
     yield* useTrackedExec(executions);
@@ -376,7 +389,7 @@ echo after-collision
     const endpoint = Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_101 });
     const lifecycle = { starts: 0, stops: 0 };
     const executions: string[] = [];
-    const live = new InMemoryStream();
+    const live = yield* useJournalStream("doc.md");
     yield* useServiceStub(endpoint, lifecycle);
     yield* useTrackedExec(executions);
     yield* useStubFs({
@@ -432,7 +445,7 @@ echo after-collision
   it("rejects incompatible retained component history through divergence", function* () {
     const lifecycle = { starts: 0, stops: 0 };
     const executions: string[] = [];
-    const history = new InMemoryStream();
+    const history = yield* useJournalStream("doc.md");
     yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_102 }), lifecycle);
     yield* useTrackedExec(executions);
     yield* useStubFs({
@@ -474,7 +487,7 @@ echo after-provider
 
   it("rejects incompatible retained history when collision validation terminates the root", function* () {
     const lifecycle = { starts: 0, stops: 0 };
-    const history = new InMemoryStream();
+    const history = yield* useJournalStream("doc.md");
     yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_103 }), lifecycle);
     yield* useStubFs({
       "doc.md": `<Output><ChangingProvider /></Output>`,
@@ -516,7 +529,7 @@ echo after-provider
   });
 
   it("rejects ephemeral exports that collide with durable names before execution", function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream("doc.md");
     yield* useStubFs({
       "doc.md": `<Output>
 
