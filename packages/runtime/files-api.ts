@@ -144,7 +144,11 @@ export function createFilesApi(
         terminal.readTextFile,
         (layer) => layer.readTextFile,
         function* (layers, [input], invoke) {
-          if (input.transform !== undefined && !supportsTransform(layers)) {
+          if (
+            input.transform === undefined
+              ? input.excludeGitMetadata === true
+              : !supportsTransform(layers)
+          ) {
             return unsupportedTransform();
           }
           return yield* invoke();

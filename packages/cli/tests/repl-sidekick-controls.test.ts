@@ -63,6 +63,7 @@ import {
   execute,
   collect,
   useTempFileCompiler,
+  registerComponents,
 } from "@executablemd/core";
 import { Agent } from "@executablemd/agent/api";
 import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
@@ -3195,6 +3196,36 @@ function respond(request) {
     const tail = "outside synthetic 1483";
     yield* writeTextFile(join(project, "bounded.txt"), marker + "\n" + "x".repeat(12000) + tail);
     yield* useHostFiles();
+    const flagSentinel = "synthetic flag-only text";
+    yield* writeTextFile(join(project, "flag-only.txt"), flagSentinel);
+    let rejected = false;
+    yield* registerComponents([
+      {
+        name: "FlagOnlyRead",
+        origin: "test:flag-only-read",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          yield* API.Files.around({
+            readTextFile() {
+              throw new Error("Flag-only request reached Files middleware");
+            },
+          });
+          yield* API.Fs.around({
+            readTextFile() {
+              throw new Error("Flag-only request reached the physical reader");
+            },
+          });
+          const result = yield* API.Files.operations.readTextFile({
+            cwd: project,
+            path: "flag-only.txt",
+            excludeGitMetadata: true,
+          });
+          expect(result.ok).toBe(false);
+          rejected = true;
+          return "";
+        },
+      },
+    ]);
     const stream = new InMemoryStream();
     const session = answered(
       yield* openReplSession({ projectCwd: project, execution: { id: "bounded", stream } }),
@@ -3202,6 +3233,7 @@ function respond(request) {
     const submitted = answered(
       yield* session.submit(
         [
+          "<FlagOnlyRead />",
           '<File path="bounded.txt" lines="1" as="window" />',
           '<Search query="retained synthetic 1483" as="page" />',
           "<Output><Json value={{window, page}} /></Output>",
@@ -3213,6 +3245,9 @@ function respond(request) {
     expect(journal.match(/"type":"file-window"/g)).toHaveLength(1);
     expect(journal.match(/"type":"workspace-search"/g)).toHaveLength(1);
     expect(journal).toContain(marker);
+    expect(rejected).toBe(true);
+    expect(journal).not.toContain(flagSentinel);
+    expect(journal).not.toContain('"type":"file-read"');
     expect(journal).not.toContain(tail);
     expect(journal).not.toContain("repl_repository_local");
   });

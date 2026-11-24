@@ -9970,7 +9970,9 @@ text before returning a bounded value. Bounded File and file search use the
 ordinary `readTextFile` operation with a callable `transform` on the request.
 The provider checks placement and access before reading. It applies the
 transform to the text from that read and returns only its projection.
-A provider without transform support refuses before I/O. File search
+A request that sets `excludeGitMetadata: true` without a transform refuses
+before reaching a recorder or provider. A provider without transform support
+refuses before I/O. File search
 checks support before enumeration, including in an empty directory.
 
 The enclosing bounded File or Search effect owns the retained

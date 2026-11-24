@@ -253,7 +253,7 @@ export interface FilePathInput {
 export interface FileReadInput extends FilePathInput {
   /** Transform the file’s text before returning it to the caller. Omit to return the full text. */
   readonly transform?: (text: string) => Operation<Result<string>>;
-  /** Exclude Git metadata during provider path authorization. */
+  /** Exclude Git metadata during provider path authorization of a transformed read. */
   readonly excludeGitMetadata?: boolean;
 }
 
