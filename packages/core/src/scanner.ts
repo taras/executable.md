@@ -466,10 +466,11 @@ function scanTrackedBody(
         textStart = pos;
         continue;
       }
+      const delimiterEnd = text.startsWith("\r\n", lineEnd - 1) ? lineEnd - 1 : lineEnd;
       const alignedClose =
         closingTag !== undefined &&
         body.delimiterIndent !== undefined &&
-        text.slice(rawLine, lineEnd) === body.delimiterIndent + closingTag;
+        text.slice(rawLine, delimiterEnd) === body.delimiterIndent + closingTag;
       if (facts.code && !alignedClose && /[^ \t]/.test(line)) {
         pos = afterLine(pos);
         continue;
@@ -729,6 +730,9 @@ function lineEndingAfter(text: string, pos: number): { end: number; newline: boo
   }
   if (at >= text.length) {
     return { end: at, newline: false };
+  }
+  if (text.startsWith("\r\n", at)) {
+    return { end: at + 2, newline: true };
   }
   return text[at] === "\n" ? { end: at + 1, newline: true } : undefined;
 }

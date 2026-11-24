@@ -374,8 +374,10 @@ trade-offs.
 
 **Blocks and levels.** A paired element is a **block** when its opening tag is
 on lines of its own: only spaces and tabs precede the `<` on its line, and only
-spaces and tabs follow the final `>` before a newline. The opening tag may span
-several lines; its attributes are part of the delimiter. A block's body starts
+spaces and tabs follow the final `>` before a newline. LF and CRLF both
+terminate a delimiter line. The scanner counts offsets in the original source
+and preserves line endings in the body. The opening tag may span several
+lines; its attributes are part of the delimiter. A block's body starts
 on the line after the opening tag, one level deeper than the block. Every other
 paired element is **inline**: its content starts right after the opening tag,
 at the level of the text around it. The document body, and any text scanned on
