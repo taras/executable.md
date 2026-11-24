@@ -91,10 +91,18 @@ describe("Tier WFK — forkability and fork selection", () => {
       { id: "e2", event: ROOT_IMPORT },
       { id: "e3", event: retained("workspace_file", "write:x:/notes.md"), root: ROOT_B },
       { id: "e4", event: retained("exec", "exec:echo hi"), root: ROOT_B },
-      { id: "e5", event: closed("root"), root: ROOT_B },
+      { id: "e5", event: retained("github_search", "search:octo/project"), root: ROOT_B },
+      { id: "e6", event: closed("root"), root: ROOT_B },
     ]);
 
-    expect(forkability.map((entry) => entry.forkable)).toEqual([true, true, true, true, true]);
+    expect(forkability.map((entry) => entry.forkable)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
     // Empty exactly when forkable, which is the shape the CLI contract states.
     expect(forkability.every((entry) => entry.blockers.length === 0)).toBe(true);
   });

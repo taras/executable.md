@@ -39,6 +39,7 @@
  * first operation that needs it.
  */
 
+import { useGitHubSearch } from "../composition/github-search.ts";
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 
@@ -595,6 +596,16 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   // not the platform. Naming it here is not building one: it is a factory the
   // adapter calls if and when a request turns out to be its own.
   yield* useGitHubIssues({ host: denoGitHubSource, ...options.gitHubIssues });
+  yield* useGitHubSearch(
+    { host: denoGitHubSource, ...options.gitHubPullRequests },
+    // deno-lint-ignore require-yield
+    function* (selection) {
+      return selections.authenticate(
+        selection,
+        () => new RepositorySelectionError("<GitHub.Search>"),
+      ).checkout.origin;
+    },
+  );
   yield* useGitHubPullRequestReads({ host: denoGitHubSource, ...options.gitHubPullRequests });
 
   yield* IssueOperations.around(

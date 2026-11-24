@@ -84,10 +84,10 @@ const INHERITABLE_EFFECTS: ReadonlySet<string> = new Set([
   "eval",
   "exec",
   "fetch",
-  // A pull-request evidence read, for the same reason `fetch` is here: it
-  // changed nothing at the host, and what the record holds is the normalized
-  // collection itself. A fork consumes it and asks the provider nothing.
+  // GitHub reads change nothing at the host. A fork restores the retained
+  // evidence or search page without asking the provider.
   "pull_request_read",
+  "github_search",
   "elicit",
   "loop",
   "loop_iteration",

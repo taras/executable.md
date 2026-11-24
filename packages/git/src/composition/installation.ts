@@ -1,8 +1,8 @@
 /**
- * The sixteen repository-composition components, declared once for every host.
+ * The repository-composition components, declared once for every host.
  *
  * Repository, Worktree, the four Git operations, the four Git reads,
- * PullRequest and its three evidence reads, IssueTracker and Issue are ordinary
+ * PullRequest and its three evidence reads, GitHub.Search, IssueTracker and Issue are ordinary
  * registered defaults — not reserved and not structural — so a
  * repository-local component may shadow one for its own scope. `<Dir>` is not
  * among them: canonical core reserves that name
@@ -11,20 +11,20 @@
  *
  * ## One registry, and the policy an execution attaches underneath it
  *
- * Ten of the sixteen reach nothing beyond the selected checkout: Repository and
+ * Ten components reach nothing beyond the selected checkout: Repository and
  * Worktree choose one, Git.Switch, Git.Add and Git.Commit change one, the four
  * Git reads and Git.Commit's read form observe one, and IssueTracker names a
  * destination.
  *
- * The other six — `<Git.Push />`, `<PullRequest>`, its three evidence reads and
- * `<Issue>` — reach something no local transaction encloses. Each of those has
+ * The external operations — `<Git.Push />`, `<PullRequest>`, its three evidence reads,
+ * `<Issue>` and `<GitHub.Search>` — reach something no local transaction encloses. Each of those has
  * exactly one implementation, here, and it asks a semantic feature operation
  * for its work. How that operation is performed, retained and replayed is the
  * host's: an ordinary run and a workflow run forward to the public feature
  * Apis, a runtime with no provider keeps each Api's own refusing default, and a
  * REPL entry retains and reconciles beneath them.
  *
- * All sixteen are registered here, for every command that carries this
+ * All are registered here, for every command that carries this
  * vocabulary, because this is what says the names exist: it is what `xmd
  * syntax` describes, what validation resolves against and what an execution
  * inherits. A host that retains one of these operations does not register a
@@ -75,6 +75,7 @@ import {
   PULL_REQUEST_READ_KINDS,
   pullRequestReadRegistration,
 } from "./components/PullRequestReads.ts";
+import { githubSearchRegistration } from "./components/GitHubSearch.ts";
 import { issueRegistration } from "./components/Issue.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 import { changesForm, diffForm, fileForm, filesForm } from "./components/GitReads.ts";
@@ -255,7 +256,7 @@ const TRACKER: ComponentRegistration = {
 };
 
 /**
- * The six operations no local transaction encloses, as ordinary registrations.
+ * The operations no local transaction encloses, as ordinary registrations.
  *
  * The same bodies an owning execution declares, over the public feature Apis.
  * Registered, because this is where the names come from, and because an
@@ -267,10 +268,11 @@ const EXTERNAL_OPERATIONS: readonly ComponentRegistration[] = [
   pushRegistration(Git.operations.push),
   pullRequestRegistration,
   ...PULL_REQUEST_READ_KINDS.map(pullRequestReadRegistration),
+  githubSearchRegistration,
   issueRegistration(IssueOperations.operations),
 ];
 
-/** All sixteen, in catalog order. */
+/** All registrations, in catalog order. */
 export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = Object.freeze([
   ...SELECTIONS,
   ...LOCAL_OPERATIONS,

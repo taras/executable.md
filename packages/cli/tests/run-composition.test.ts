@@ -4,11 +4,11 @@
  * Three requirements, and they are about opposite things. Describing the vocabulary
  * must reach nothing; one runtime *operates* it; and one only *describes* it.
  * All three have to be true at once, so a document written for `xmd run`
- * resolves the same sixteen names everywhere, and on a runtime that operates
+ * resolves the same seventeen names everywhere, and on a runtime that operates
  * none of them every one reports an absent provider before a lock, a
  * credential, a subprocess or a request exists. `<Dir>` is canonical core's
  * rather than the Plugin's, so it is here for the opposite reason: it keeps
- * working where every one of those sixteen refuses.
+ * working where every one of those seventeen refuses.
  *
  * The declarations are the same array in every case, which is why there is no
  * fourth thing to keep in agreement.
@@ -68,7 +68,7 @@ const OPERATIONS: readonly { readonly name: string; readonly source: string }[] 
 ];
 
 /**
- * The sixteen names that need a provider, as a document writes them.
+ * The seventeen names that need a provider, as a document writes them.
  *
  * #643 settled twelve; #940 added the four reads beside the four transitions.
  */
@@ -87,6 +87,7 @@ const COMPOSITION_NAMES = [
   "PullRequest.Reviews",
   "PullRequest.Comments",
   "PullRequest.Checks",
+  "GitHub.Search",
   "IssueTracker",
   "Issue",
 ] as const;
@@ -207,11 +208,11 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
   beforeEach(journalBeforeEach("packages/cli/tests/run-composition.test.ts"));
-  it("registers the same sixteen declarations the syntax catalog describes", function* () {
+  it("registers the same seventeen declarations the syntax catalog describes", function* () {
     // The array itself, rather than a second list: the Plugin's own
     // registration and the catalog both consume this one, so there is nothing
     // for a runtime to disagree about.
-    expect(COMPOSITION_REGISTRATIONS).toHaveLength(16);
+    expect(COMPOSITION_REGISTRATIONS).toHaveLength(17);
     expect([...COMPOSITION_REGISTRATIONS].map((registration) => registration.name).sort()).toEqual(
       [...COMPOSITION_NAMES].sort(),
     );

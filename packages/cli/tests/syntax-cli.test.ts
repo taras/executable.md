@@ -165,6 +165,7 @@ const COMPOSITION_NAMES = [
   "PullRequest.Reviews",
   "PullRequest.Comments",
   "PullRequest.Checks",
+  "GitHub.Search",
   "IssueTracker",
   "Issue",
 ] as const;

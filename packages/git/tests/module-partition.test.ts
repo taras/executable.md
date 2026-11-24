@@ -48,6 +48,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/composition/api.ts",
   "src/composition/commit-page.ts",
   "src/composition/components/GitAdd.ts",
+  "src/composition/components/GitHubSearch.ts",
   "src/composition/components/GitCommit.ts",
   "src/composition/components/GitPush.ts",
   "src/composition/components/GitSwitch.ts",
@@ -107,8 +108,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
  *
  * Every one of these is GitHub and nothing else. None of them may reach the
  * platform: what they are handed is a `GitHubAccess` or a factory for one, and
- * what they answer with is a normalized value the provider-neutral contracts
- * above them already describe.
+ * they return the values the composition contracts describe.
  */
 const INTERNAL: readonly string[] = [
   "gitHubPullRequestAccess",
@@ -121,6 +121,7 @@ const INTERNAL: readonly string[] = [
 
 const GITHUB_IMPLEMENTATION: readonly string[] = [
   "src/deno/composition/github.ts",
+  "src/deno/composition/github-search.ts",
   "src/deno/composition/github-pull-request.ts",
   "src/deno/composition/pull-request-configuration.ts",
   "src/deno/composition/pull-request-evidence.ts",

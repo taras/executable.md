@@ -3304,10 +3304,10 @@ completes its teardown and commits no record.
 
 #### The run profile's repository declarations
 
-Sixteen names — `Repository`, `Worktree`, `Git.Switch`, `Git.Add`,
+The names `Repository`, `Worktree`, `Git.Switch`, `Git.Add`,
 `Git.Commit`, `Git.Push`, `Git.Files`, `Git.Changes`, `Git.Diff`, `Git.File`,
 `PullRequest`, `PullRequest.Reviews`, `PullRequest.Comments`,
-`PullRequest.Checks`, `IssueTracker` and `Issue` — are ordinary
+`PullRequest.Checks`, `GitHub.Search`, `IssueTracker` and `Issue` are ordinary
 [registered defaults](#registration-and-resolution-order). A repository-local
 Markdown or TypeScript component of any of those names is chosen ahead of them,
 for its own scope alone. `Dir` is a separate protected core component and is
@@ -3321,13 +3321,13 @@ admission rather than installing it directly, and so declares these names
 through it, as specified in
 [specs/repl-spec.md](./repl-spec.md#selected-plugin-session-services).
 
-Six of them reach something no local transaction encloses — `Git.Push`,
-`PullRequest`, its three evidence reads and `Issue` — and each has exactly one
+Some of them reach something no local transaction encloses — `Git.Push`,
+`PullRequest`, its three evidence reads, `GitHub.Search` and `Issue` — and each has exactly one
 implementation, which asks a semantic feature operation for its work and
-receives nothing else. Every command that carries this vocabulary registers all
-sixteen, `repl` included: that registry is what says which names exist, and it is
+receives nothing else. Every command that carries this vocabulary registers them all,
+`repl` included: that registry is what says which names exist, and it is
 what a run, `xmd syntax`, `xmd plan` and a REPL entry's preflight all read. An
-execution that owns a retained boundary over one of those six operations,
+execution that owns a retained boundary over one of those operations,
 authenticated per invocation, declares that same name again in its own scope
 with its own policy under it, where a nearer declaration shadows the registered
 default. The names, props, forms, return contracts, origins and prose are the
@@ -12300,7 +12300,7 @@ leave the default in place. The shared command path reads the value and imports
 no adapter. What the Context holds is inert code and configuration, with no
 provider, lease, session or identity in it: the native variant delegates the
 neutral Plugin's whole install and adds ordinary initialization middleware for a
-run, so every runtime registers the same sixteen declarations either way, `xmd
+run, so every runtime registers the same seventeen declarations either way, `xmd
 syntax` describes one language everywhere, and a runtime that operates none of
 it reports an absent provider before a lock, a credential, a subprocess or a
 request exists (§5.3, §8.1). `<Dir>` is canonical core's rather than one of
@@ -15598,7 +15598,7 @@ user's own `~/.xmd/repositories`.
 
 | # | Test | Verify |
 |---|------|--------|
-| ORC1 | One declaration surface | All sixteen names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; `<Dir>` is described once, with canonical core's own origin; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC1 | One declaration surface | All seventeen names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; `<Dir>` is described once, with canonical core's own origin; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
 | ORC2 | Runtime declaration parity | The same symbols assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
 | ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
 | ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |

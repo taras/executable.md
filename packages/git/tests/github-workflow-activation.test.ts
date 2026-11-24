@@ -28,10 +28,26 @@ import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { InMemoryStream } from "@executablemd/durable-streams";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import type { GitHubSource } from "../src/deno/composition/github.ts";
+import {
+  gitHubSource,
+  type GitHubHttpRequest,
+  type GitHubHttpResponse,
+  type GitHubSource,
+} from "../src/deno/composition/github.ts";
+import {
+  runOrdinaryDocument,
+  raised,
+  rewritingHost,
+  useNamedOriginCheckout,
+} from "./support/run-composition.ts";
+import { useBareRemote } from "./support/git-remotes.ts";
+import { dropRootClose, REMOTE } from "./support/replay.ts";
 import { runWorkflowDocument } from "./support/composition.ts";
 import {
   BUNDLE_SOURCE,
+  createRun,
+  runPath,
+  withStorage,
   sourceBundleCreation,
   useStorageRoot,
   withExecutorRun,
@@ -143,6 +159,258 @@ describe("the bundled profile, assembled", () => {
           expect(yield* begun.database.journal.readAll()).not.toEqual([]);
         },
       );
+    });
+  });
+});
+
+const REPOSITORY = "https://github.com/octo/project";
+const ENDPOINT = "https://api.github.com";
+const QUERY = 'is:pr is:open label:"help wanted"';
+const ITEM = {
+  html_url: `${REPOSITORY}/pull/7`,
+  repository_url: `${ENDPOINT}/repos/octo/project`,
+  closed_at: null,
+  pull_request: { merged_at: null },
+  future_field: { values: [null, { source_id: 43 }] },
+};
+const FIRST_PAGE = {
+  total_count: 2,
+  incomplete_results: false,
+  search_type: "hybrid",
+  items: [ITEM],
+};
+
+function searchProvider(
+  allowed = [REPOSITORY],
+  answer?: () => GitHubHttpResponse,
+  token: () => string | undefined = () => "private-test-token",
+) {
+  const requests: GitHubHttpRequest[] = [];
+  const credentials: string[] = [];
+  const access = gitHubSource({
+    endpoint: ENDPOINT,
+    // deno-lint-ignore require-yield
+    *token() {
+      credentials.push("token");
+      return token();
+    },
+    // deno-lint-ignore require-yield
+    *send(request) {
+      requests.push(request);
+      if (answer !== undefined) {
+        return answer();
+      }
+      const url = new URL(request.url);
+      if (url.pathname === "/repos/octo/project/pulls/7/reviews") {
+        return { status: 200, body: "[]" };
+      }
+      const args = url.searchParams;
+      const page = args.get("page");
+      const beyond = page === "10";
+      return {
+        status: 200,
+        body: JSON.stringify(
+          page === "1"
+            ? FIRST_PAGE
+            : {
+                total_count: beyond ? 1500 : 2,
+                incomplete_results: true,
+                items: [],
+              },
+        ),
+        ...(page === "2"
+          ? {}
+          : {
+              link: `<${ENDPOINT}/search/issues?page=${beyond ? 11 : 2}>; rel="next"`,
+            }),
+      };
+    },
+  });
+  return { requests, credentials, options: { access, configuration: { allowed } } };
+}
+
+describe("GitHub repository search", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
+  it("binds original pages, projects URLs and exposes only reusable continuation arguments", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const provider = searchProvider();
+    const output = yield* runOrdinaryDocument(
+      [
+        `<GitHub.Search query={${JSON.stringify(QUERY)}} sort="created" perPage={1} as="first" />`,
+        '<Query value={first.value} yq="[.items[].html_url]" as="urls" />',
+        '<PullRequest.Reviews url={urls[0]} as="reviews" />',
+        '<GitHub.Search query={first.next.query} sort={first.next.sort} order={first.next.order} page={first.next.page} perPage={first.next.perPage} as="second" />',
+        '<GitHub.Search query="is:issue" page={10} perPage={100} as="ceiling" />',
+        "",
+        "<Json value={{ first, second, ceiling, urls, reviews }} />",
+      ].join("\n"),
+      {
+        cwd: checkout.root,
+        root,
+        gitHubPullRequests: provider.options,
+      },
+    );
+    expect(JSON.parse(String(output))).toEqual({
+      first: {
+        value: FIRST_PAGE,
+        next: { query: QUERY, sort: "created", order: "desc", page: 2, perPage: 1 },
+      },
+      second: { value: { total_count: 2, incomplete_results: true, items: [] }, next: null },
+      ceiling: { value: { total_count: 1500, incomplete_results: true, items: [] }, next: null },
+      urls: [ITEM.html_url],
+      reviews: [],
+    });
+    const requests = provider.requests.map(({ url }) => new URL(url));
+    expect(requests.map((url) => url.pathname)).toEqual([
+      "/search/issues",
+      "/repos/octo/project/pulls/7/reviews",
+      "/search/issues",
+      "/search/issues",
+    ]);
+    expect(Object.fromEntries(requests[0]?.searchParams ?? [])).toEqual({
+      q: `repo:octo/project ${QUERY}`,
+      page: "1",
+      per_page: "1",
+      sort: "created",
+      order: "desc",
+    });
+    expect(requests[2]?.searchParams.get("page")).toBe("2");
+  });
+
+  it("refuses invalid arguments and unauthorized repository contexts before credentials", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const local = yield* useNamedOriginCheckout(remote, "https://example.com/octo/project");
+    const root = yield* useTempDirectory("github-search");
+    const provider = searchProvider(["https://github.com/octo/other"]);
+    const outside = yield* useTempDirectory("github-search-outside");
+    for (const [cwd, invocation, diagnostic] of [
+      [checkout.root, 'query="is:pr org:other"', "scope qualifiers"],
+      [checkout.root, 'query="is:pr -RePo:other/project"', "scope qualifiers"],
+      [checkout.root, 'query="is:pr user:other"', "scope qualifiers"],
+      [checkout.root, 'query="is:issue is:pr"', "exactly one kind"],
+      [checkout.root, 'query="is:open"', "exactly one kind"],
+      [checkout.root, 'query="is:pr" page={11} perPage={100}', "first 1,000"],
+      [checkout.root, 'query="is:pr"', "has not authorized"],
+      [local.root, 'query="is:pr"', "does not name a GitHub repository"],
+      [outside, 'query="is:pr"', "repository"],
+    ]) {
+      const error = yield* raised(
+        runOrdinaryDocument(`<GitHub.Search ${invocation} as="page" />`, {
+          cwd: cwd ?? outside,
+          root,
+          gitHubPullRequests: provider.options,
+        }),
+      );
+      expect(String(error)).toContain(diagnostic ?? "");
+    }
+    expect(provider.credentials).toEqual([]);
+    expect(provider.requests).toEqual([]);
+  });
+
+  it("defaults to best match and reads a fresh page on another ordinary run", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    let count = 0;
+    const provider = searchProvider([REPOSITORY], () => ({
+      status: 200,
+      body: JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ ...ITEM, title: `observation ${++count}` }],
+      }),
+    }));
+    const doc = '<GitHub.Search query="is:pr" as="page" />\n<Json value={page} />';
+    const options = { cwd: checkout.root, root, gitHubPullRequests: provider.options };
+    const first = yield* runOrdinaryDocument(doc, options);
+    const second = yield* runOrdinaryDocument(doc, options);
+    expect(String(first)).toContain("observation 1");
+    expect(String(second)).toContain("observation 2");
+    expect(provider.credentials).toEqual(["token", "token"]);
+    expect(
+      provider.requests.map(({ url }) => Object.fromEntries(new URL(url).searchParams)),
+    ).toEqual([
+      { q: "repo:octo/project is:pr", page: "1", per_page: "20" },
+      { q: "repo:octo/project is:pr", page: "1", per_page: "20" },
+    ]);
+  });
+
+  it("refuses missing credentials, provider errors, malformed pages and another repository's items", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useNamedOriginCheckout(remote, REPOSITORY);
+    const root = yield* useTempDirectory("github-search");
+    const doc = '<GitHub.Search query="is:pr" as="page" />';
+    const unavailable = searchProvider([REPOSITORY], undefined, () => undefined);
+    const error = yield* raised(
+      runOrdinaryDocument(doc, {
+        cwd: checkout.root,
+        root,
+        gitHubPullRequests: unavailable.options,
+      }),
+    );
+    expect(String(error)).toContain("requires a credential");
+    expect(unavailable.requests).toHaveLength(0);
+
+    for (const [response, diagnostic] of [
+      [{ status: 429, body: "private-provider-detail" }, "did not return a search page"],
+      [{ status: 200, body: "{}" }, "invalid search page"],
+      [
+        {
+          status: 200,
+          body: JSON.stringify({
+            total_count: 1,
+            incomplete_results: false,
+            items: [{ ...ITEM, repository_url: `${ENDPOINT}/repos/octo/other` }],
+          }),
+        },
+        "invalid search page",
+      ],
+    ] satisfies [GitHubHttpResponse, string][]) {
+      const provider = searchProvider([REPOSITORY], () => response);
+      const failure = yield* raised(
+        runOrdinaryDocument(doc, {
+          cwd: checkout.root,
+          root,
+          gitHubPullRequests: provider.options,
+        }),
+      );
+      expect(String(failure)).toContain(diagnostic);
+      expect(String(failure)).not.toContain("private-provider-detail");
+      expect(provider.requests).toHaveLength(1);
+    }
+  });
+
+  it("restores a completed search during partial workflow replay without a new credential", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useStorageRoot();
+    const provider = searchProvider();
+    const source = [
+      `<Repository name="search" url="${REPOSITORY}">`,
+      '<GitHub.Search query="is:pr" perPage={1} as="page" />',
+      "",
+      "<Json value={page.value} />",
+      "</Repository>",
+    ].join("\n");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const options = {
+        composition: { host: rewritingHost(REPOSITORY, remote.locator) },
+        gitHubPullRequests: provider.options,
+      };
+      const first = yield* runWorkflowDocument(database, source, options);
+      expect(String(first)).toContain('"future_field"');
+      expect(provider.requests).toHaveLength(1);
+      dropRootClose(runPath(root, "release-1.4"));
+      expect(yield* runWorkflowDocument(database, source, options)).toEqual(first);
+      expect(provider.credentials).toEqual(["token"]);
+      expect(provider.requests).toHaveLength(1);
+      const journal = JSON.stringify(yield* database.journal.readAll());
+      expect(journal).not.toContain("private-test-token");
+      expect(journal).not.toContain(`${ENDPOINT}/search/issues?page=2`);
     });
   });
 });

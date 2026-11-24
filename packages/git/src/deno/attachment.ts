@@ -18,7 +18,16 @@
  */
 
 import type { Operation } from "effection";
-import type { WorkflowWorkspaceAttachment } from "@executablemd/workflow/deno";
+import {
+  readWorkflowWorkspace,
+  type WorkflowWorkspaceAttachment,
+} from "@executablemd/workflow/deno";
+import { sameRepositoryRecord } from "../composition/records.ts";
+import { SEARCH_ELEMENT } from "../composition/components/GitHubSearch.ts";
+import { GitOperationAdmissionError } from "../composition/errors.ts";
+import { agreedStored } from "./composition/identity.ts";
+import { useGitHubSearch } from "./composition/github-search.ts";
+import { readWorkspaceMetadata } from "./repositories.ts";
 import { useRetainedIssueOperations } from "../issue/effect.ts";
 import { denoRepositoryHost } from "./composition/host.ts";
 import { denoGitHubSource } from "./composition/github-host.ts";
@@ -116,6 +125,29 @@ export function gitWorkspaceAttachment(
     // Durability for an admitted read, installed beside the transport rather
     // than above it: the adapter admits, this retains.
     yield* useRetainedPullRequestReads();
+    yield* useGitHubSearch(
+      { host: denoGitHubSource, ...options.gitHubPullRequests },
+      function* (selection) {
+        const refuse = () =>
+          new GitOperationAdmissionError(
+            SEARCH_ELEMENT,
+            "the Repository in scope is not an authenticated selection.",
+          );
+        const record = selections.authenticate(selection, refuse);
+        // deno-lint-ignore require-yield
+        const result = yield* readWorkflowWorkspace(database, {}, function* (workspace) {
+          const stored = readWorkspaceMetadata(workspace.storage).readRepository(record.name);
+          if (stored === undefined || !sameRepositoryRecord(stored.record, record)) {
+            throw refuse();
+          }
+          return agreedStored(stored, SEARCH_ELEMENT).locator;
+        });
+        if (!result.ok) {
+          throw result.error;
+        }
+        return result.value;
+      },
+    );
     // Ordinary middleware, installed the way the Issue adapter is: it owns
     // the URLs it recognizes and delegates the rest.
     // Installed on every live or partial attachment, configured or not: the
