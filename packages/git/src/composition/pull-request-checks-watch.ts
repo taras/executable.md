@@ -12,10 +12,10 @@
  *
  * ## The head is pinned
  *
- * The first successful collection names the head it was read at, and that head
- * is the one the watch reports on. Every later collection is held to it, and a
- * collection is accepted only after a separate read of the pull request still
- * names it. A different head ends the watch as `head-changed` even when the
+ * The first successful read of the pull request names the head, and that head is
+ * the one the watch reports on, however many collections fail after it. The
+ * head is read again before every later collection and once more before a
+ * collection is accepted; the collection itself must be at the pinned head too. A different head ends the watch as `head-changed` even when the
  * collection just read would have settled it, because that collection describes
  * a revision nobody asked about.
  *
@@ -266,14 +266,14 @@ export interface CheckWatchReads {
 export interface CheckWatchState {
   /** When the budget ends, in the clock's milliseconds. */
   readonly deadline: number;
-  /** The pinned head, once a collection has named one. */
+  /** The pinned head, once the pull request has named one. */
   headSha: string | null;
   /** The last complete collection accepted for the pinned head. */
   checks: readonly CheckEvidence[];
   /** Whether the latest read failed and no later one has succeeded. */
   failing: boolean;
-  /** A collection read at the pinned head and not yet verified against it. */
-  unverified?: readonly CheckEvidence[];
+  /** The pinned head was just observed, so the next collection needs no fresh look. */
+  observed?: boolean;
   /** The last progress line written, so a repeated one is suppressed. */
   shown?: string;
 }
@@ -286,11 +286,12 @@ export function checkWatchState(deadline: number): CheckWatchState {
 }
 
 /**
- * Poll until a collection names the head, or the budget ends.
+ * Poll until the pull request names its head, or the budget ends.
  *
  * The first half of a watch, separated so a host can retain the pinned head
- * before it continues: an unfinished watch resumes with the head it pinned
- * rather than whatever the pull request names now.
+ * before any collection is read: a collection that fails afterwards, a retry,
+ * and an unfinished watch that resumes all keep the head first observed rather
+ * than whatever the pull request names by then.
  */
 export function* pinCheckHead(
   state: CheckWatchState,
@@ -299,13 +300,13 @@ export function* pinCheckHead(
 ): Operation<void> {
   yield* withinDeadline(state, function* (): Operation<void> {
     while (state.headSha === null) {
-      const collected = yield* collection(reads);
-      if (!collected.ok) {
+      const head = yield* observedHead(reads);
+      if (!head.ok) {
         yield* failed(state, progress);
         continue;
       }
-      state.headSha = collected.value.headSha;
-      state.unverified = collected.value.items;
+      state.headSha = head.value;
+      state.observed = true;
     }
   });
 }
@@ -328,22 +329,37 @@ export function* settleChecks(
   let ended: CheckWatchResult | undefined;
   yield* withinDeadline(state, function* (): Operation<void> {
     while (ended === undefined) {
-      const items = state.unverified ?? (yield* pinnedCollection(reads, pinned));
-      delete state.unverified;
-      if (items === "moved") {
+      // The head is looked at before every collection, so a move is reported
+      // without paging the new head's checks — even when that paging would fail
+      // or never finish.
+      if (state.observed !== true) {
+        const head = yield* observedHead(reads);
+        if (!head.ok) {
+          yield* failed(state, progress);
+          continue;
+        }
+        if (head.value !== pinned) {
+          ended = incomplete(state, "head-changed");
+          continue;
+        }
+      }
+      delete state.observed;
+      const collected = yield* collection(reads);
+      if (!collected.ok) {
+        yield* failed(state, progress);
+        continue;
+      }
+      if (collected.value.headSha !== pinned) {
         ended = incomplete(state, "head-changed");
         continue;
       }
-      if (items === undefined) {
+      const items = collected.value.items;
+      const verified = yield* observedHead(reads);
+      if (!verified.ok) {
         yield* failed(state, progress);
         continue;
       }
-      const verified = yield* reads.read("details");
-      if (!verified.ok || verified.value.kind !== "details") {
-        yield* failed(state, progress);
-        continue;
-      }
-      if (verified.value.details.headSha !== pinned) {
+      if (verified.value !== pinned) {
         ended = incomplete(state, "head-changed");
         continue;
       }
@@ -361,19 +377,18 @@ export function* settleChecks(
   return ended ?? incomplete(state, state.failing ? "read-error" : "timeout");
 }
 
-/** One collection at the pinned head, `"moved"` for another head, or `undefined`. */
-function* pinnedCollection(
-  reads: CheckWatchReads,
-  pinned: string,
-): Operation<readonly CheckEvidence[] | "moved" | undefined> {
-  const collected = yield* collection(reads);
-  if (!collected.ok) {
-    return undefined;
+/** The head the pull request names now, from its own record. */
+function* observedHead(reads: CheckWatchReads): Operation<Result<string>> {
+  const read = yield* reads.read("details");
+  if (!read.ok) {
+    return read;
   }
-  if (collected.value.headSha !== pinned) {
-    return "moved";
+  if (read.value.kind !== "details") {
+    return Err(
+      new PullRequestReadError("protocol", ELEMENT, "a details read answered another kind."),
+    );
   }
-  return collected.value.items;
+  return Ok(read.value.details.headSha);
 }
 
 /** One complete checks read, narrowed to the collection it must be. */

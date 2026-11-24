@@ -83,6 +83,8 @@ interface Ci {
   refuses?: number;
   /** Answer check runs with a first page whose next page fails. */
   partial?: boolean;
+  /** A status the pull request itself answers with instead of its record. */
+  pullRefuses?: number;
   /** Called before a request is answered; a row holds or rewrites state here. */
   before?: (request: GitHubHttpRequest) => Operation<void>;
 }
@@ -247,7 +249,11 @@ function useGitHub(
           if (ci.before !== undefined) {
             yield* ci.before(request);
           }
-          const answer = checksAnswer(store, ci, request) ?? respond(store, request);
+          const pull = /\/pulls\/[1-9][0-9]*$/.test(new URL(request.url).pathname);
+          const answer =
+            pull && ci.pullRefuses !== undefined
+              ? { status: ci.pullRefuses, body: JSON.stringify({ message: "Server Error" }) }
+              : (checksAnswer(store, ci, request) ?? respond(store, request));
           outgoing.writeHead(answer.status, {
             "content-type": "application/json",
             ...(answer.link === undefined ? {} : { link: answer.link }),
@@ -748,7 +754,7 @@ describe("a watch that cannot settle", () => {
       { outcome: "success", headSha: HEAD, checks: [statusRecord(42, "green", "success")] },
     ]);
     expect(progress(ran.live)).toEqual([
-      "Checks: retrying after a read error",
+      "Checks at aaaaaaa: retrying after a read error",
       "Checks at aaaaaaa: 1 passed, 0 failed, 0 pending",
     ]);
   });
@@ -756,6 +762,7 @@ describe("a watch that cannot settle", () => {
   it("W8: no head before the deadline binds a null head and no records", function* () {
     const fixture = yield* useFixture();
     fixture.ci.refuses = 500;
+    fixture.ci.pullRefuses = 500;
     const stream = new InMemoryStream();
     const task = yield* started(fixture, watching(10), stream);
     yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
@@ -1117,5 +1124,117 @@ describe("a retained watch this entry cannot account for", () => {
       expect([what, fixture.store.requests.length]).toEqual([what, sent]);
       expect([what, progress(again.live)]).toEqual([what, []]);
     }
+  });
+});
+
+/** Whether the watch read anything at this head's commits. */
+function pagedAt(fixture: Fixture, head: string): boolean {
+  return fixture.store.requests.some((request) =>
+    new URL(request.url).pathname.includes(`/commits/${head}/`),
+  );
+}
+
+describe("the head a watch observed before its collection failed", () => {
+  it("W19: head A, a failed page, then green checks on B: head-changed for A, nothing of B", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.runs = [checkRun(31, "build", "completed", "success")];
+    fixture.ci.partial = true;
+    const stream = new InMemoryStream();
+    const task = yield* started(fixture, watching(), stream);
+    // The pull request answered with A, and A's check-run paging failed.
+    const retry = yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
+    expect(pagedAt(fixture, HEAD)).toBe(true);
+
+    pullRequest(fixture).headSha = MOVED;
+    delete fixture.ci.partial;
+    fixture.ci.statuses = [commitStatus(42, "green", "success")];
+    fixture.clock.advanceTo(retry);
+    const ran = yield* finished(task);
+
+    expect(ran.refusal).toBe(undefined);
+    expect(results(ran.events)).toEqual([
+      { outcome: "incomplete", reason: "head-changed", headSha: HEAD, checks: [] },
+    ]);
+    expect(retained(ran.events, PULL_REQUEST_CHECKS_WATCH_HEAD)).toEqual([
+      { headSha: HEAD, failing: false },
+    ]);
+    // The watch saw B and reported A: B's green checks were never collected.
+    expect(pullRequest(fixture).headSha).toBe(MOVED);
+    expect(pagedAt(fixture, MOVED)).toBe(false);
+    expect(JSON.stringify(rendered(ran.output))).not.toContain(MOVED);
+  });
+
+  it("W20: a head that moves after pinning ends the watch before its collection is paged", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.statuses = [commitStatus(42, "green", "pending")];
+    const stream = new InMemoryStream();
+    const task = yield* started(fixture, watching(), stream);
+    const poll = yield* pollAt(fixture);
+    pullRequest(fixture).headSha = MOVED;
+    // B's paging would fail; the watch must not reach it.
+    fixture.ci.partial = true;
+    fixture.clock.advanceTo(poll);
+    const ran = yield* finished(task);
+    expect(results(ran.events)).toEqual([
+      {
+        outcome: "incomplete",
+        reason: "head-changed",
+        headSha: HEAD,
+        checks: [statusRecord(42, "green", "pending")],
+      },
+    ]);
+    expect(pagedAt(fixture, MOVED)).toBe(false);
+  });
+
+  it("W21: a transient paging failure on A that recovers on A settles for A", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.runs = [checkRun(31, "build", "completed", "success")];
+    fixture.ci.partial = true;
+    const stream = new InMemoryStream();
+    const task = yield* started(fixture, watching(), stream);
+    const retry = yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
+    delete fixture.ci.partial;
+    fixture.clock.advanceTo(retry);
+    const ran = yield* finished(task);
+    expect(results(ran.events)).toEqual([
+      {
+        outcome: "success",
+        headSha: HEAD,
+        checks: [runRecord(31, "build", "completed", "success")],
+      },
+    ]);
+    expect(progress(ran.live)).toEqual([
+      "Checks at aaaaaaa: retrying after a read error",
+      "Checks at aaaaaaa: 1 passed, 0 failed, 0 pending",
+    ]);
+  });
+
+  it("W22: a watch cut while retrying a failed page resumes on A and reports B's move", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.runs = [checkRun(31, "build", "completed", "success")];
+    fixture.ci.partial = true;
+    const first = new InMemoryStream();
+    const task = yield* started(fixture, watching(), first);
+    yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
+    yield* task.halt();
+    const prefix = [...(yield* first.readAll())];
+    expect(retained(prefix, PULL_REQUEST_CHECKS_WATCH_HEAD)).toEqual([
+      { headSha: HEAD, failing: false },
+    ]);
+    expect(results(prefix)).toEqual([]);
+
+    fixture.clock.now = START + 20_000;
+    pullRequest(fixture).headSha = MOVED;
+    delete fixture.ci.partial;
+    fixture.ci.statuses = [commitStatus(42, "green", "success")];
+    const again = yield* run(fixture, watching(), new InMemoryStream([...prefix]));
+    expect(again.refusal).toBe(undefined);
+    expect(results(again.events)).toEqual([
+      { outcome: "incomplete", reason: "head-changed", headSha: HEAD, checks: [] },
+    ]);
+    expect(retained(again.events, PULL_REQUEST_CHECKS_WATCH_DEADLINE)).toEqual([
+      { deadline: START + 60_000 },
+    ]);
+    expect(pagedAt(fixture, MOVED)).toBe(false);
   });
 });

@@ -2271,14 +2271,17 @@ checks keeps the watch waiting: nothing reported is not everything passed. Once
 every reported check has settled, any failed one makes the outcome `failure`;
 otherwise it is `success`.
 
-**Pinning.** Each cycle is the ordinary `checks` read, which observes the pull
-request's head and reads every result at that SHA, followed by a `details` read
-of the same pull request. The first successful collection pins its head. A
-collection is accepted only when the `details` read still names the pinned
-head; a different head on either read ends the watch as `head-changed`, with
-the pinned SHA and the collection accepted before it, even when the collection
-just read would have settled the watch. A watch never follows a moved head;
-starting another watch is the caller's decision.
+**Pinning.** The first successful `details` read of the pull request pins its
+head, before any collection is read. That head is the one the watch reports on
+through every collection failure, retry and continuation that follows. Each
+cycle then reads the head again with `details` — except the first, which follows
+the pinning read — reads the ordinary `checks` collection, which observes the
+head itself and reads every result at that SHA, and reads `details` once more
+before accepting it. A different head on any of the three ends the watch as
+`head-changed`, with the pinned SHA and the collection accepted before it, even
+when the collection just read would have settled the watch; a head that moved
+before a collection is reported without paging the new head's checks. A watch
+never follows a moved head; starting another watch is the caller's decision.
 
 **Budget and failures.** The deadline is taken before the first read, and one
 race against it bounds every request, page, retry delay and poll sleep. A cycle
@@ -2317,7 +2320,7 @@ provider, budget, owner and site — as input:
 | Type | Retained value |
 | --- | --- |
 | `pull_request_checks_watch_deadline` | `{ deadline }`, milliseconds since the epoch |
-| `pull_request_checks_watch_head` | `{ headSha, failing }` once the first collection names a head or the budget ends |
+| `pull_request_checks_watch_head` | `{ headSha, failing }` once the pull request names a head or the budget ends |
 | `pull_request_checks_watch_result` | the result above |
 
 Polling happens only inside the bodies of the second and third effects, which
