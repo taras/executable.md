@@ -62,10 +62,50 @@ describe("History round controls", () => {
       }
     });
   }
+  it("switches Positions and Rounds through the fixed Actions keyboard group", function* () {
+    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    yield* generateTypingHistory(page, 2, 1);
+    yield* page.press("[History]");
+    yield* page.until("Actions round drawer", (one) => one.shows("Round 2:"));
+    for (const target of ["Positions", "Rounds"]) {
+      yield* page.key("Tab");
+      yield* page.until("Actions enters Close", (one) => one.shows("> [close]"));
+      yield* page.key("ArrowLeft");
+      yield* page.until("mode action reached", (one) => one.shows(`> [${target}]`));
+      yield* page.key("ArrowRight");
+      yield* page.until("Close reached again", (one) => one.shows("> [close]"));
+      yield* page.key("ArrowLeft");
+      yield* page.until("mode action restored", (one) => one.shows(`> [${target}]`));
+      yield* page.key("Enter");
+      yield* page.until("mode switches", (one) =>
+        one.shows(target === "Positions" ? "4 · Entry outcome recorded" : "Round 2:"),
+      );
+    }
+  });
   it("reaches an offscreen round and both positions by keyboard at narrow width", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* generateTypingHistory(page, 20, 1);
     yield* page.resize({ columns: 72, rows: 20 });
+    yield* page.press("[History]");
+    yield* page.until("Alt traversal drawer", (one) => one.shows("[Positions]"));
+    yield* page.key("Home");
+    const stops = Array.from({ length: 20 }, (_, at) => 20 - at).flatMap((round) =>
+      ["Input", "Output"].map((destination) => ({ round, destination })),
+    );
+    const focused = (round: number, destination: string) => (one: { rows: readonly string[] }) =>
+      one.rows.some((row) => row.includes(`Round ${round}:`) && row.includes(`> [${destination}]`));
+    yield* page.until("Alt first Input", focused(20, "Input"));
+    for (const stop of stops.slice(1)) {
+      yield* page.key("Alt+ArrowDown");
+      yield* page.until("Alt older control", focused(stop.round, stop.destination));
+    }
+    for (const stop of stops.slice(0, -1).reverse()) {
+      yield* page.key("Alt+ArrowUp");
+      yield* page.until("Alt newer control", focused(stop.round, stop.destination));
+    }
+    expect(page.screen().shows("[live]")).toBe(false);
+    yield* page.key("Escape");
+    yield* page.until("Alt traversal closes", (one) => one.shows("> [History]"));
     for (const destination of ["Input", "Output"]) {
       yield* page.press("[History]");
       yield* page.until("round drawer ready", (one) => one.shows("[Positions]"));

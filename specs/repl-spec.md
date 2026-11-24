@@ -1846,7 +1846,12 @@ has distinct Input and Output controls. Input selects that round's retained
 entry-admission marker; Output selects its retained root-outcome marker. An
 unfinished round has Input but no Output control until its outcome is retained.
 Neither a live head nor an intermediate marker substitutes for an absent outcome.
-Keyboard and pointer activation use the same retained markers.
+Keyboard and pointer activation use the same retained markers. Left and Right
+move between the two controls; Up and Down move between rounds, and Home and
+End reach the newest and oldest rounds. Alt+Down traverses Input, Output, then
+the next older round's Input; Alt+Up reverses that order. Missing Output
+controls are skipped. These paths reveal controls beyond either viewport edge
+without selecting a historical position.
 
 Positions opens every retained position in descending journal order, including
 component, binding, generated, answer and Agent positions. Rounds returns to the

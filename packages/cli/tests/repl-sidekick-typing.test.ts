@@ -6,6 +6,7 @@ import type { Operation } from "effection";
 import type { ReplPage, PageKey } from "./support/repl-page.ts";
 import {
   intoComposer,
+  intoDraft,
   typed,
   draftText,
   draftShows,
@@ -360,7 +361,8 @@ describe("1048 — generated retained output", () => {
     yield* page.until("the Draft probe erased", (one) => draftShows(one, "draft"));
     yield* openHistoryPositions(page);
     yield* page.key("Escape");
-    yield* page.until("History closed", (one) => !one.shows("[close]"));
+    yield* page.until("History closed", (one) => !one.shows("[close]") && one.shows("> [History]"));
+    yield* intoDraft(page);
     yield* page.type("!");
     yield* page.until("the saved middle Draft caret", (one) => draftShows(one, "draf!t"));
     const after = yield* settledReading(page.repl);

@@ -57,6 +57,7 @@ import {
   drawerOpen,
   draftText,
   entrySettles,
+  openHistoryPositions,
   pasteDraft,
   railMark,
   selectPane,
@@ -1921,13 +1922,8 @@ function readingRetained(one: ScreenReading): boolean {
   return one.shows("[live]");
 }
 
-function* openHistoryPositions(page: ReplPage): Operation<void> {
-  yield* page.press("[History]");
-  yield* page.until("the History positions", (one) => historyMarkers(one).length > 0);
-}
-
 function* chooseMarker(page: ReplPage, name: string): Operation<void> {
-  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.press(name, { rightOf: "[Rounds]" });
   yield* page.until("the retained position", readingRetained);
 }
 
