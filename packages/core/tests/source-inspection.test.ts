@@ -315,6 +315,35 @@ describe("Markdown boundary inspection", () => {
     ]);
   });
 
+  it("keeps CRLF offsets in nested patch delimiters and diagnostics", function* () {
+    const opening = '<File.Patch path="notes.md">';
+    const fence = "    ```diff\r\n    @@ -1 +1 @@\r\n    -Draft\r\n    +Ready\r\n    ```\r\n";
+    const text = [
+      "Préface 😀\r\n",
+      '<Dir path="reports">\r\n',
+      "  " + opening + "\r\n",
+      fence,
+      "  </File.Patch>\r\n",
+      "</Dir>\r\n",
+    ].join("");
+    const draft = inspectSourceDraft(text, "fragment");
+    expect(draft.diagnostics).toEqual([]);
+    expect(draft.elements.map(({ name }) => name)).toEqual(["Dir", "File.Patch"]);
+    const patch = draft.elements[1];
+    expect(patch.opening.start).toBe(text.indexOf(opening));
+    expect(patch.closing?.start).toBe(text.indexOf("</File.Patch>"));
+    expect(draft.fences.map(({ range }) => text.slice(range.start, range.end))).toEqual([fence]);
+
+    const malformed = text.replace("    ```\r\n", "  ```\r\n");
+    const { diagnostics } = inspectSourceDraft(malformed, "fragment");
+    expect(diagnostics[0]?.position).toEqual({
+      path: undefined,
+      offset: malformed.lastIndexOf("```"),
+      line: 8,
+      column: 3,
+    });
+  });
+
   it("exposes implicit list exits and never guesses a tag inside an open fence", function* () {
     const passive = '  ~~~\n  <File path="absent.txt" />\n';
     const prefix = "- item\n\n" + passive;

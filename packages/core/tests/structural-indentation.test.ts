@@ -122,6 +122,29 @@ describe("Tier SIN — structural indentation", () => {
     expect(yield* result.read("message.txt")).toBe("Hello\n\n  Keep two leading spaces.\n");
   });
 
+  it("classifies CRLF block lines and keeps the authored payload endings", function* () {
+    const result = yield* run(
+      [
+        '<File path="message.txt">  ',
+        "  <If condition={true}>",
+        "    <If condition={true}>",
+        "      Hello  ",
+        "",
+        "        Keep two leading spaces.",
+        "",
+        "    </If>",
+        "  </If>",
+        "</File>  ",
+        "After",
+        "",
+      ].join("\r\n"),
+    );
+    expect(yield* result.read("message.txt")).toBe(
+      "Hello  \r\n\r\n  Keep two leading spaces.\r\n\r\n",
+    );
+    expect(result.output).toBe("After\r\n");
+  });
+
   it("SIN2: a line without the full prefix keeps all of its spaces", function* () {
     const unformatted = yield* run(
       [

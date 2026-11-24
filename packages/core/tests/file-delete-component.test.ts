@@ -604,6 +604,88 @@ describe("File.Patch", () => {
     );
   });
 
+  it("applies formatted top-level and nested patches from CRLF source", function* () {
+    const fixture = yield* useFixture();
+    const top = join(fixture.workspace, "notes.md");
+    const reports = join(fixture.workspace, "reports");
+    const nested = join(reports, "notes.md");
+    yield* ensureDir(reports);
+    yield* writeTextFile(top, "Draft\n");
+    const context = "    indented  \n\r\n";
+    yield* writeTextFile(nested, context + "Draft\r\nlast");
+    const source = [
+      '<File.Patch path="notes.md">',
+      "  ```diff",
+      "  --- a/notes.md",
+      "  +++ b/notes.md",
+      "  @@ -1 +1 @@",
+      "  -Draft",
+      "  +Ready",
+      "  ```",
+      "</File.Patch>",
+      '<Dir path="reports">',
+      '  <File.Patch path="notes.md">',
+      "    ```diff",
+      "    @@ -1,3 +1,3 @@",
+      "         indented  ",
+      "     ",
+      "    -Draft",
+      "    +Ready",
+      "    ```",
+      "  </File.Patch>",
+      "</Dir>",
+      "",
+    ].join("\r\n");
+    expect(yield* run(fixture, source)).toBe("");
+    const encoder = new TextEncoder();
+    expect(new Uint8Array(yield* until(readFile(top)))).toEqual(encoder.encode("Ready\n"));
+    expect(new Uint8Array(yield* until(readFile(nested)))).toEqual(
+      encoder.encode(context + "Ready\r\nlast"),
+    );
+  });
+
+  it("reports the malformed nested fence position in CRLF source before file effects", function* () {
+    const fixture = yield* useFixture();
+    const reports = join(fixture.workspace, "reports");
+    const target = join(reports, "notes.md");
+    yield* ensureDir(reports);
+    yield* writeTextFile(target, "Draft\n");
+    const source = [
+      "Préface 😀",
+      '<Dir path="reports">',
+      '  <File.Patch path="notes.md">',
+      "    ```diff",
+      "    @@ -1 +1 @@",
+      "    -Draft",
+      "    +Ready",
+      "  ```",
+      "  </File.Patch>",
+      "</Dir>",
+    ].join("\r\n");
+    let diagnostic = "";
+    try {
+      yield* run(fixture, source, function* () {
+        yield* API.Files.around({
+          *checkFilePath() {
+            throw new Error("document reached the file provider");
+          },
+          *ensureDirectory() {
+            throw new Error("document reached the file provider");
+          },
+          *readTextFile() {
+            throw new Error("document reached the file provider");
+          },
+        });
+      });
+    } catch (error) {
+      diagnostic = String(error);
+    }
+    expect(diagnostic).toContain("at 8:3. Indent the closing diff fence with exactly 4 spaces.");
+    expect(new Uint8Array(yield* until(readFile(target)))).toEqual(
+      new TextEncoder().encode("Draft\n"),
+    );
+  });
+
   it("diagnoses omitted fence prefixes at the marker before accessing the target", function* () {
     const fixture = yield* useFixture();
     const target = join(fixture.workspace, "target.txt");
