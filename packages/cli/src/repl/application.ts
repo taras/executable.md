@@ -8382,17 +8382,18 @@ function drawerFor(
     rows.push(exit);
   }
   if (view.selection.drawers.at(-1)?.kind === "history") {
+    const marker = (
+      view.state.historyPositions
+        ? [...view.navigation.checkpoints].reverse().find((one) => one.kind === "entry")
+        : view.navigation.checkpoints.at(-1)
+    )?.marker;
     rows.push(
       row(
         "drawer:history:positions",
         view.state.historyPositions ? "[Rounds]" : "[Positions]",
         {
           select: "history-positions",
-          marker:
-            (view.state.historyPositions
-              ? [...view.navigation.checkpoints].reverse().find((one) => one.kind === "entry")
-              : view.navigation.checkpoints.at(-1)
-            )?.marker ?? "",
+          ...(marker === undefined ? {} : { marker }),
         },
         styleOf("action"),
         { here: view.focused },
@@ -8942,6 +8943,18 @@ function drawerContent(
               historySelected: view.state.route.at === point.point.marker,
               reveal: {
                 ...neighbours,
+                ...(label === "[Input]" && output !== undefined
+                  ? { "Alt+ArrowDown": `drawer:marker:${output.point.marker}` }
+                  : older === undefined
+                    ? {}
+                    : { "Alt+ArrowDown": `drawer:marker:${older.point.marker}` }),
+                ...(label === "[Output]"
+                  ? { "Alt+ArrowUp": `drawer:marker:${input.point.marker}` }
+                  : newer === undefined
+                    ? {}
+                    : {
+                        "Alt+ArrowUp": `drawer:marker:${(outcomes.get(newer.entry) ?? newer).point.marker}`,
+                      }),
                 ...(label === "[Input]" && output !== undefined
                   ? { ArrowRight: `drawer:marker:${output.point.marker}` }
                   : label === "[Output]"

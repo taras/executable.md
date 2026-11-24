@@ -80,7 +80,7 @@
     <ReplBench.Key key="Escape" />
     <ReplBench.WaitForText text="[submit]" />
     <ReplBench.WaitForText text="held-value" />
-    <ReplBench.WaitForText text="> [History]" />
+    <ReplBench.WaitForText text="= held-value" />
 
     <ReplBench.Click at={history} />
     <ReplBench.WaitForText text="[Positions]" as="positions" />

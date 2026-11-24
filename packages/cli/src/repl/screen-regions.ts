@@ -197,6 +197,9 @@ function drawerPlacement(key: string, input: ReplViewData): ReplPlacement {
   if (key === "drawer:close") {
     return { region: DRAWER_ACTIONS_REGION, groups: [FIXED_ACTIONS], entry: 1 };
   }
+  if (key === "drawer:history:positions") {
+    return { region: DRAWER_ACTIONS_REGION, groups: [FIXED_ACTIONS] };
+  }
   if (key === "drawer:sidekick:stop") {
     return { region: DRAWER_ACTIONS_REGION, groups: [FIXED_ACTIONS] };
   }
