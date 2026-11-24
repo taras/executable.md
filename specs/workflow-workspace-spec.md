@@ -2366,7 +2366,8 @@ including `total_count`, `incomplete_results`, nullable fields and unfamiliar
 members. Optional `nextAs` names a separate binding in the same scope. It
 receives the complete search arguments for the next page, with the same query,
 ordering and page size, or `null` when the pagination header offers no next
-page within the accessible results. The two binding names must differ. The transport
+page within the accessible results. Expansion validates the resolved `nextAs`
+as a binding name distinct from `as`. The transport
 headers and credentials stay with the adapter. An authentication or transport
 failure, a malformed response, or an item from a different repository refuses
 the read. A valid incomplete response

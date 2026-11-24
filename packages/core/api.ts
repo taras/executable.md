@@ -75,7 +75,7 @@ export type { JournalAdmission } from "./src/execute.ts";
  * boundary: a host that wants to watch an element expand needs the descriptor
  * and the shapes it will be handed, and nothing of the engine behind them.
  */
-export { Component } from "./src/component-api.ts";
+export { bindResult, Component } from "./src/component-api.ts";
 export type {
   ComponentApi,
   ComponentExpansionPhase,

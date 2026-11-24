@@ -4557,7 +4557,9 @@ function* expandFunctionComponent(
               *bindResult([bindingName]) {
                 const checked = validateBindingName(bindingName);
                 if (!checked.ok) {
-                  throw checked.error;
+                  throw new Error(
+                    `Additional result binding on <${name} /> ${checked.error.message}`,
+                  );
                 }
                 if (asBinding === undefined || checked.value === undefined) {
                   throw new Error(
