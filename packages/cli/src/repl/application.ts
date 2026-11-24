@@ -12116,15 +12116,17 @@ export function admissionFor(input: {
                 ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
                 : undefined;
     const focused =
-      slot.window === SIDEKICK_WINDOW
-        ? view.focused === undefined
-          ? -1
-          : (sequence.positions.get(view.focused) ?? -1)
-        : slot.window === SESSIONS_WINDOW
+      slot.window === DRAWER_WINDOW && view.selection.drawers.at(-1)?.kind === "history"
+        ? -1
+        : slot.window === SIDEKICK_WINDOW
           ? view.focused === undefined
             ? -1
-            : (sessions.positions.get(view.focused) ?? -1)
-          : (rows?.findIndex((one) => one.key === view.focused) ?? -1);
+            : (sequence.positions.get(view.focused) ?? -1)
+          : slot.window === SESSIONS_WINDOW
+            ? view.focused === undefined
+              ? -1
+              : (sessions.positions.get(view.focused) ?? -1)
+            : (rows?.findIndex((one) => one.key === view.focused) ?? -1);
     windows.set(slot.window, {
       ...admitRows({
         offset: offsetFor(

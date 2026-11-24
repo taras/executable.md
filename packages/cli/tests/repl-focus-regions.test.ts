@@ -606,7 +606,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
       IDLE,
     ).state;
     const opened = yield* commit();
-    const markers = model.checkpoints.map((one) => `drawer:marker:${one.marker}`);
+    const markers = [...model.checkpoints].reverse().map((one) => `drawer:marker:${one.marker}`);
     const last = markers.at(-1);
     expect(last).toBeDefined();
     expect(opened.keys).not.toContain(last);
@@ -633,7 +633,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
       IDLE,
       presenter.last()?.committed.admission,
     ).state;
-    expect(state.route.at).toBe(model.checkpoints.at(-1)?.marker);
+    expect(state.route.at).toBe(model.checkpoints.at(0)?.marker);
   });
 
   it("a revealed feedback toggle and its linked entry stay in place after focus settles", function* () {
