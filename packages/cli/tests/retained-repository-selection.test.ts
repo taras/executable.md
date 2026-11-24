@@ -20,7 +20,7 @@
  */
 
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
-import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand } from "@executablemd/test-support/launch";
 import {
@@ -379,7 +379,7 @@ function left(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       run(fixture, source, stream, counted, {
@@ -469,6 +469,7 @@ function answered(count: { asked: number } = { asked: 0 }): Operation<void> {
 }
 
 describe("one entry's managed Repository and Worktree selections", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E2: replays acknowledged placements and results with no selector work", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
@@ -626,7 +627,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
   it("E2: replays an ordinary selector refusal without native work", function* () {
     const fixture = yield* useFixture();
     const live = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const source = [
       "<PrintErrors>",
       `<Repository name="project" url=${JSON.stringify(fixture.origin)} as="project" />`,
@@ -677,7 +678,12 @@ describe("one entry's managed Repository and Worktree selections", () => {
       "</Repository>",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), live);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      live,
+    );
     expect(ran.refusal).toBe(undefined);
 
     const recorded = placements(ran.events);
@@ -739,7 +745,12 @@ describe("one entry's managed Repository and Worktree selections", () => {
       "</All>",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), live);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      live,
+    );
     expect(ran.refusal).toBe(undefined);
 
     // Neither record was suppressed, and neither branch raced the other into
@@ -857,7 +868,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
     const source = ["<All>", branch("alpha"), branch("beta"), "</All>"].join("\n");
 
     const prefix = yield* scoped(function* () {
-      const stream = new InMemoryStream();
+      const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
       const waiting = withResolvers<void>();
       let asked = 0;
       const task = yield* spawn(() =>
@@ -972,7 +983,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
     const ran = yield* run(
       fixture,
       '<Worktree name="nowhere" branch="nowhere" as="tree" />',
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       live,
       { cwd: outside },
     );
@@ -1114,7 +1125,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
       '<File path="sentinel.md">sentinel</File>',
     ].join("\n");
 
-    const journal = new InMemoryStream();
+    const journal = yield* useJournalStream(join(fixture.root, "entry.md"));
     yield* scoped(function* () {
       const task = yield* spawn(() => run(fixture, source, journal, counted, { barrier }));
       yield* entered.operation;
@@ -1146,7 +1157,7 @@ describe("one entry's managed Repository and Worktree selections", () => {
       "</Repository>",
     ].join("\n");
 
-    const journal = new InMemoryStream();
+    const journal = yield* useJournalStream(join(fixture.root, "entry.md"));
     yield* scoped(function* () {
       const task = yield* spawn(() => run(fixture, source, journal, counted, { barrier }));
       yield* entered.operation;
