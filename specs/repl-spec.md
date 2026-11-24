@@ -3923,9 +3923,14 @@ access checks. Direct file reads use their own access checks independently
 of enumeration. Search skips Git metadata, unreadable files and text
 containing NUL. Both search and context
 exclude Git metadata by authored path and resolved destination, including through
-internal symlinks. The response clears the complete file text for disclosure
-before matching or opening context. A failed project listing refuses a request
-that includes files. History uses the same
+internal symlinks. The file provider authorizes and reads the file before
+matching its text. A file with no eligible match skips disclosure detection.
+The same complete text must pass the caller’s disclosure policy before a
+match can contribute a result or establish a continuation. This can make a
+query with a withheld match take longer than an absent query even when their
+pages are identical. A fresh context open authorizes the read and clears the
+complete current file before returning its window. A failed project listing
+refuses a request that includes files. History uses the same
 readable retained projection as entry inspection. It searches admitted source,
 retained rendered output, retained command stdout and stderr, and saved
 entry and Prompt failure messages. An unreadable history refuses the history

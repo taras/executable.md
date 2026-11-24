@@ -32,25 +32,28 @@ function* matchProjectFile(
   limit: number,
   reader: FileSearchHit["ref"]["reader"],
 ): Operation<FileSearchHit[]> {
-  const result = yield* observeFile(directory, path, true, function* (text): Operation<
-    FileSearchHit[]
-  > {
-    if (text.includes("\0")) {
-      return [];
-    }
-    const hits = yield* searchText(text, query, after, limit);
-    if (hits.length === 0) {
-      return [];
-    }
-    const revision = fileRevision(text);
-    return hits.map((hit) => ({
-      ...hit,
-      source: { kind: "file", path },
-      ref: {
-        reader,
-        args: { path, revision, offset: Math.max(0, hit.offset - 240), limit: 640 },
-      },
-    }));
+  const result = yield* observeFile<FileSearchHit[]>(directory, path, true, {
+    miss: [],
+    *match(text) {
+      if (text.includes("\0")) {
+        return undefined;
+      }
+      const hits = yield* searchText(text, query, after, limit);
+      if (hits.length === 0) {
+        return undefined;
+      }
+      return () => {
+        const revision = fileRevision(text);
+        return hits.map((hit) => ({
+          ...hit,
+          source: { kind: "file", path },
+          ref: {
+            reader,
+            args: { path, revision, offset: Math.max(0, hit.offset - 240), limit: 640 },
+          },
+        }));
+      };
+    },
   });
   return result.ok ? result.value : [];
 }

@@ -11,7 +11,9 @@ export function* observeFile<T extends Json>(
   cwd: string,
   path: string,
   excludeGitMetadata: boolean,
-  project: (text: string) => Operation<T>,
+  projection:
+    | { read: (text: string) => Operation<T> }
+    | { match: (text: string) => Operation<(() => T) | undefined>; miss: T },
 ): Operation<Result<T>> {
   let approved: { value: T; serialized: string } | undefined;
   const input = {
@@ -20,12 +22,19 @@ export function* observeFile<T extends Json>(
     observation: {
       excludeGitMetadata,
       *project(text: string): Operation<Result<string>> {
-        if (!(yield* retainsOptionalText(text))) {
+        const match = "match" in projection ? yield* projection.match(text) : undefined;
+        const missed = "match" in projection && match === undefined;
+        if (!missed && !(yield* retainsOptionalText(text))) {
           return Err(
             filesFailure({ operation: "read", phase: "access", reason: "permission-denied" }),
           );
         }
-        const value = yield* project(text);
+        const value =
+          "read" in projection
+            ? yield* projection.read(text)
+            : match === undefined
+              ? projection.miss
+              : match();
         const serialized = JSON.stringify(value);
         approved = { value, serialized };
         return Ok(serialized);
@@ -45,14 +54,11 @@ export function observeFileWindow(
   cwd: string,
   selection: FileReadSelection,
 ): Operation<Result<{ path: string; changed: boolean | null; text: string }>> {
-  return observeFile(
-    cwd,
-    selection.path,
-    selection.revision !== undefined,
-    lift((text: string) => ({
+  return observeFile(cwd, selection.path, selection.revision !== undefined, {
+    read: lift((text: string) => ({
       path: selection.path,
       changed: selection.revision === undefined ? null : selection.revision !== fileRevision(text),
       text: readFileWindow(text, { ...selection, limit: selection.limit ?? FILE_WINDOW_LIMIT }),
     })),
-  );
+  });
 }

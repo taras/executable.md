@@ -20,6 +20,8 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | REPL checkout concurrency | [DEC-018](#dec-018-repl-entries-take-no-shared-git-directory-lock); [the REPL specification](repl-spec.md#the-repositories-and-worktrees-an-entry-selected) owns current behavior. |
 | Structural indentation and standalone lines | [Decision record 006](decisions/006-structural-indentation.md); [the language specification](executable-mdx-spec.md#structural-indentation-and-standalone-lines) owns current behavior. |
 
+| Workspace Search file disclosure | [DEC-020](#dec-020-match-authorized-project-files-before-disclosure) records the timing tradeoff. The [REPL specification](repl-spec.md#workspace-search) owns the order. |
+
 ---
 
 ## DEC-001: `Workflow<T>` vs `Operation<T>` — the type boundary
@@ -956,3 +958,20 @@ contract. Post-merge verification of a specific workflow attempt stays with
 An optional check that fails makes the outcome `failure`. A check that has not
 registered by the time every reported check has settled is not waited for. No required-check syntax
 exists; adding one is a separate decision.
+
+
+## DEC-020: Match authorized project files before disclosure
+
+Issue #1428 adopts literal matching inside the authorized provider observation.
+The provider clears the same complete file before any hit can contribute to a
+result or continuation. A miss skips detection. Fresh reference opens still
+check access and complete-file disclosure. The
+[Workspace Search contract](repl-spec.md#workspace-search) owns this behavior.
+
+In paired Sidekick trials on the #1428 checkout with 50 synthetic REPL entries,
+matched and absent first pages fell from 2.13–2.14 s to 1.05–1.07 s. Both
+orders read the same 2,516 files. A separate 64-file synthetic fixture returned
+identical empty pages for an absent query and a query found only in withheld
+files. The latter took about 86 ms longer with match-first ordering. The
+decision accepts this timing distinction while withholding result identities,
+counts and continuations. REPL history processing keeps its existing order.

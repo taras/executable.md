@@ -3202,8 +3202,33 @@ function respond(request) {
       join(project, "withheld.txt"),
       withheld + "\n" + " ".repeat(512) + "partial[needle]",
     );
+    const scannerError = "controlled-scan-error";
+    const heldScan = "controlled-scan-pause";
+    const scanEntered = withResolvers<void>();
+    let scanReleased = false;
+    let failedScans = 0;
+    let withheldScans = 0;
+    yield* writeTextFile(
+      join(project, "withheld-late.txt"),
+      "partial[needle]" + " ".repeat(1500) + withheld,
+    );
+    yield* writeTextFile(join(project, "scan-error.txt"), "partial[needle]" + scannerError);
     yield* useSecretScannerFactory(() => ({
       *scan(text) {
+        if (text.includes(scannerError)) {
+          failedScans += 1;
+          throw new Error("Controlled scanner failure");
+        }
+        if (text.includes(heldScan)) {
+          yield* ensure(() => {
+            scanReleased = true;
+          });
+          scanEntered.resolve();
+          yield* suspend();
+        }
+        if (text.includes(withheld)) {
+          withheldScans += 1;
+        }
         return text.includes(withheld)
           ? [
               {
@@ -3306,11 +3331,26 @@ function respond(request) {
     expect((yield* search(shared, "files")).matches).toEqual([hits[0]]);
     expect((yield* search(shared, "history")).matches).toEqual(hits.slice(1));
     expect((yield* search("private[needle]")).matches).toEqual([]);
-    expect((yield* search("partial[needle]")).matches).toEqual([]);
+    expect(yield* search("absent[needle]", "files")).toEqual({ matches: [], next: null });
+    expect([withheldScans, failedScans]).toEqual([0, 0]);
+    expect(yield* search("partial[needle]", "files")).toEqual({ matches: [], next: null });
+    expect([withheldScans, failedScans]).toEqual([2, 1]);
+    yield* writeTextFile(join(project, "a-lookahead.txt"), "partial[needle]\n".repeat(20));
+    const exact = yield* search("partial[needle]", "files");
+    expect(exact.matches).toHaveLength(20);
+    expect(exact.next).toBe(null);
     expect(
-      (yield* context({ reader: "REPL.File.Read", args: { path: "withheld.txt", offset: 520 } }))
-        .ok,
-    ).toBe(false);
+      exact.matches.every(
+        (match) => isJsonObject(match.source) && match.source.path === "a-lookahead.txt",
+      ),
+    ).toBe(true);
+    for (const [path, offset] of [
+      ["withheld.txt", 520],
+      ["withheld-late.txt", 0],
+      ["scan-error.txt", 0],
+    ] as const) {
+      expect((yield* context({ reader: "REPL.File.Read", args: { path, offset } })).ok).toBe(false);
+    }
     expect(
       (yield* context({
         reader: "REPL.File.Read",
@@ -3459,6 +3499,19 @@ function respond(request) {
       return performance.now() - now;
     });
     console.log(`Workspace Search cancellation joined in ${elapsed.toFixed(2)} ms`);
+    yield* writeTextFile(file, shared + " ".repeat(1500) + withheld);
+    expect((yield* context(hits[0].ref)).ok).toBe(false);
+    yield* writeTextFile(file, shared + heldScan);
+    const cancelled = fresh();
+    yield* scoped(function* () {
+      const task = yield* spawn(() =>
+        replyThrough('<REPL.Search query="shared[needle]" scope="files" />', root, cancelled),
+      );
+      yield* scanEntered.operation;
+      yield* task.halt();
+    });
+    expect(scanReleased).toBe(true);
+    expect(cancelled.settled).toEqual([]);
     expect(calls).toBe(1);
   });
 

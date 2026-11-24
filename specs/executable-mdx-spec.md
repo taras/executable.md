@@ -9980,7 +9980,9 @@ includes tracked files and nonignored untracked files under the search
 directory, using Git’s standard ignore rules. Outside a worktree, it uses
 the provider’s project listing. Enumeration grants no read access, and
 direct File reads use their own access checks regardless of discovery.
-Sidekick reads REPL history through its own scoped authority.
+Authored file search uses the same [matching and disclosure order as
+Sidekick](repl-spec.md#workspace-search). Sidekick reads REPL history through its
+own scoped authority.
 
 ### 6.13.3 Copying a file: `<File.Copy>`
 
