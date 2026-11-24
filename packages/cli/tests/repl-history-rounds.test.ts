@@ -33,7 +33,14 @@ describe("History round controls", () => {
           const input = page.screen().locate("[Input]", { onRow: "3:" });
           const output = page.screen().locate("[Output]", { onRow: "3:" });
           expect(input.row).toBe(output.row);
-          expect(page.screen().rows[input.row]).toContain("✓ COMPLETED");
+          expect(page.screen().rows[input.row]).toContain("✓");
+          expect(page.screen().rows[input.row]).not.toMatch(
+            /COMPLETED|ACTIVE|FAILED|INTERRUPTED|UNFINISHED/,
+          );
+          const glyph = page.screen().locate("✓", { onRow: "3:" });
+          expect(page.repl.terminal.screen?.styleAt(glyph.column, glyph.row).foreground).toBe(
+            REPL_PALETTE.success,
+          );
           const number = page.screen().locate("3:");
           for (let offset = 0; offset < 2; offset++) {
             expect(
@@ -223,6 +230,26 @@ describe("History round controls", () => {
       });
     }
   });
+  it("renders a failed glyph in its status color at narrow width", function* () {
+    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    yield* intoDraft(page);
+    yield* page.type('```js eval\nthrow new Error("glyph failure");\n```');
+    yield* page.until("failure source", (one) => one.shows("glyph failure"));
+    yield* page.press("Send", { onRow: "✎ draft" });
+    yield* page.until("failed round", (one) => one.shows("FAILED"));
+    yield* page.resize({ columns: 72, rows: 20 });
+    yield* page.press("[History]");
+    yield* page.until("failure glyph", (one) => one.shows("[Output]"));
+    for (const key of ["ArrowRight", "ArrowLeft"] as const) {
+      yield* page.key(key);
+      const glyph = page.screen().locate("×", { onRow: "1:" });
+      expect(page.repl.terminal.screen?.styleAt(glyph.column, glyph.row).foreground).toBe(
+        REPL_PALETTE.failure,
+      );
+      expect(page.screen().rows[glyph.row]).not.toContain("FAILED");
+    }
+  });
+
   it("omits Output while the latest admitted round waits for an answer", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* generateTypingHistory(page, 2, 1);
@@ -235,7 +262,12 @@ describe("History round controls", () => {
     yield* page.until("round waits", (one) => one.shows("[answer]"));
     yield* page.press("[History]");
     yield* page.until("pending round row", (one) => one.shows("3:"));
-    expect(page.screen().rows[page.screen().locate("3:").row]).toContain("● ACTIVE");
+    expect(page.screen().rows[page.screen().locate("3:").row]).toContain("●");
+    const active = page.screen().locate("●", { onRow: "3:" });
+    expect(page.repl.terminal.screen?.styleAt(active.column, active.row).foreground).toBe(
+      REPL_PALETTE.lifecycleActive,
+    );
+    expect(page.screen().rows[active.row]).not.toContain("ACTIVE");
     expect(page.screen().found("[Output]", { onRow: "3:" })).toBe(0);
     expect(page.screen().found("[Output]", { onRow: "2:" })).toBe(1);
     yield* page.until("pending Input focus", (one) =>
