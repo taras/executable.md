@@ -921,7 +921,7 @@ function expectChrome(presenter: Presenter, observed: Observed, size: ReplTermin
   expect({
     where,
     identity: shown("box:identity").includes("XMD REPL"),
-    history: shown("box:history").includes("HISTORY"),
+    history: shown("box:history").includes("[History]"),
     status: /Entry \d+ running/.test(shown("box:identity")),
     controls: [
       within(placed(observed, "footer:history"), regionOf(observed, "box:history")),
@@ -6139,18 +6139,18 @@ describe("REPL presentation: the screen says what is placed", () => {
     expect(wide.shows("TRANSCRIPT")).toBe(true);
     expect(wide.shows(BINDINGS)).toBe(true);
     expect(wide.shows(SIDEKICK)).toBe(true);
-    expect(wide.shows("HISTORY")).toBe(true);
+    expect(wide.shows("[History]")).toBe(true);
     expect(wide.occurrences("[send]")).toBe(1);
     expect(wide.found("Send", { onRow: "✎ draft" })).toBe(1);
 
     const medium = yield* page.resize(MEDIUM);
     expect(medium.shows("XMD REPL")).toBe(true);
-    expect(medium.shows("HISTORY")).toBe(true);
+    expect(medium.shows("[History]")).toBe(true);
     expect(medium.shows("> Round 1 · draft")).toBe(true);
 
     const narrow = yield* page.resize(SMALL);
     expect(narrow.shows("XMD REPL")).toBe(true);
-    expect(narrow.shows("HISTORY")).toBe(true);
+    expect(narrow.shows("[History]")).toBe(true);
     expect(narrow.found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
@@ -6215,7 +6215,7 @@ describe("REPL presentation: the screen says what is placed", () => {
       throw new Error("the empty frame did not publish its Draft and History surfaces");
     }
     expect(presenter.grid.styleAt(draft.x, draft.y + 1).background).toBe(REPL_PALETTE.draftSurface);
-    expect(presenter.grid.styleAt(history.x, history.y).background).toBe(
+    expect(presenter.grid.styleAt(history.x + history.width - 1, history.y).background).toBe(
       REPL_PALETTE.historySurface,
     );
   });

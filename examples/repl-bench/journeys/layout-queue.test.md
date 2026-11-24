@@ -9,12 +9,12 @@
       <Terminal.WaitForText text="SIDEKICK" row={1} as="sidekickWide" />
       <Terminal.WaitForText text="BINDINGS" row={1} as="bindingsWide" />
       <AssertEquals actual={sidekickWide.column < bindingsWide.column} expected={true} />
-      <Terminal.WaitForText text="HISTORY" row={35} />
+      <Terminal.WaitForText text="[History]" row={35} />
       <Terminal.Screenshot name="layout-wide" />
       <Terminal.Resize columns={120} rows={30} />
       <Terminal.WaitForText text="TRANSCRIPT" row={1} />
       <Terminal.WaitForText text="SIDEKICK" row={1} />
-      <Terminal.WaitForText text="HISTORY" row={29} />
+      <Terminal.WaitForText text="[History]" row={29} />
       <Terminal.Screenshot name="layout-medium" />
       <Repl.Focus.Draft />
       <Repl.Sidekick.Activate />
@@ -24,7 +24,7 @@
       <Terminal.WaitForText text="No entry yet" as="round" />
       <AssertEquals actual={round.row > composer.row} expected={true} />
       <Terminal.WaitForText text="TRANSCRIPT" row={1} present={false} />
-      <Terminal.WaitForText text="HISTORY" row={19} />
+      <Terminal.WaitForText text="[History]" row={19} />
       <Terminal.Screenshot name="layout-narrow" />
     </XMD.Repl>
   </Terminal>

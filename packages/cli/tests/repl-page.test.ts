@@ -159,7 +159,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("keep this draft")).toBe(true);
     expect(narrow.found("Send", ROUND_BAR)).toBe(1);
-    expect(narrow.locate("HISTORY").row).toBe(narrow.locate("Send", ROUND_BAR).row + 1);
+    expect(narrow.locate("[History]").row).toBe(narrow.locate("Send", ROUND_BAR).row + 1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(narrow.shows(COMPOSER)).toBe(false);
     // The scope that named the Sidekick's Send is refused here, saying which

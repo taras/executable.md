@@ -371,7 +371,7 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
   const column = anchors[0].indexOf(anchor);
   const end = reading.shows(COMPOSER)
     ? reading.locate(COMPOSER).row - 2
-    : reading.locate("HISTORY").row;
+    : reading.locate("[History]").row;
 
   const start = reading.locate(SIDEKICK).row;
   return pane.slice(start + 1, end).map((row) => {
@@ -1031,7 +1031,7 @@ function* historyOver(page: ReplPage): Operation<boolean> {
   yield* page.press("[close]");
   yield* page.until(
     "History leaving",
-    (one) => !one.shows("History") || one.shows("[submit]") || one.shows("[refresh]"),
+    (one) => !one.shows("[close]") || one.shows("[submit]") || one.shows("[refresh]"),
   );
   return page.screen().shows("[submit]");
 }
@@ -2416,7 +2416,7 @@ describe("Sidekick original provider membership and cancelled append", () => {
 function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
-  const footer = one.locate("HISTORY");
+  const footer = one.locate("[History]");
   // On the narrow Sidekick outlet, the compact selected-work row precedes History.
   const end = footer.row - (one.size.columns === NARROW.columns ? 1 : 0);
   return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
@@ -2461,7 +2461,7 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(pasted.join(" ")).toContain("広");
     expect(pasted.join(" ")).toContain("い");
     expect(chatHas(page.screen(), "SAID-10")).toBe(true);
-    for (const label of [COMPOSER, "[history]", "[exit]"]) {
+    for (const label of [COMPOSER, "[History]", "[exit]"]) {
       expect(page.screen().shows(label)).toBe(true);
     }
     expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
@@ -3590,7 +3590,7 @@ describe("Retained Sidekick token usage", () => {
     yield* intoDraft(page);
     yield* typed(page, "unsent Draft");
     yield* page.type("\x078");
-    yield* page.until("History focused", (one) => one.shows("> [history]"));
+    yield* page.until("History focused", (one) => one.shows("> [History]"));
     yield* page.key("ArrowRight");
     yield* page.until("Exit focused", (one) => one.shows("> [exit]"));
     yield* page.key("ArrowRight");

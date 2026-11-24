@@ -39,7 +39,7 @@
     </ReplBench.Region>
 
     <ReplBench.Key key="Tab" />
-    <ReplBench.WaitForText text="> [history]" />
+    <ReplBench.WaitForText text="> [History]" />
     <ReplBench.Key key="Tab" />
     <ReplBench.WaitForText text="> All sessions" />
     <ReplBench.Key key="Alt+ArrowDown" />

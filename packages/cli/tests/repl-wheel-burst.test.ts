@@ -93,16 +93,19 @@ describe("wheel bursts in one input chunk", () => {
       if (size !== SIZE) {
         yield* page.resize(size);
       }
-      yield* page.press("[history]");
+      expect(page.screen().found("[History]")).toBe(1);
+      expect(page.screen().shows("[exit]")).toBe(true);
+      yield* page.press("[History]");
       yield* page.until("History opens", (one) => one.shows("240 · Entry outcome recorded"));
       expect(page.screen().shows("240 · Entry outcome recorded")).toBe(true);
       yield* page.key("Escape");
       yield* page.until("History closes", (one) => !one.shows("240 · Entry outcome recorded"));
-      for (let stop = 0; stop < 30 && !page.screen().shows("> [history]"); stop++) {
+      yield* page.until("History focus restored", (one) => one.shows("> [History]"));
+      for (let stop = 0; stop < 30 && !page.screen().shows("> [History]"); stop++) {
         yield* page.key("Tab");
         yield* sleep(30);
       }
-      expect(page.screen().shows("> [history]")).toBe(true);
+      expect(page.screen().shows("> [History]")).toBe(true);
       yield* page.key("Enter");
       yield* page.until("keyboard History opens", (one) =>
         one.shows("240 · Entry outcome recorded"),
@@ -118,7 +121,7 @@ describe("wheel bursts in one input chunk", () => {
   it("History batches reach the sequential endpoint and return to newest", function* () {
     const page = yield* useReplPage({ size: SIZE });
     yield* generateTypingHistory(page, 20, 1);
-    yield* page.press("[history]");
+    yield* page.press("[History]");
     yield* page.until("History", (one) => one.shows("[close]"));
     const cell = page.screen().locate("40 · Entry outcome recorded");
     const positions = () =>
@@ -241,7 +244,7 @@ describe("wheel bursts in one input chunk", () => {
       );
     }
     yield* page.key("Tab");
-    yield* page.until("History focused", (one) => one.shows("> [history]"));
+    yield* page.until("History focused", (one) => one.shows("> [History]"));
     yield* page.key("Tab");
     yield* page.until("Transcript selector focused", (one) => one.shows("> All sessions"));
     yield* sleep(60);

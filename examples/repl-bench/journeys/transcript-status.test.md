@@ -34,7 +34,7 @@
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="Held checkout" />
       <Terminal.WaitForText text="3 ⠋" />
-      <Terminal.WaitForText text="HISTORY" row={35} />
+      <Terminal.WaitForText text="[History]" row={35} />
       <Terminal.WaitForText text="Tab regions" present={false} />
       <Terminal.Screenshot name="running" />
       <Terminal.WaitForText text="Stop" as="stop" />
@@ -69,7 +69,7 @@
       <Repl.Focus.Message />
       <Terminal.WaitForText text="Sidekick reply failed" as="narrow" />
       <AssertEquals actual={narrow.row < 5 && narrow.column < 10} expected={true} />
-      <Terminal.WaitForText text="HISTORY" row={19} />
+      <Terminal.WaitForText text="[History]" row={19} />
       <Terminal.Screenshot name="failure-notification-narrow" />
       <Terminal.Key key="Escape" />
       <Terminal.WaitForText text="Sidekick reply failed" present={false} />

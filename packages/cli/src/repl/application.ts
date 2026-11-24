@@ -2721,6 +2721,18 @@ export function reduceRepl(
         { ...state.route, drawers: remaining },
         live,
       );
+      if (closing.kind === "history") {
+        return {
+          ...closed,
+          state: Object.freeze({
+            ...closed.state,
+            restore: Object.freeze({
+              kind: "reveal",
+              key: remaining.length === 0 ? "footer:history" : "footer:top:history",
+            }),
+          }),
+        };
+      }
       // Dismissing the question's drawer discards what was typed into it. It is
       // not an answer, and keeping it would offer it again as though it were.
       return closing.kind === "live-elicit"
@@ -5675,7 +5687,7 @@ function primaryAction(view: ReplView, narrow: boolean): string {
   }
   if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
-    // the cursor is labelled `[history]`, so the narrow form is not vague — it is
+    // the cursor is labelled `[History]`, so the narrow form is not vague — it is
     // the one word the label already supplies, given back to the keys.
     return narrow ? "Enter opens" : "Enter opens History";
   }
@@ -6320,7 +6332,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
    * What that pane would have drawn is not described where it would be drawn:
    * an opaque modal is in front of it, and a control behind one is a Tab stop
    * and a pointer target with nothing visible on it. The ones a person still
-   * needs are reparented into the form, exactly as `[history]` and `[exit]`
+   * needs are reparented into the form, exactly as `[History]` and `[exit]`
    * already are — described once, in the active focus root.
    */
   const covered = presentedAsking(view) !== undefined;
@@ -6632,14 +6644,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   items.push(...sidekickNoticeRows(view, context.noticeReason));
   const history = row(
     "footer:history",
-    "[history]",
+    "[History]",
     { select: "history" },
     styleOf("action", { inspected }),
     {
       here: view.focused,
+      ...(focusClaim(view) === "footer:history" ? { focus: true } : {}),
     },
   );
-  // The way out, on every screen and in every state. Like `[history]` it is one
+  // The way out, on every screen and in every state. Like `[History]` it is one
   // node: while a drawer is mounted it is reparented into the modal branch, so it
   // stays reachable without reaching past the focus trap, and layout still draws
   // it in the footer where it always is.
@@ -13584,15 +13597,6 @@ const HISTORY_ROW = "box:history";
 /** The gap the accepted wide row keeps between its map and its controls. */
 const HISTORY_SPACE = "box:history:space";
 
-/**
- * What the compact History rail calls itself.
- *
- * Shorter than the drawer's own title, because this is one row shared with the
- * footer's controls: the drawer has room to say what its list is ordered by and
- * this has room to say which reading it belongs to.
- */
-export const COMPACT_HISTORY_TITLE = "HISTORY";
-
 /** The probe row the offered action group's own intrinsic width is read from. */
 export const HISTORY_PROBE_ACTIONS = "box:probe:history:actions";
 
@@ -13631,19 +13635,21 @@ export function historyProbeOf(
   if (actions === undefined || map === undefined) {
     return undefined;
   }
-  const children = actions.children.map((child) =>
-    child.id === HISTORY_SPACE
-      ? // The leading spacer grows into whatever the row has spare. Declared at
-        // zero here, because what is being asked is the minimum the controls
-        // need and a growing child would answer with the whole row.
-        box({ id: `${HISTORY_PROBE_ACTIONS}:space`, props: statedPartProps(0) })
-      : box({
-          id: `${HISTORY_PROBE_ACTIONS}:${child.id}`,
-          props: child.props,
-          text: child.text,
-          ...(child.style === undefined ? {} : { style: child.style }),
-          ...(child.runs === undefined ? {} : { runs: child.runs }),
-        }),
+  const launcher = boxes.find((one) => one.id === "box:action:footer:history");
+  const children = [...(launcher === undefined ? [] : [launcher]), ...actions.children].map(
+    (child) =>
+      child.id === HISTORY_SPACE
+        ? // The leading spacer grows into whatever the row has spare. Declared at
+          // zero here, because what is being asked is the minimum the controls
+          // need and a growing child would answer with the whole row.
+          box({ id: `${HISTORY_PROBE_ACTIONS}:space`, props: statedPartProps(0) })
+        : box({
+            id: `${HISTORY_PROBE_ACTIONS}:${child.id}`,
+            props: child.props,
+            text: child.text,
+            ...(child.style === undefined ? {} : { style: child.style }),
+            ...(child.runs === undefined ? {} : { runs: child.runs }),
+          }),
   );
   return box({
     id: "box:probe:history",
@@ -13653,9 +13659,16 @@ export function historyProbeOf(
       box({
         id: HISTORY_PROBE_MAP,
         props: fittedPartProps(),
-        text: map.text,
+        text: " ".repeat(launcher?.text?.length ?? 0) + (map.text ?? ""),
         ...(map.style === undefined ? {} : { style: map.style }),
-        ...(map.runs === undefined ? {} : { runs: map.runs }),
+        ...(map.runs === undefined
+          ? {}
+          : {
+              runs: [
+                { text: " ".repeat(launcher?.text?.length ?? 0), token: "history" },
+                ...map.runs,
+              ],
+            }),
       }),
     ],
   });
@@ -13733,7 +13746,7 @@ export function wideHistoryWidths(
     return undefined;
   }
   const bounded = { map: Math.max(0, row - needed), gap: 0 };
-  const natural = widthOf(HISTORY_MAP);
+  const natural = probedWidthOf(HISTORY_PROBE_MAP);
   if (natural === undefined || !Number.isInteger(natural)) {
     return bounded;
   }
@@ -13818,7 +13831,7 @@ function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
  * History drawer, which is what the action beside this map opens.
  */
 function compactHistoryRuns(view: ReplView, width?: number): readonly ReplTokenRun[] {
-  const title: ReplTokenRun = { text: ` ${COMPACT_HISTORY_TITLE}`, token: "history-title" };
+  const title: ReplTokenRun = { text: "", token: "history-title" };
   const marks: ReplTokenRun[][] = [];
   const editing = roundEditorVisible(view);
   const running =
@@ -15053,6 +15066,20 @@ function workspacePresentation(input: {
                 region: "footer",
                 props: bandRowProps(REPL_PALETTE.historySurface),
                 children: [
+                  ...placed
+                    .filter((candidate) => candidate.key === "footer:history")
+                    .map((candidate) =>
+                      box({
+                        id: `box:action:${candidate.key}`,
+                        key: candidate.key,
+                        region: "footer",
+                        props: CONTROL_PROPS,
+                        text: candidate.text,
+                        control: candidate.control,
+                        style: candidate.style,
+                        runs: candidate.runs,
+                      }),
+                    ),
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
@@ -15061,10 +15088,24 @@ function workspacePresentation(input: {
                     props: accepted
                       ? context.wideHistoryMap === undefined
                         ? fittedPartProps()
-                        : statedPartProps(context.wideHistoryMap)
+                        : statedPartProps(
+                            Math.max(
+                              0,
+                              context.wideHistoryMap -
+                                (placed.find((one) => one.key === "footer:history")?.text.length ??
+                                  0),
+                            ),
+                          )
                       : context.historySplit === undefined
                         ? fittedPartProps()
-                        : statedPartProps(context.historySplit.map),
+                        : statedPartProps(
+                            Math.max(
+                              0,
+                              context.historySplit.map -
+                                (placed.find((one) => one.key === "footer:history")?.text.length ??
+                                  0),
+                            ),
+                          ),
                     text: runText(map),
                     runs: map,
                     style: styleOf("history", { inspected }),
@@ -15097,18 +15138,20 @@ function workspacePresentation(input: {
                         : statedActionRowProps(context.historySplit.actions),
                     children: [
                       ...(accepted ? [] : [spacer(HISTORY_SPACE, "footer")]),
-                      ...placed.map((candidate) =>
-                        box({
-                          id: `box:action:${candidate.key}`,
-                          key: candidate.key,
-                          region: "footer",
-                          props: CONTROL_PROPS,
-                          text: candidate.text,
-                          control: candidate.control,
-                          style: candidate.style,
-                          runs: candidate.runs,
-                        }),
-                      ),
+                      ...placed
+                        .filter((candidate) => candidate.key !== "footer:history")
+                        .map((candidate) =>
+                          box({
+                            id: `box:action:${candidate.key}`,
+                            key: candidate.key,
+                            region: "footer",
+                            props: CONTROL_PROPS,
+                            text: candidate.text,
+                            control: candidate.control,
+                            style: candidate.style,
+                            runs: candidate.runs,
+                          }),
+                        ),
                     ],
                   }),
                 ],
@@ -15123,7 +15166,7 @@ function workspacePresentation(input: {
         // group as wide as itself, that edge is the band's rather than the
         // group's — a group bounded by its own width would admit every control
         // it was offered, however little room the row had.
-        id: accepted ? ACTION_ROW : "box:history",
+        id: "box:history",
         controls: Object.freeze(
           offered.map((candidate) => ({
             key: candidate.key,

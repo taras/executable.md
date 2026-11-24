@@ -63,7 +63,7 @@ function viewOf(
   return withWorkspace(view.value, workspaceOf(model));
 }
 
-/** Press the frame's own `[history]` control and reduce what it asked for. */
+/** Press the frame's own `[History]` control and reduce what it asked for. */
 function* pressHistory(
   presenter: Presenter,
   observed: Observed,
@@ -72,7 +72,7 @@ function* pressHistory(
 ): Operation<ReplState> {
   const bounds = observed.boundsOf("footer:history");
   if (bounds === undefined) {
-    throw new Error("this frame drew no [history] control");
+    throw new Error("this frame drew no [History] control");
   }
   const dispatched = yield* presenter.tree.dispatch({
     kind: "pointer",
@@ -80,7 +80,7 @@ function* pressHistory(
     frame: observed.committed.rendered.tree,
   });
   if (!dispatched.ok || dispatched.value.outcome !== "action") {
-    throw new Error("the [history] control asked for nothing");
+    throw new Error("the [History] control asked for nothing");
   }
   return reduceRepl(state, dispatched.value.action, model, LIVE).state;
 }
@@ -96,6 +96,8 @@ describe("History over a long retained history", () => {
     const presenter = yield* usePresenter(TALL);
     const closed = initialState("public-history-capacity");
     const first = yield* presenter.commit(viewOf(closed, model, TALL));
+    expect(first.keys.filter((key) => key === "footer:history")).toHaveLength(1);
+    expect(first.boundsOf("footer:history")?.x).toBe(0);
     const opened = yield* pressHistory(presenter, first, closed, model);
     expect(opened.route.drawers.map((one) => one.kind)).toEqual(["history"]);
 

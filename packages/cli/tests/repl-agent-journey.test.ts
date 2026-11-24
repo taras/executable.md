@@ -1922,7 +1922,7 @@ function readingRetained(one: ScreenReading): boolean {
 }
 
 function* openHistory(page: ReplPage): Operation<void> {
-  yield* page.press("[history]");
+  yield* page.press("[History]");
   yield* page.until("the History positions", (one) => historyMarkers(one).length > 0);
 }
 

@@ -271,7 +271,7 @@ describe("wheel remaining migration journeys", () => {
         one.shows("Recorded answer") && one.shows("[close]") && one.shows("Enter does nothing"),
     );
     yield* key(page, "Home");
-    for (const label of ["Recorded answer", "[close]", "[history]"]) {
+    for (const label of ["Recorded answer", "[close]", "[History]"]) {
       yield* wheel(page, "down", page.screen().locate(label));
       expect(page.screen().found('"type": "object"', { after: "Recorded answer" })).toBe(1);
     }
@@ -324,7 +324,7 @@ describe("wheel remaining migration journeys", () => {
       yield* wheel(page, direction, { column: empty.column, row: empty.row + 1 });
       expect(page.screen().shows("Resize work 00")).toBe(true);
     }
-    for (const label of ["+ New Round", "HISTORY", "BINDINGS"]) {
+    for (const label of ["+ New Round", "[History]", "BINDINGS"]) {
       yield* wheel(page, "down", page.screen().locate(label));
       expect(page.screen().shows("Resize work 00")).toBe(true);
     }
