@@ -42,10 +42,6 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { collect, DocumentOutput, Elicitation } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import {
-  CHECK_WATCH_POLL_MS,
-  CHECK_WATCH_RETRY_MS,
-} from "../../git/src/composition/pull-request-checks-watch.ts";
 import { PullRequestWatchClock } from "@executablemd/git/api";
 import { useCompositionComponents } from "@executablemd/git";
 import {
@@ -66,6 +62,10 @@ const URL_1 = "https://github.com/owner/repository/pull/1";
 const HEAD = "a".repeat(40);
 const MOVED = "b".repeat(40);
 const START = Date.UTC(2026, 10, 23, 12);
+// The cadence the workflow workspace spec states, held here rather than read
+// from the implementation so a changed interval fails this suite.
+const CHECK_WATCH_POLL_MS = 10_000;
+const CHECK_WATCH_RETRY_MS = 5_000;
 
 /** One request the modeled GitHub receives. */
 interface GitHubHttpRequest {

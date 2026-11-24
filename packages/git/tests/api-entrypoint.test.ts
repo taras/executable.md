@@ -122,6 +122,8 @@ const CONTEXTUAL_APIS: readonly string[] = [
   "IssueOperations",
   "IssueTrackerContext",
   "PullRequestAPI",
+  "PullRequestChecksWatch",
+  "PullRequestWatchClock",
   "Repository",
   "RepositoryContext",
 ];
