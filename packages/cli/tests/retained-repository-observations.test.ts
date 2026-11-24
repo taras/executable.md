@@ -788,8 +788,7 @@ describe("ROB5 — cancellation, persistence and ownership", () => {
 
   // The two halves of the same ownership rule, in one entry and then across
   // two. Inside one entry a read owns the native turn and a mutation waits;
-  // between entries a mutation lease is a different mechanism and a read does
-  // not wait for it.
+  // between entries nothing waits.
 });
 
 /** A verifier that counts its starts and then runs the real one. */

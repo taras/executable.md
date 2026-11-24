@@ -2347,8 +2347,8 @@ ordinary refusals restore before Files composition or target observations.
 
 The host routes each live delegation by its effective resolved operands after
 authorization and containment. The destination's resolved parent and final
-entry determine coverage. Both managed operand slots precede the destination
-checkout's mutation hold. Owned-root coverage requires no Git lease.
+entry determine coverage. Both managed operand slots are acquired before the
+copy. Owned-root coverage takes no slot.
 A covered dispatch cannot insert an outcome ahead of retained history.
 The outer recorder publishes the final composed answer after settlement when
 at least one dispatch reached covered storage. Uncovered and purely synthetic
@@ -2393,7 +2393,7 @@ in any directory outside the selected checkouts and the marked entry's owned
 workspace — is ordinary file work, is retained by nothing here, and happens again
 if the entry is continued. A marked workspace entry retains the same four
 operations in its workspace, including an ensure of the root, through existing
-local-operation records and without a Git lease. Checkout routing and holds take
+local-operation records and without a slot. Checkout routing and slots take
 precedence where they apply. Completed workspace operations restore before live
 resolution or I/O, just as checkout operations do. Searches and temporary directories are ordinary throughout, wherever
 they point. The lexical path rules and the permission a `<File>` already answers
@@ -2410,46 +2410,27 @@ For new work, the most specific managed placement routes first, then the
 captured ambient checkout, then owned-root coverage when neither checkout
 covers the target. Live root and target use the same canonical path basis;
 restored operations perform no canonicalization and answer before current live
-permission or root checks. Work covered only by owned roots takes no Git lease.
+permission or root checks. Work covered only by owned roots takes no slot.
 Glob and path checks remain unrecorded; no filesystem/journal transaction or
 file snapshot is promised.
 
-One entry at a time *changes* one repository. A second entry — in this process
-or another — whose next new write, deletion or directory is in a checkout
-somebody else is changing is told so immediately rather than waiting:
-
-```text
-Another XMD entry or process holds this checkout. End that work before trying
-again. Nothing was read and nothing was changed.
-```
-
-Reading is not changing, so it is not excluded: an entry may read a file in a
-checkout another entry is holding, and reading takes nothing that would stop
-that entry carrying on. Only a new write, deletion or directory waits on the
-hold, and a completed operation of any kind takes nothing at all.
+Entries share a checkout the way two shells do. A second entry — in this
+process or another — may read, write, delete and make directories in a checkout
+another entry is changing, and neither waits for the other or is refused
+because of it. XMD takes no lock on the repository: native Git run by
+concurrent entries meets only Git's own locks, and two entries writing one file
+race as two editors would. A completed operation of any kind takes nothing at
+all.
 
 Starting outside a checkout without an owned workspace retains none of this: the
 entry performs ordinary file work, exactly as it would anywhere else, and never
 looks for a repository twice. Selecting a Repository is a separate matter and
 works from anywhere, which is the next section.
 
-The shared-Git-directory mutation hold is a kernel-released exclusive lock on
-a hashed sidecar outside every checkout. Independently opened handles exclude
-one another, including two in one process. The native descriptor is the live
-resource, with no substitutable acquisition token or holder table. The entry
-acquires it lazily through single-flight acquisition, arms release before
-opening the descriptor, and retains it until joined entry teardown. This
-exclusion applies only to participating sidecar users, not arbitrary Git tools
-or external file edits.
-
-Mutation contention refuses before changes and is fatal and unrecorded rather
-than a completed file/Git outcome. Managed-slot contention likewise refuses
-before selection recording begins. The first new file operation in a restored
-placement, including a read, reacquires its slot without rerunning the selector
-or inspecting the checkout; reacquisition contention is fatal stale state, not
-that operation's saved result. When both placement and mutation holds are
-needed, the slot is acquired first. New Worktree selection takes mutation
-ownership before running its selector.
+Managed-slot contention refuses before selection recording begins. The first
+new file operation in a restored placement, including a read, reacquires its
+slot without rerunning the selector or inspecting the checkout; reacquisition
+contention is fatal stale state, not that operation's saved result.
 
 ### The repositories and worktrees an entry selected
 
@@ -2525,16 +2506,14 @@ because `<Dir>` creates directories and is not checkout validation. A new entry
 selecting the same Repository selects it afresh, which is an ordinary reuse of
 whatever is on disk.
 
-Two holds answer two different questions, and a message tells you which one you
-met. One entry at a time *owns* a managed checkout: a second entry asking for
-the same Repository or Worktree is refused immediately, naming the checkout, and
-may have it once the first entry has been torn down. Separately, one entry at a
-time *changes* one repository, which is the shared-Git-directory hold the
-ambient section describes — a new `<Worktree>` takes it, because creating a
-linked checkout writes into administration every checkout of that repository
-shares, and a new write, deletion or directory takes it too. Neither hold is
-taken to answer a completed selection or a completed file operation, and a read
-takes only the ownership of the checkout it is reading in.
+One hold answers one question. One entry at a time *owns* a managed checkout: a
+second entry asking for the same Repository or Worktree is refused immediately,
+naming the checkout, and may have it once the first entry has been torn down.
+Nothing holds the repository itself. A new `<Worktree>` writes linked-checkout
+administration every checkout of that repository shares, and meets only Git's
+own locks there, as any other Git command would. The hold is not taken to
+answer a completed selection or a completed file operation, and a read takes
+the same ownership a write does.
 
 Clone authentication and per-selection native children are torn down and
 joined before placement acknowledgement, path binding or body expansion.
@@ -2627,10 +2606,9 @@ repository, and a continuation runs that `<Git.Commit>` live. It may then refuse
 adopts the commit that was made, predicts an id or rolls anything back.
 
 The first new Git operation inside a restored placement takes that placement's
-ownership of the managed checkout and then the hold on the repository it is
-changing, in that order, and keeps both until the entry is torn down. A
-completed Git operation takes neither. A no-op Add, a same-branch Switch and a
-Commit that will refuse take them too: whether `git` will change anything is not
+ownership of the managed checkout and keeps it until the entry is torn down. A
+completed Git operation takes none. A no-op Add, a same-branch Switch and a
+Commit that will refuse take it too: whether `git` will change anything is not
 predicted.
 
 ### Reading the repository an entry is standing in
@@ -2692,10 +2670,9 @@ directory under either spelling: `src` and `src/` both refuse, and neither
 answers with something found inside it. None of them quotes
 anything Git printed.
 
-These reads change nothing, so they take no hold on the repository you are
-changing: another entry committing in the same checkout does not wait for a
-read, and a read does not wait for it. Inside *one* entry it is the other way
-round, and deliberately: one read runs several Git commands against one private
+Across entries nothing waits: another entry committing in the same checkout
+does not wait for a read, and a read does not wait for it. Inside *one* entry
+it is the other way round, and deliberately: one read runs several Git commands against one private
 index copy, so that entry's own `<Git.Add>`, `<Git.Switch>` or `<Git.Commit>`
 waits for the read to finish and be written down before it runs. Nothing moves
 under a sequence already in progress. The first new read inside a restored
@@ -2761,9 +2738,8 @@ written into the checkout reaches nothing. The commit a saved request named has
 to still be readable — a missing object refuses rather than being fetched — and a
 moved branch or HEAD alone refuses nothing.
 
-A publication takes ownership of the managed checkout it reads from, and takes
-no hold on the repository itself: it changes no file, index, branch or
-configuration there. Another entry committing in that repository does not stop
+A publication takes ownership of the managed checkout it reads from, and
+nothing else. Another entry committing in that repository does not stop
 it; another entry holding the checkout does, before a request exists.
 
 ### The pull request an entry opened, and the feedback it read
@@ -3274,9 +3250,8 @@ history append.
 Repository and issue behavior belong to the entry that is executing, and to
 nothing wider. The command selects it; the entry's own task prepares it, once, inside
 that task, and everything it takes — the Git session it reads through, where it
-looked for a checkout, the managed checkouts it selected, the hold on each of
-those and the hold on the repository it changes — is released when the entry is
-torn down. The selections an entry made are its own: a continuation rebuilds
+looked for a checkout, the managed checkouts it selected and the hold on each
+of those — is released when the entry is torn down. The selections an entry made are its own: a continuation rebuilds
 which checkouts it was working in from what it recorded, and rebuilding them
 reaches nothing. Each entry reads and writes its own range of the one history, so
 the same text typed twice is two sets of records rather than one replayed, and

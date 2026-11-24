@@ -5,11 +5,11 @@
  * because each one needs the native side of a REPL entry's repository host.
  * Cancelling a finished read's append unwinds a real Deno-backed Files
  * provider; holding a read while the same entry mutates needs a real `git`
- * child to reach; and another holder's mutation lease is a kernel-released
- * exclusive advisory lock taken through the Deno runtime. Node and Bun expose
- * no equivalent of the lock, install no native provider for the mutation to
- * reach, and unwind the Files provider differently, so there these three fail
- * on the host rather than on what they assert.
+ * child to reach; and a completed read answering after its checkout is
+ * repointed needs the native provider to have recorded it live. Node and Bun
+ * install no native provider for the read or the mutation to reach, and unwind
+ * the Files provider differently, so there these three fail on the host rather
+ * than on what they assert.
  *
  * The record format, its admission, every refusal and the rest of
  * cancellation and persistence stay portable and stay in
@@ -30,7 +30,6 @@ import {
   parseReplObservationRecord,
   REPL_REPOSITORY_OBSERVATION,
 } from "../src/repl/repositories/observation-records.ts";
-import { useCommonDirectoryLease } from "../src/repl/repositories/deno/leases.ts";
 import { useObservationFixture, writeFixtureFile } from "../../git/tests/support/observations.ts";
 import {
   captureObservationEntry,
@@ -41,7 +40,6 @@ import {
   runEntry,
   useEntryPlace,
 } from "./support/repl-observations.ts";
-import { commonDirectoryOf } from "../../git/tests/support/run-composition.ts";
 
 function collecting(
   events: DurableEvent[],
@@ -224,10 +222,9 @@ describe("ROB5 — cancellation, persistence and ownership, on a native host", (
     );
   });
 
-  it("answers while another holder has the checkout's mutation lease", function* () {
+  it("answers a completed read after its checkout is repointed", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
-    const common = commonDirectoryOf({ root: fixture.root, home: fixture.home, run: fixture.run });
     const counted = entryCounters();
     yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 23;\n");
 
@@ -238,20 +235,14 @@ describe("ROB5 — cancellation, persistence and ownership, on a native host", (
       "",
     ].join("\n");
 
-    // Held for the whole of both runs by somebody else. A read that took one
-    // would be refused by the operating system on the second descriptor.
-    const live = yield* scoped(function* () {
-      yield* useCommonDirectoryLease(common);
-      return yield* runEntry(place, source, new InMemoryStream(), counted);
-    });
+    const live = yield* scoped(() => runEntry(place, source, new InMemoryStream(), counted));
     expect(live.refusal).toBe(undefined);
     expect(readKinds(counted)).toContain("changes");
 
-    // And a completed replay takes neither the lease nor anything else: it
-    // answers with the lease still held and the checkout gone.
+    // A completed replay asks the repository nothing: it answers with the
+    // checkout gone from where the read found it.
     const replayed = entryCounters();
     const again = yield* scoped(function* () {
-      yield* useCommonDirectoryLease(common);
       yield* repoint(place, place.root);
       return yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
     });

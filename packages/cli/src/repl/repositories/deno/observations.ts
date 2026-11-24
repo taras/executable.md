@@ -33,13 +33,12 @@
  * the same routing and the same hold again — idempotently — around work that
  * really does run live.
  *
- * ## One slot, no lease, one turn
+ * ## One slot, one turn
  *
  * A live read takes the selected placement's managed slot where it has one, and
- * nothing else: it changes no byte of the repository, so there is nothing for a
- * mutation lease to protect. It does take this entry's existing per-common-
- * directory turn, so the entry's own native Git attempts do not interleave each
- * other's command sequences.
+ * nothing else. It does take this entry's existing per-common-directory turn,
+ * so the entry's own native Git attempts do not interleave each other's command
+ * sequences.
  */
 
 import { Err, Ok, scoped, until } from "effection";
@@ -378,8 +377,7 @@ function readback(
  * It is held for the whole of `once()` — the native work, its joined teardown
  * and the coordinator's acknowledged append — so the turn ends when the
  * observation is recorded rather than when Git stops running. Cross-entry
- * independence is unaffected: this queue is per entry, and another entry's
- * mutation lease is a different mechanism.
+ * independence is unaffected: this queue is per entry.
  */
 function* live(
   entry: ReplObservationEntry,
@@ -433,9 +431,7 @@ function* route(
  * Take the hold a read needs, which is the managed slot and nothing else.
  *
  * The slot says which entry owns a managed checkout, and a restored placement
- * took none when it replayed. No mutation lease: a read changes nothing in the
- * repository, so there is nothing for one to protect — and taking one would
- * make reading a checkout block an editor committing in it.
+ * took none when it replayed.
  */
 function* own(entry: ReplObservationEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;

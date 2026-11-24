@@ -352,7 +352,7 @@ describe("one entry's local file work", () => {
     const fixture = yield* useFixture();
     for (const admitted of [false, true]) {
       yield* scoped(function* () {
-        const calls = { routing: 0, own: 0, selection: 0, hold: 0, target: 0, children: 0 };
+        const calls = { routing: 0, own: 0, selection: 0, target: 0, children: 0 };
         yield* Permissions.around(
           { files: ([operation], next) => (operation === "absolute" ? admitted : next(operation)) },
           admitted ? { at: "min" } : undefined,
@@ -386,15 +386,11 @@ describe("one entry's local file work", () => {
               calls.selection++;
               return undefined;
             },
-            *hold() {
-              calls.hold++;
-            },
             placements() {
               calls.routing++;
               return [
                 {
                   checkoutRoot: fixture.checkout,
-                  commonDirectory: join(fixture.checkout, ".git"),
                   *own() {
                     calls.own++;
                   },
@@ -422,7 +418,6 @@ describe("one entry's local file work", () => {
             routing: 0,
             own: 0,
             selection: 0,
-            hold: 0,
             target: 0,
             children: 0,
           });
@@ -433,7 +428,6 @@ describe("one entry's local file work", () => {
           expect(output).toContain("seed");
           expect(calls.routing).toBeGreaterThan(0);
           expect(calls.own).toBeGreaterThan(0);
-          expect(calls.hold).toBeGreaterThan(0);
           expect(calls.selection).toBeGreaterThan(0);
           expect(calls.target).toBeGreaterThan(0);
           expect(calls.children).toBe(1);

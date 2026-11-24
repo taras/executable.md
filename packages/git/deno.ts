@@ -77,7 +77,6 @@ export type { DenoRepositoryOperations } from "./src/deno/repository-operations.
 export type { AmbientRepository } from "./src/deno/run-composition/ambient.ts";
 export {
   checkoutOf,
-  commonDirectoryLock,
   repositorySlot,
   worktreeSlot,
 } from "./src/deno/run-composition/checkout-layout.ts";

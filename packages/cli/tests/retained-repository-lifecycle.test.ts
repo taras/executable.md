@@ -2,18 +2,18 @@ import { Permissions } from "@executablemd/runtime";
 /**
  * Who holds a checkout while an entry works in it, and when they let go.
  *
- * Two entries moving files in one repository is what the exclusion exists to
- * prevent, and one mechanism answers it: the kernel lock on a sidecar beside
- * the repository. `flock` and `LockFileEx` both exclude *independently opened*
- * handles, including two opened by one process, so the native descriptor is the
- * whole live resource and there is no table of holders to keep.
+ * A managed slot is the one hold: one entry at a time owns a managed checkout,
+ * through the kernel lock on a sidecar under the managed root. `flock` and
+ * `LockFileEx` both exclude *independently opened* handles, including two
+ * opened by one process, so the native descriptor is the whole live resource
+ * and there is no table of holders to keep.
  *
- * The rows that matter most are the entry-level ones. A refused acquisition has
- * to leave the history it found exactly as it was: records already written stay
- * written, the mutation that was about to happen gets no result of any kind,
- * nothing after it runs, and a later attempt works once the holder has gone. A
- * lease that leaked past its entry, or one that answered from a table instead of
- * the kernel, would pass a helper test and fail that rule.
+ * An ambient checkout and the repository behind it are shared. Two entries —
+ * or an entry and another process — read and change the same checkout the way
+ * two shells do, and a refused slot acquisition leaves the history it found
+ * exactly as it was: records already written stay written, the operation that
+ * was about to happen gets no result of any kind, and a later attempt works
+ * once the holder has gone.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -36,6 +36,7 @@ import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { mkdir, mkdtemp, realpath, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { runGit } from "./support/fixture-git.ts";
 import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
@@ -48,11 +49,7 @@ import { executeInstalled } from "@executablemd/core/host";
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
-import {
-  CommonDirectoryLeaseError,
-  useCommonDirectoryLease,
-} from "../src/repl/repositories/deno/leases.ts";
-import { commonDirectoryLock, repositorySlot, worktreeSlot } from "@executablemd/git/deno";
+import { repositorySlot, worktreeSlot } from "@executablemd/git/deno";
 import { useLeases } from "@executablemd/git/deno";
 import { useCompositionComponents } from "@executablemd/git";
 import { REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
@@ -95,14 +92,23 @@ function common(checkout: string): Operation<string> {
   return until(realpath(join(checkout, ".git")));
 }
 
-/** What holding this directory answered: nothing, or the refusal it raised. */
-function* held(directory: string): Operation<Error | undefined> {
-  try {
-    yield* useCommonDirectoryLease(directory);
-    return undefined;
-  } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
-  }
+/**
+ * Where the retired REPL common-directory lease kept its sidecar.
+ *
+ * Derived here because nothing in the product names it any more. An older `xmd`
+ * still running beside this one locks exactly this path, so these rows hold it
+ * and prove an entry neither opens nor waits on it.
+ */
+function retiredCommonLock(commonDirectory: string): string {
+  const digest = createHash("sha256")
+    .update(`${commonDirectory.length}:${commonDirectory}`, "utf8")
+    .digest("hex");
+  return `${tmpdir()}/xmd-common-lanes/${digest}.lock`;
+}
+
+/** A lock sidecar of this row's own, for the rows about the advisory helper. */
+function probeLock(fixture: Fixture): string {
+  return join(fixture.root, "locks", "probe.lock");
 }
 
 interface Counters {
@@ -197,7 +203,8 @@ interface Run {
  * One entry, run to completion in this checkout.
  *
  * The entry host is the production one, so a second concurrent entry is refused
- * by whatever actually refuses it rather than by anything this suite installs.
+ * or admitted by the production holds rather than by anything this suite
+ * installs.
  */
 function entry(
   checkout: string,
@@ -208,7 +215,7 @@ function entry(
    * Work to do while this entry is standing at a question it never answers.
    *
    * Where a row holding the checkout open has to wait, and it has to wait while
-   * the *document* is live: the lease belongs to the scope core initialization
+   * the *document* is live: a slot belongs to the scope core initialization
    * established it in, and an entry whose document has finished has already
    * released it. A source ending in `<Elicit>` is how a held entry is held in
    * production too — somebody left it at a question — so this is that, with the
@@ -267,7 +274,7 @@ function entry(
     if (holding !== undefined) {
       // The question this entry's source ends at. Whoever asked gets no answer:
       // the callback runs instead, and the entry stays where it is — holding
-      // the lease its initialization took — until that callback returns.
+      // whatever its initialization took — until that callback returns.
       yield* Elicitation.around({
         *elicit(): Operation<unknown> {
           const answer = yield* holding();
@@ -324,17 +331,16 @@ function answeringOnce(): () => Operation<unknown> {
   };
 }
 
-describe("an entry's hold on the checkout it is working in", () => {
-  it("E8: refuses a second live entry, preserving what the first recorded", function* () {
+describe("the holds an entry takes on the checkout it is working in", () => {
+  it("E8: lets a second live entry read and change a checkout the first is changing", function* () {
     const fixture = yield* useFixture();
     const holding = counters();
-    const blocked = counters();
-    const stream = new InMemoryStream();
+    const second = counters();
     const first = new InMemoryStream();
 
     yield* scoped(function* (): Operation<void> {
-      // One entry holding the checkout, kept open by a write it has already
-      // performed and a suspension after it.
+      // One entry that has already changed the checkout and is standing at a
+      // question, which is where two real sessions sharing one `.git` were.
       const acquired = withResolvers<void>();
       const release = withResolvers<void>();
       yield* spawn(function* (): Operation<void> {
@@ -354,150 +360,71 @@ describe("an entry's hold on the checkout it is working in", () => {
       const recorded = localRecords(yield* first.readAll());
       expect(recorded).toBe(1);
 
-      // A second live entry of the same process, in the same checkout. It is
-      // refused by the operating system: the first entry's descriptor is a
-      // different handle on the same file.
-      const second = yield* entry(
-        fixture.checkout,
-        ['<File path="blocked.md">blocked</File>', '<File path="sentinel.md">sentinel</File>'].join(
-          "\n",
-        ),
-        stream,
-        blocked,
-      );
-
-      // Refused before anything was read or changed, so: no mutation, no
-      // sentinel after it, and no result of any kind written down for the
-      // operation that was about to happen.
-      expect(second.refusal).toContain("Another XMD entry or process holds this checkout");
-      expect(blocked.writes).toEqual([]);
-      expect(yield* exists(join(fixture.checkout, "blocked.md"))).toBe(false);
-      expect(yield* exists(join(fixture.checkout, "sentinel.md"))).toBe(false);
-      expect(localRecords(second.events)).toBe(0);
-
-      // And the records the first entry wrote are untouched.
-      expect(localRecords(yield* first.readAll())).toBe(recorded);
-      expect(yield* readTextFile(join(fixture.checkout, "held.md"))).toBe("held");
-
-      release.resolve();
-    });
-
-    // The holder is gone, so a later attempt works against the environment then
-    // available.
-    const later = counters();
-    const after = yield* entry(
-      fixture.checkout,
-      '<File path="later.md">later</File>',
-      new InMemoryStream(),
-      later,
-    );
-    expect(after.refusal).toBe(undefined);
-    expect(later.writes).toEqual(["later.md"]);
-  });
-
-  it("E8: lets an entry in another repository through", function* () {
-    const fixture = yield* useFixture();
-    const holding = counters();
-    const other = counters();
-
-    yield* scoped(function* (): Operation<void> {
-      const acquired = withResolvers<void>();
-      const release = withResolvers<void>();
-      yield* spawn(function* (): Operation<void> {
-        yield* entry(
-          fixture.checkout,
-          ['<File path="held.md">held</File>', QUESTION].join("\n"),
-          new InMemoryStream(),
-          holding,
-          function* (): Operation<void> {
-            acquired.resolve();
-            yield* release.operation;
-          },
-        );
-      });
-      yield* acquired.operation;
-
-      // A different common directory is a different question.
-      const elsewhere = yield* entry(
-        fixture.elsewhere,
-        '<File path="free.md">free</File>',
-        new InMemoryStream(),
-        other,
-      );
-      expect(elsewhere.refusal).toBe(undefined);
-      expect(other.writes).toEqual(["free.md"]);
-      release.resolve();
-    });
-  });
-
-  it("E8: reads the held checkout, and takes no lease to do it", function* () {
-    const fixture = yield* useFixture();
-    const holding = counters();
-    const reading = counters();
-
-    yield* scoped(function* (): Operation<void> {
-      const acquired = withResolvers<void>();
-      const release = withResolvers<void>();
-      yield* spawn(function* (): Operation<void> {
-        yield* entry(
-          fixture.checkout,
-          ['<File path="held.md">held</File>', QUESTION].join("\n"),
-          new InMemoryStream(),
-          holding,
-          function* (): Operation<void> {
-            acquired.resolve();
-            yield* release.operation;
-          },
-        );
-      });
-      yield* acquired.operation;
-
-      // Watched from here, after the holder has its descriptor: what this row
-      // is about is whether the reader opens one of its own.
+      // Watched from here, after the first entry has done everything it will
+      // do: what this row is about is what the second one opens.
       const observed = yield* useObservedDescriptors();
-      const stream = new InMemoryStream();
-      const read = yield* entry(
+      const later = yield* entry(
         fixture.checkout,
-        '<File path="held.md" as="seen" />\n{seen}',
-        stream,
-        reading,
+        [
+          '<File path="held.md" as="seen" />',
+          "{seen}",
+          '<Dir path="made">',
+          '<File path="inside.md">inside</File>',
+          "</Dir>",
+          '<File path="sentinel.md">sentinel</File>',
+        ].join("\n"),
+        new InMemoryStream(),
+        second,
       );
 
-      // The read happened, against a checkout somebody else is holding for
-      // mutation. A lease taken here would have refused it.
-      expect(read.refusal).toBe(undefined);
-      expect(reading.reads).toEqual(["held.md"]);
-      expect(String(read.output)).toContain("held");
-      // And it is retained, so a continuation answers it without looking.
-      expect(localRecords(read.events)).toBe(1);
-      // No descriptor at all: the lease is about one entry at a time changing a
-      // repository, and this one only looked.
+      // The `<Dir>` and everything after it ran and was retained, exactly as it
+      // would with nobody else in the repository.
+      expect(later.refusal).toBe(undefined);
+      expect(String(later.output)).toContain("held");
+      expect(second.reads).toEqual(["held.md"]);
+      expect(second.writes).toEqual(["inside.md", "sentinel.md"]);
+      expect(yield* readTextFile(join(fixture.checkout, "made", "inside.md"))).toBe("inside");
+      expect(yield* readTextFile(join(fixture.checkout, "sentinel.md"))).toBe("sentinel");
+      expect(localRecords(later.events)).toBe(4);
+      // An ambient checkout has no slot, so the entry opened no lock at all.
       expect(observed.events()).toEqual([]);
 
+      // And the first entry's records are untouched.
+      expect(localRecords(yield* first.readAll())).toBe(recorded);
+
       release.resolve();
     });
-
-    // The holder is gone. A mutation now takes the lease it always did, which
-    // is the positive control for the observation above.
-    const after = counters();
-    const observed = yield* useObservedDescriptors();
-    const wrote = yield* entry(
-      fixture.checkout,
-      '<File path="later.md">later</File>',
-      new InMemoryStream(),
-      after,
-    );
-    expect(wrote.refusal).toBe(undefined);
-    expect(observed.events().includes("lock")).toBe(true);
   });
 
-  it("E8: takes one handle for an entry's many mutations", function* () {
+  it("E8: changes a checkout while another process holds the retired common-directory sidecar", function* () {
+    const fixture = yield* useFixture();
+    const lock = retiredCommonLock(yield* common(fixture.checkout));
+    // The sidecar an older `xmd` still running beside this one locks.
+    const child = yield* holdingChild(lock);
+    expect(yield* child.locked()).toBe("locked");
+
+    const counted = counters();
+    const observed = yield* useObservedDescriptors();
+    const performed = yield* entry(
+      fixture.checkout,
+      ['<Dir path="made">', '<File path="inside.md">inside</File>', "</Dir>"].join("\n"),
+      new InMemoryStream(),
+      counted,
+    );
+
+    expect(performed.refusal).toBe(undefined);
+    expect(counted.writes).toEqual(["inside.md"]);
+    expect(yield* readTextFile(join(fixture.checkout, "made", "inside.md"))).toBe("inside");
+    expect(localRecords(performed.events)).toBe(2);
+    expect(observed.opened()).toEqual([]);
+
+    yield* child.finish();
+  });
+
+  it("E8: records an entry's many mutations in one checkout", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
 
-    // Four mutations in one entry. Each asks for the lease; the entry's lazy
-    // single-flight acquisition is what makes that one native handle rather
-    // than four — a second independent handle would refuse itself.
     const performed = yield* entry(
       fixture.checkout,
       [
@@ -517,72 +444,9 @@ describe("an entry's hold on the checkout it is working in", () => {
     expect(localRecords(performed.events)).toBe(4);
   });
 
-  it("E8: releases the checkout when the entry is torn down, and not before", function* () {
-    const fixture = yield* useFixture();
-    const directory = yield* common(fixture.checkout);
-    const acquired = withResolvers<void>();
-    const release = withResolvers<void>();
-
-    yield* scoped(function* (): Operation<void> {
-      const holder = yield* spawn(function* (): Operation<void> {
-        yield* useCommonDirectoryLease(directory);
-        acquired.resolve();
-        yield* release.operation;
-      });
-      // Asked for after the holder has it, not beside it: a probe racing the
-      // acquisition would be testing which of the two went first.
-      yield* acquired.operation;
-      expect(yield* scoped(() => held(directory))).not.toBe(undefined);
-      release.resolve();
-      // Joined, not merely signalled: what proves the lease is gone is the
-      // holder's own teardown having run.
-      yield* holder;
-    });
-
-    expect(yield* scoped(() => held(directory))).toBe(undefined);
-  });
-
-  it("E8: refuses a second independently opened handle in this process", function* () {
-    const fixture = yield* useFixture();
-    const directory = yield* common(fixture.checkout);
-
-    yield* scoped(function* (): Operation<void> {
-      const acquired = withResolvers<void>();
-      yield* spawn(function* (): Operation<void> {
-        yield* useCommonDirectoryLease(directory);
-        acquired.resolve();
-        yield* suspend();
-      });
-      yield* acquired.operation;
-      // The kernel, not a table: this is a second `open` of the same path in one
-      // process, which `flock` and `LockFileEx` both refuse.
-      const refused = yield* scoped(() => held(directory));
-      expect(refused instanceof CommonDirectoryLeaseError).toBe(true);
-    });
-  });
-
-  it("E8: refuses while another process holds the sidecar, and not after", function* () {
-    const fixture = yield* useFixture();
-    const directory = yield* common(fixture.checkout);
-    const lock = commonDirectoryLock(directory);
-    const child = yield* holdingChild(lock);
-
-    expect(yield* child.locked()).toBe("locked");
-    expect(yield* scoped(() => held(directory))).not.toBe(undefined);
-
-    // The child lets go, and the kernel is what says so: this waits for the
-    // process to be gone rather than for the close to be accepted.
-    yield* child.finish();
-
-    expect(yield* scoped(() => held(directory))).toBe(undefined);
-    // Nothing unlinked the sidecar: unlinking a locked path lets the next
-    // caller lock a different file at the same name.
-    expect(yield* exists(lock)).toBe(true);
-  });
-
   it("E8: joins the child it owns when finishing is cancelled", function* () {
     const fixture = yield* useFixture();
-    const lock = commonDirectoryLock(yield* common(fixture.elsewhere));
+    const lock = probeLock(fixture);
     let probe: HoldingChild | undefined;
 
     yield* scoped(function* (): Operation<void> {
@@ -609,7 +473,7 @@ describe("an entry's hold on the checkout it is working in", () => {
 
   it("E8: releases the advisory lock when its holder is cancelled", function* () {
     const fixture = yield* useFixture();
-    const lock = commonDirectoryLock(yield* common(fixture.elsewhere));
+    const lock = probeLock(fixture);
     const acquired = withResolvers<void>();
 
     yield* scoped(function* (): Operation<void> {
@@ -694,11 +558,11 @@ describe("an entry's hold on the checkout it is working in", () => {
     expect(later.refusal).toBe(undefined);
   });
 
-  it("E4: lets a restored placement read under a held mutation lease, and not write", function* () {
+  it("E4: lets a restored placement read and write beside another entry's worktree", function* () {
     const fixture = yield* useFixture();
     const managed = join(fixture.root, "repositories");
     const origin = yield* useOrigin(fixture.root, "shared");
-    const commonLock = commonDirectoryLock(yield* until(realpath(join(origin, ".git"))));
+    const retired = retiredCommonLock(yield* until(realpath(join(origin, ".git"))));
 
     // Two linked placements of one repository, selected from the repository the
     // entry was opened in. `reader` and `writer` are two histories over the
@@ -726,8 +590,8 @@ describe("an entry's hold on the checkout it is working in", () => {
 
     yield* scoped(function* (): Operation<void> {
       // One entry holding a *different* linked placement of the same
-      // repository, and with it the shared Git directory's mutation lease its
-      // own worktree selector took.
+      // repository, which its own worktree selector created, and the retired
+      // common-directory sidecar held as an older `xmd` would hold it.
       const holding = counters();
       const acquired = withResolvers<void>();
       const release = withResolvers<void>();
@@ -745,6 +609,7 @@ describe("an entry's hold on the checkout it is working in", () => {
         );
       });
       yield* acquired.operation;
+      expect(yield* useAdvisoryLock(retired)).not.toBe(undefined);
 
       // Watched from here, after the holder has its descriptors: what these two
       // continuations do is the subject.
@@ -759,20 +624,16 @@ describe("an entry's hold on the checkout it is working in", () => {
         answeringOnce(),
         managed,
       );
-      // The read happened, in a placement restored from its record, while
-      // somebody else holds the repository for mutation.
       expect(read.refusal).toBe(undefined);
       expect(readAgain.reads).toEqual(["probe.md"]);
       expect(String(read.output)).toContain("probe");
-      // It took the placement's own slot back and never opened the shared Git
-      // directory's lock: being retained and being exclusive are different
-      // questions, and so are the two holds.
-      expect(observed.opened().filter((path) => path === commonLock)).toEqual([]);
+      // It took the placement's own slot back, which is the one hold left.
       expect(observed.events().includes("lock")).toBe(true);
+      expect(observed.opened().includes(retired)).toBe(false);
 
       observed.forget();
       const writeAgain = counters();
-      const refused = yield* entry(
+      const wrote = yield* entry(
         origin,
         writerSource,
         new InMemoryStream([...writerPrefix]),
@@ -780,29 +641,13 @@ describe("an entry's hold on the checkout it is working in", () => {
         answeringOnce(),
         managed,
       );
-      // The mutation refused before it happened, and before any result was
-      // written down for it.
-      expect(refused.refusal).toContain("Another XMD entry or process holds this checkout");
-      expect(writeAgain.writes).toEqual([]);
-      expect(yield* exists(join(fixture.root, "later.md"))).toBe(false);
-      expect(observed.opened().includes(commonLock)).toBe(true);
+      expect(wrote.refusal).toBe(undefined);
+      expect(writeAgain.writes).toEqual(["later.md"]);
+      expect(observed.events().includes("lock")).toBe(true);
+      expect(observed.opened().includes(retired)).toBe(false);
 
       release.resolve();
     });
-
-    // The holder is gone, so the same mutation now takes the lease it always
-    // did — the positive control for the refusal above.
-    const after = counters();
-    const wrote = yield* entry(
-      origin,
-      writerSource,
-      new InMemoryStream([...writerPrefix]),
-      after,
-      answeringOnce(),
-      managed,
-    );
-    expect(wrote.refusal).toBe(undefined);
-    expect(after.writes).toEqual(["later.md"]);
   });
 
   it("E4: reacquires a restored placement's slot under the root it recorded", function* () {
@@ -975,7 +820,7 @@ describe("an entry's hold on the checkout it is working in", () => {
 
   it("E8: opens, locks, releases and closes each descriptor exactly once", function* () {
     const fixture = yield* useFixture();
-    const lock = commonDirectoryLock(yield* common(fixture.checkout));
+    const lock = probeLock(fixture);
 
     yield* scoped(function* (): Operation<void> {
       const observed = yield* useObservedDescriptors();
@@ -1114,20 +959,18 @@ describe("an entry's hold on the checkout it is working in", () => {
     expect(gitRecords(later.events)).toBe(1);
   });
 
-  it("E5: holds the slot before the shared Git directory, and replay holds neither", function* () {
+  it("E5: runs new Git in a restored placement beside another entry's worktree", function* () {
     const fixture = yield* useFixture();
     const managed = join(fixture.root, "repositories");
     const origin = yield* useOrigin(fixture.root, "shared-git");
-    const commonDirectory = yield* until(realpath(join(origin, ".git")));
-    const commonLock = commonDirectoryLock(commonDirectory);
+    const retired = retiredCommonLock(yield* until(realpath(join(origin, ".git"))));
 
     // One linked placement of the repository the entry was opened in, with a
     // Git operation acknowledged inside it and a second one still to run.
     //
-    // Nothing comes between the question and that second Add. A new `<File>`
-    // there would take both holds first, and the Add's reacquisition of a hold
-    // somebody else already took for it says nothing about what Git itself
-    // acquires — so Git is the first new operation on this continuation.
+    // Nothing comes between the question and that second Add, so Git is the
+    // first new operation on this continuation and the slot it takes back is
+    // its own.
     const source = [
       '<Worktree name="observed" branch="observed">',
       '<File path="probe.md">probe</File>',
@@ -1142,18 +985,10 @@ describe("an entry's hold on the checkout it is working in", () => {
     expect(gitRecords(prefix)).toBe(1);
     expect(methodsCalled(first)).toContain("add");
 
-    // Derived from the canonical root the entry created and canonicalized, so
-    // these are the two sidecars the provider itself opens.
-    const canonical = yield* until(realpath(managed));
-    // Only the shared directory's own lock is named here. Where the slot's
-    // sidecar lives is the domain's business; what this row is about is the
-    // order the two are taken in, which the public one is enough to see.
-    const slot = worktreeSlot(canonical, commonDirectory, "observed");
-    expect(slot.startsWith(canonical)).toBe(true);
-
     yield* scoped(function* (): Operation<void> {
       // A different linked checkout of the same repository, held by another
-      // entry — which means the shared Git directory's mutation lease too.
+      // entry that has changed it, and the retired common-directory sidecar
+      // held as an older `xmd` would hold it.
       const holding = counters();
       const acquired = withResolvers<void>();
       const release = withResolvers<void>();
@@ -1176,50 +1011,30 @@ describe("an entry's hold on the checkout it is working in", () => {
         );
       });
       yield* acquired.operation;
+      expect(yield* useAdvisoryLock(retired)).not.toBe(undefined);
 
       const observed = yield* useObservedDescriptors();
-      const blocked = counters();
-      const refused = yield* entry(
+      const after = counters();
+      const continued = yield* entry(
         origin,
         source,
         new InMemoryStream([...prefix]),
-        blocked,
+        after,
         answeringOnce(),
         managed,
       );
 
-      // The completed Git operation replayed with no native work and no hold on
-      // the shared Git directory at all; the new one — the first new operation
-      // of any kind on this continuation — refused under the holder's mutation
-      // lease, before it ran and before it appended anything.
-      expect(refused.refusal).toContain("Another XMD entry or process holds this checkout");
-      expect(methodsCalled(blocked)).not.toContain("add");
-      expect(blocked.writes).toEqual([]);
-      expect(gitRecords(refused.events)).toBe(gitRecords(prefix));
-      const opened = observed.opened();
-      // The slot came back first and the shared directory second, which is the
-      // order the live path takes them in: the shared lock is not the first
-      // lock opened, and a different one precedes it.
-      const tookCommon = opened.indexOf(commonLock);
-      expect(tookCommon > 0).toBe(true);
-      expect(opened.slice(0, tookCommon).every((path) => path !== commonLock)).toBe(true);
+      // The completed Add replayed with no native work and the new one ran
+      // once, under the placement's slot and nothing else.
+      expect(continued.refusal).toBe(undefined);
+      expect(methodsCalled(after).filter((name) => name === "add")).toEqual(["add"]);
+      expect(methodsCalled(after)).not.toContain("selectWorktree");
+      expect(gitRecords(continued.events)).toBe(gitRecords(prefix) + 1);
+      expect(observed.events().includes("lock")).toBe(true);
+      expect(observed.opened().includes(retired)).toBe(false);
 
       release.resolve();
     });
-
-    // After the holder's joined release the same new work succeeds.
-    const after = counters();
-    const later = yield* entry(
-      origin,
-      source,
-      new InMemoryStream([...prefix]),
-      after,
-      answeringOnce(),
-      managed,
-    );
-    expect(later.refusal).toBe(undefined);
-    expect(methodsCalled(after)).toContain("add");
-    expect(gitRecords(later.events)).toBe(gitRecords(prefix) + 1);
   });
 });
 

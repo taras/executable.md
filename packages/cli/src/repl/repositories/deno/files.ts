@@ -11,7 +11,7 @@ import { createMountPolicy } from "../../mount-files.ts";
  *
  * Checkout routing takes precedence over the marked entry's owned workspace.
  * Outside both, file work remains ordinary and unrecorded. Workspace-only work
- * uses the existing local-operation records without a Git lease.
+ * uses the existing local-operation records and takes no slot.
  *
  * A managed placement is looked for first, and the most specific one wins. The
  * entry's ambient checkout answers for everything no placement covers, which is
@@ -23,15 +23,15 @@ import { createMountPolicy } from "../../mount-files.ts";
  * completed write answers from its receipt, each touching no file, however the
  * file has changed since.
  *
- * A new mutation also takes the checkout's lease, and a new read does not.
- * Being retained and being exclusive are different questions: what the lease
- * answers is that one entry at a time changes a repository, so a read proceeds
- * while another entry holds it and never holds it itself.
+ * Being retained is not being exclusive. Entries share an ambient checkout and
+ * its repository the way two shells do: nothing here stops another entry or
+ * another process reading or changing the same files, and Git's own locks are
+ * the only ones its commands meet.
  *
- * A managed placement adds the other hold, and it answers a different question:
- * one entry at a time *owns* a managed slot. A restored placement took none
- * when it replayed, so the first new operation inside it — a read included —
- * takes the slot before it is performed.
+ * A managed placement is the one hold, and it answers a narrower question: one
+ * entry at a time *owns* a managed slot. A restored placement took none when it
+ * replayed, so the first new operation inside it — a read included — takes the
+ * slot before it is performed.
  *
  * ## One route, one policy
  *
@@ -78,8 +78,6 @@ import type {
 export interface ReplManagedPlacement {
   /** The canonical root of the selected checkout. */
   readonly checkoutRoot: string;
-  /** The canonical common Git directory it belongs to. */
-  readonly commonDirectory: string;
   /** Take ownership of its managed slot for the entry, or refuse. */
   own(): Operation<void>;
 }
@@ -93,13 +91,6 @@ export interface ReplLocalRecorder {
    * a checkout, and an entry that makes none never looks.
    */
   selection(): Operation<ReplAmbientCheckout | undefined>;
-  /**
-   * Hold the shared Git directory this entry is about to mutate in, or refuse.
-   *
-   * Asked once per entry and shared by every later request, so the lease belongs
-   * to the entry rather than to the element that first needed it.
-   */
-  hold(commonDirectory: string): Operation<void>;
   /**
    * The managed checkouts this entry has registered, as they stand now.
    *
@@ -201,9 +192,6 @@ function* routed(
     // answers is that one entry at a time owns this managed checkout, which an
     // observation inside it needs as much as a change does.
     yield* managed.own();
-    if (operation !== "file-read") {
-      yield* recorder.hold(managed.commonDirectory);
-    }
     return yield* retain({
       kind: "existing",
       owner: "placement",
@@ -231,9 +219,6 @@ function* routed(
     return authored !== undefined && mounts !== undefined
       ? yield* mounts.record(authored, request, perform, { kind: "external-mapped-read" })
       : yield* perform();
-  }
-  if (operation !== "file-read") {
-    yield* recorder.hold(checkout.commonDirectory);
   }
   return yield* retain({
     kind: "existing",
@@ -329,22 +314,16 @@ function* copyRoute(
   const read = covering(placements, source);
   const write = covering(placements, destination);
   const checkout = write === undefined ? yield* recorder.selection() : undefined;
-  const hold =
-    write?.commonDirectory ??
-    (checkout !== undefined && inside(checkout.checkoutRoot, destination)
-      ? checkout.commonDirectory
-      : undefined);
-  let owned = false;
-  if (hold === undefined) {
-    for (const directory of roots) {
-      const root = yield* canonical(directory);
-      if (root === destination || inside(root, destination)) {
-        owned = true;
-        break;
-      }
+  let covered =
+    write !== undefined || (checkout !== undefined && inside(checkout.checkoutRoot, destination));
+  for (const directory of covered ? [] : roots) {
+    const root = yield* canonical(directory);
+    if (root === destination || inside(root, destination)) {
+      covered = true;
+      break;
     }
   }
-  if (hold === undefined && !owned) {
+  if (!covered) {
     if (read !== undefined) {
       yield* read.own();
     }
@@ -356,9 +335,6 @@ function* copyRoute(
     }
     if (write !== undefined) {
       yield* write.own();
-    }
-    if (hold !== undefined) {
-      yield* recorder.hold(hold);
     }
   })();
 }
