@@ -71,8 +71,7 @@ const checksProps: PropsSchema = {
       type: "string",
       minLength: 1,
       description:
-        "The pull request's canonical URL, which identifies it; the provider that " +
-        "recognizes the URL answers, such as GitHub for `github.com`.",
+        "The pull request's canonical URL. By default, the provider that recognizes the URL answers.",
     },
     provider: {
       type: "string",
