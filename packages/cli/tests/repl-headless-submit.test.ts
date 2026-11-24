@@ -1091,6 +1091,7 @@ describe("direct headless submission", () => {
     yield* openHumanDraft(fixture, terminal.terminal);
     yield* fixture.input.input(terminal.terminal, "Newer human draft.");
     yield* press("[History]");
+    yield* press("[Positions]");
     yield* press(pointLabel(point.point, point.ordinal, point.entry));
     preparation.release();
     expect(yield* task).toBe(1);
