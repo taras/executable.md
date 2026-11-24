@@ -80,14 +80,13 @@ function admitQuery(query: string): SearchRequest["kind"] {
       "select exactly one kind with is:issue or is:pr.",
     );
   }
-  const operators = matches.map(([token]) => token);
+  const tokens = matches.map(([token]) => token);
+  const qualifierAt = (index: number) => /^[+-]*[\w-]+:/u.test(tokens[index] ?? "");
   if (
-    operators.some(
-      (token, index) =>
-        /^(?:AND|OR|NOT)$/u.test(token) &&
-        [operators[index - 1], operators[index + 1]].some((operand) =>
-          /^[+-]*[\w-]+:/u.test(operand ?? ""),
-        ),
+    tokens.some((token, index) =>
+      token === "NOT"
+        ? qualifierAt(index + 1)
+        : /^(?:AND|OR)$/u.test(token) && (qualifierAt(index - 1) || qualifierAt(index + 1)),
     )
   ) {
     throw new GitOperationAdmissionError(
