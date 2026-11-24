@@ -15,7 +15,8 @@
  * at once. Nothing here substitutes a bare `<Prompt>` for that.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   all,
@@ -2068,9 +2069,13 @@ function resequenced(events: readonly DurableEvent[], sequence: number): Durable
 
 describe("EA1 — one chronology of entries, each counting its own Prompts", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("EA1: two entries each retain sequence 0, ordered by entry and then sequence", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub();
     yield* scoped(function* () {
       yield* useStub(stub);
@@ -2097,7 +2102,10 @@ describe("EA1 — one chronology of entries, each counting its own Prompts", () 
   });
 
   it("EA1: two prompts in one entry claiming one sequence refuse the whole projection", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub();
     yield* scoped(function* () {
       yield* useStub(stub);
@@ -2115,7 +2123,10 @@ describe("EA1 — one chronology of entries, each counting its own Prompts", () 
   });
 
   it("EA1: a live turn carries the entry that began it, and keeps it on publication", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub({ one: { gated: true }, two: { gated: true } });
     yield* scoped(function* () {
       yield* useStub(stub);
@@ -2169,7 +2180,10 @@ describe("EA1 — one chronology of entries, each counting its own Prompts", () 
   });
 
   it("EA1: one conversation spans two entries, and naming an entry does not narrow it", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub();
     yield* scoped(function* () {
       yield* useStub(stub);
@@ -2292,9 +2306,13 @@ function* useStopping(stop: Signal): Operation<void> {
 
 describe("EL2 — an entry's live Agent state is retired with its execution", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("EL2: a cancelled turn is retired with its entry, and the next entry runs clean", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub({ held: { gated: true }, two: { gated: true } });
     const stop = signal();
     yield* scoped(function* () {
@@ -2356,7 +2374,10 @@ describe("EL2 — an entry's live Agent state is retired with its execution", ()
   });
 
   it("EL2: cleanup keeps a published slot and removes only the unpublished one", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub({
       done: { gated: true },
       held: { gated: true },
@@ -2436,7 +2457,10 @@ describe("EL2 — an entry's live Agent state is retired with its execution", ()
   });
 
   it("EL2: a request held by a cancelled entry crosses nothing into its successor", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const stub = createStub({
       asks: { permission: { toolCallId: "entry-one", kind: "write", title: "Write once?" } },
       next: { permission: { toolCallId: "entry-two", kind: "write", title: "Write again?" } },
@@ -2590,9 +2614,13 @@ function eachCallOwnsItsTurn(model: ReplModel): void {
 
 describe("R1 — one component called in two branches", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   it("R1: each call keeps its own turn, the next entry is admitted, and a cold read repeats nothing", function* () {
-    const holder = execution();
+    const holder: ReplExecution = {
+      id: "agent-kernel",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     let written: string[] = [];
     yield* scoped(function* () {
       const stub = createStub({ same: { deltas: ["reply"] } });

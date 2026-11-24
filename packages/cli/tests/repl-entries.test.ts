@@ -19,7 +19,7 @@
  * no run produces.
  */
 
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 import {
@@ -39,6 +39,7 @@ import {
   serializeDurableEvent,
 } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { API } from "@executablemd/runtime";
 import {
   createScope,
@@ -1254,6 +1255,7 @@ function* countPerformed(): Operation<Performed> {
 
 describe("REPL entries: one session, one entry task, in turn", () => {
   beforeAll(() => useTempFileCompiler());
+  beforeEach(journalBeforeEach(OWNER));
 
   const firstTask = "EL1: the first entry starts exactly one task";
   it(firstTask, () =>
@@ -1308,7 +1310,10 @@ describe("REPL entries: one session, one entry task, in turn", () => {
   );
 
   it("EL1: terminal and unjoined still refuses; the join lets the next one start", function* () {
-    const holder = replExecution();
+    const holder: ReplExecution = {
+      id: "entries",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     const entered = gate();
     const release = gate();
     try {
@@ -1357,7 +1362,10 @@ describe("REPL entries: one session, one entry task, in turn", () => {
   });
 
   it("EL1: a later entry receives only what earlier entries durably published", function* () {
-    const holder = replExecution();
+    const holder: ReplExecution = {
+      id: "entries",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     yield* scoped(function* () {
       const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
       yield* session.join();
@@ -1380,7 +1388,10 @@ describe("REPL entries: one session, one entry task, in turn", () => {
   });
 
   it("EL1: a failed entry permits the next one; an interrupted one permits none", function* () {
-    const holder = replExecution();
+    const holder: ReplExecution = {
+      id: "entries",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     yield* scoped(function* () {
       const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
       yield* session.join();
@@ -1404,7 +1415,10 @@ describe("REPL entries: one session, one entry task, in turn", () => {
     // Measured rather than assumed: cancelling a held REPL entry appends no
     // terminal record at all, so what it leaves is an *unfinished* entry — and
     // nothing may follow one of those.
-    const interrupted = replExecution();
+    const interrupted: ReplExecution = {
+      id: "entries",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    };
     yield* scoped(function* () {
       const session = opened(yield* submitReplEntry({ execution: interrupted, source: ASKS }));
       yield* asking(session);
