@@ -654,19 +654,24 @@ describe(
         stderr: "",
       });
 
-      const run = yield* spawn(function* () {
-        // A large trailing write, so what is asserted below is the whole of it
-        // rather than the first line to arrive.
-        yield* runShell("trap 'yes LATE | head -20000; exit 0' TERM; echo READY; sleep 20", {
-          stdin: "",
-          timeout: 60_000,
-          observeChild: (started, reader) => {
-            child = started;
-            before = attached(started);
-            captured = reader;
-          },
-        }).join();
-      });
+      const run = yield* spawn(() =>
+        useFixture({}, function* (dir) {
+          // The shell keeps both ends of the FIFO open so its builtin read
+          // can block without a foreground child deferring the TERM trap.
+          const command =
+            "mkfifo hold && exec 3<>hold && trap 'yes LATE | head -20000; exit 0' TERM && echo READY && read -r line <&3";
+          yield* runShell(command, {
+            cwd: dir,
+            stdin: "",
+            timeout: 60_000,
+            observeChild: (started, reader) => {
+              child = started;
+              before = attached(started);
+              captured = reader;
+            },
+          }).join();
+        }),
+      );
 
       // Synchronized on the child running, so the halt lands on a live process
       // with every handler attached.
