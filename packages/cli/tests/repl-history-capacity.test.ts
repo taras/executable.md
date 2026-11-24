@@ -26,6 +26,7 @@ import {
 import type { ReplState, ReplView } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplModel } from "../src/repl/model.ts";
+import { resolveWheel } from "../src/repl/renderer.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { journalModel } from "./fixtures/repl/journals.ts";
@@ -105,7 +106,10 @@ describe("History over a long retained history", () => {
     expect(markers(again)).toEqual(admitted);
     // Newest first, with the journal positions unchanged.
     expect(admitted).toEqual(
-      [...model.checkpoints].reverse().slice(0, admitted.length).map((one) => `drawer:marker:${one.marker}`),
+      [...model.checkpoints]
+        .reverse()
+        .slice(0, admitted.length)
+        .map((one) => `drawer:marker:${one.marker}`),
     );
     // One column, one row each, one under the other, each as wide as the next.
     const bounds = admitted.map((key) => drawn.boundsOf(key));
@@ -145,6 +149,72 @@ describe("History over a long retained history", () => {
     expect(presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
   });
 
+  it("wheel reaches both ends without selecting and activates the scrolled row", function* () {
+    const model = yield* largeHistory();
+    const presenter = yield* usePresenter(NARROW);
+    let state = initialState("wheel-history");
+    const first = yield* presenter.commit(viewOf(state, model, NARROW));
+    state = yield* pressHistory(presenter, first, state, model);
+    let shown = yield* presenter.commit(viewOf(state, model, NARROW));
+    const start = markers(shown);
+    for (const direction of ["down", "up"] as const) {
+      for (let tick = 0; tick < 60; tick++) {
+        const scroll = shown.committed.rendered.map.scrolls.find(
+          (one) => one.id === "box:drawer:viewport",
+        );
+        if (scroll === undefined) {
+          throw new Error("History viewport is absent");
+        }
+        const event = resolveWheel(
+          shown.committed.rendered,
+          {
+            column: scroll.bounds.x,
+            row: scroll.bounds.y,
+          },
+          direction,
+        );
+        if (event === undefined) {
+          throw new Error("History wheel did not resolve");
+        }
+        const result = yield* presenter.tree.dispatch(event);
+        if (!result.ok || result.value.outcome !== "action") {
+          throw new Error("History wheel asked for nothing");
+        }
+        state = reduceRepl(
+          state,
+          result.value.action,
+          model,
+          LIVE,
+          shown.committed.admission,
+        ).state;
+        expect(state.route.at).toBeUndefined();
+        shown = yield* presenter.commit(viewOf(state, model, NARROW));
+      }
+      if (direction === "down") {
+        expect(markers(shown)).toContain(`drawer:marker:${model.checkpoints[0].marker}`);
+        const key = `drawer:marker:${model.checkpoints[0].marker}`;
+        const bounds = shown.boundsOf(key);
+        if (bounds === undefined) {
+          throw new Error("oldest row is absent");
+        }
+        const picked = yield* presenter.tree.dispatch({
+          kind: "pointer",
+          target: shown.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
+          frame: shown.committed.rendered.tree,
+        });
+        if (!picked.ok || picked.value.outcome !== "action") {
+          throw new Error("oldest row selected nothing");
+        }
+        expect(
+          reduceRepl(state, picked.value.action, model, LIVE, shown.committed.admission).state.route
+            .at,
+        ).toBe(model.checkpoints[0].marker);
+      } else {
+        expect(markers(shown)).toEqual(start);
+      }
+    }
+  });
+
   it("H4: a padded row keeps its label, blanks and surface, and restores fresh", function* () {
     const model = yield* largeHistory();
     const closed = initialState("public-history-capacity");
@@ -156,7 +226,12 @@ describe("History over a long retained history", () => {
       }),
     });
     const whole = (presenter: Presenter): readonly string[] =>
-      presenter.grid.styledIn({ x: 0, y: 0, width: TALL.columns, height: TALL.rows });
+      presenter.grid.styledIn({
+        x: 0,
+        y: 0,
+        width: TALL.columns,
+        height: TALL.rows,
+      });
 
     const incremental = yield* scoped(function* () {
       const presenter = yield* usePresenter(TALL);
@@ -190,7 +265,10 @@ describe("History over a long retained history", () => {
       yield* presenter.commit(viewOf(opened, model, NARROW));
       presenter.resize(TALL);
       const last = yield* presenter.commit(viewOf(opened, model, TALL, first));
-      expect(presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+      expect(presenter.renderer.engines()).toEqual({
+        measuring: 1,
+        drawing: 1,
+      });
       return { cells: whole(presenter), keys: last.keys.slice().sort() };
     });
 

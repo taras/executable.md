@@ -1843,6 +1843,11 @@ side by side.
 The History drawer lists retained positions in descending history order, newest
 first. Keyboard and pointer activation select the displayed position by its
 retained marker. Display order changes neither journal order nor entry identity.
+Wheel and trackpad scrolling over the list moves three displayed rows per tick
+through the existing viewport, including batched ticks, clamped at both ends.
+Scrolling down reaches older positions and scrolling up returns to newer ones.
+Scrolling selects no position; activating a visible row selects its retained
+marker even after scrolling moves a previously focused row out of view.
 
 The map and the content are one reading, taken from one acknowledged array and
 carried together through the frame. Nothing on this screen pairs a prefix with

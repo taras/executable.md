@@ -86,6 +86,26 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 
 describe("wheel bursts in one input chunk", () => {
   beforeEach(journalBeforeEach(OWNER));
+  it("History batches reach the sequential endpoint and return to newest", function* () {
+    const page = yield* useReplPage({ size: SIZE });
+    yield* generateTypingHistory(page, 20, 1);
+    yield* page.press("[history]");
+    yield* page.until("History", (one) => one.shows("[close]"));
+    const cell = page.screen().locate("40 · Entry outcome recorded");
+    const positions = () =>
+      page.screen().rows.flatMap((row) => row.match(/\d+ · Entry[^│]*/g) ?? []);
+    const newest = positions();
+    yield* burst(page, "down", cell, 4);
+    const older = positions();
+    expect(older).not.toEqual(newest);
+    yield* ticked(page, "up", cell, 4);
+    expect(positions()).toEqual(newest);
+    yield* ticked(page, "down", cell, 4);
+    expect(positions()).toEqual(older);
+    yield* burst(page, "up", cell, 100);
+    expect(positions()).toEqual(newest);
+  });
+
   it("Sidekick chat reaches the sequential endpoint and keeps follow", function* () {
     const page = yield* useReplPage({ size: SIZE });
     yield* intoComposer(page);
