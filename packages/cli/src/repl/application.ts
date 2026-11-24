@@ -10329,6 +10329,7 @@ export interface ReplMeasuredWidths {
  */
 export interface ReplPresentationContext {
   readonly editors?: ReadonlyMap<string, ReplEditor>;
+  readonly draftFrom?: number;
   /**
    * The region widths this frame measured, or none before it has measured any.
    *
@@ -11107,7 +11108,10 @@ function editorRuns(
       return undefined;
     }
     const at = Number(read.key.slice(prefix.length));
-    const from = Math.max(0, Math.min(editor.active, editor.display.length - count));
+    const from =
+      key === "footer:input" && context.draftFrom !== undefined
+        ? context.draftFrom
+        : Math.max(0, Math.min(editor.active, editor.display.length - count));
     const own = editor.display[from + at];
     return own?.runs;
   }

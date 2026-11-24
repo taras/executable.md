@@ -6315,6 +6315,7 @@ export function* prepareFrame(
     return drafted;
   }
   let draftRows: readonly string[] | undefined;
+  let draftFrom: number | undefined;
   if (drafted.value !== undefined) {
     editors.set("footer:input", drafted.value);
     const count = Math.max(1, capacityOf(editorBounds));
@@ -6335,6 +6336,7 @@ export function* prepareFrame(
         caret: view.state.draftCaret?.offset ?? view.state.draft.length,
       });
     }
+    draftFrom = from;
     const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
     draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
   } else if (draftWindow !== undefined) {
@@ -6421,6 +6423,7 @@ export function* prepareFrame(
     wideHistoryMap: historyWideMap,
     selector,
     draft: draftRows,
+    draftFrom,
     editors,
     notices: notices.value,
     noticeReason: reason,

@@ -40,9 +40,13 @@ export function typingPayload(round: number, rounds: number, lines: number): str
 }
 
 /** Leaves a long entry draft visible in the open Round editor. */
-export function* generateTypingDraft(page: ReplPage, lines: number): Operation<void> {
+export function* generateTypingDraft(
+  page: ReplPage,
+  lines: number,
+  draft?: string,
+): Operation<void> {
   const payload = typingPayload(0, 1, lines).replaceAll("TAIL-", "DRAFT-");
-  const code = `<Output>${payload}</Output>`;
+  const code = draft ?? `<Output>${payload}</Output>`;
   page.repl.fake.script({
     reply: `<Let as="code" select="code">\n\`\`\`xmd\n${code}\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput>`,
   });
