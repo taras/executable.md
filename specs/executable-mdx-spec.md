@@ -5964,6 +5964,13 @@ would be a second, disagreeing reading of the same source. Each invocation
 answers for itself: a nested invocation is not told about its caller's binding,
 and two invocations that are live at once do not see each other's.
 
+A value component with an additional JSON result can reserve its authored name
+with `Component.operations.bindResult(name)`. It uses the same binding-name
+rules and caller scope as `as`. Reserving requires `as` and a distinct name.
+The returned setter stages the value. The engine publishes staged values after
+the invocation finishes, its resources close, and its primary return passes
+validation.
+
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing
 scope exits. Runtime implementations — the document's import and

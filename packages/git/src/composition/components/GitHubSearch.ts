@@ -1,4 +1,4 @@
-import { documented, formDispatcher } from "@executablemd/core";
+import { Component, documented, formDispatcher, isJsonObject } from "@executablemd/core";
 import type { ComponentRegistration, Json, JsonObject } from "@executablemd/core";
 import { createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
@@ -67,7 +67,7 @@ function admitQuery(query: string): void {
 }
 
 function* search(props: Record<string, Json>): Operation<JsonObject> {
-  const { query, sort, order, page = 1, perPage = 20 } = props;
+  const { query, sort, order, page = 1, perPage = 20, nextAs } = props;
   if (typeof query !== "string" || typeof page !== "number" || typeof perPage !== "number") {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "the search arguments are invalid.");
   }
@@ -81,11 +81,13 @@ function* search(props: Record<string, Json>): Operation<JsonObject> {
   if (order !== undefined && sort === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "order requires sort.");
   }
+  const publishNext =
+    typeof nextAs === "string" ? yield* Component.operations.bindResult(nextAs) : undefined;
   const repository = yield* selectedRepository();
   if (repository === undefined) {
     throw new GitOperationAdmissionError(SEARCH_ELEMENT, "select a Repository before searching.");
   }
-  return yield* GitHubSearch.operations.search(repository, {
+  const result = yield* GitHubSearch.operations.search(repository, {
     query,
     page,
     perPage,
@@ -93,6 +95,14 @@ function* search(props: Record<string, Json>): Operation<JsonObject> {
       ? { sort, order: typeof order === "string" ? order : "desc" }
       : {}),
   });
+  if (!isJsonObject(result.value) || (result.next !== null && !isJsonObject(result.next))) {
+    throw new GitOperationAdmissionError(
+      SEARCH_ELEMENT,
+      "the search provider returned an invalid page.",
+    );
+  }
+  publishNext?.(result.next);
+  return result.value;
 }
 
 export const githubSearchRegistration: ComponentRegistration = {
@@ -104,18 +114,18 @@ export const githubSearchRegistration: ComponentRegistration = {
       query: { type: "string", minLength: 1 },
       sort: { enum: sorts },
       order: { enum: ["asc", "desc"] },
+      nextAs: {
+        type: "string",
+        minLength: 1,
+        description: "Bind the next request arguments or null to this name.",
+      },
       page: { type: "integer", minimum: 1, maximum: SEARCH_CEILING },
       perPage: { type: "integer", minimum: 1, maximum: 100 },
     },
     required: ["query"],
     additionalProperties: false,
   },
-  returns: {
-    type: "object",
-    properties: { value: { type: "object" }, next: { type: ["object", "null"] } },
-    required: ["value", "next"],
-    additionalProperties: false,
-  },
+  returns: { type: "object" },
   fn: formDispatcher({
     forms: "self-closing",
     fn: search,
@@ -125,7 +135,7 @@ export const githubSearchRegistration: ComponentRegistration = {
   ...documented({
     description:
       "Search the selected GitHub repository with GitHub's issue and pull-request query syntax.",
-    as: "Required. Binds the original GitHub JSON under value and the next request arguments or null under next.",
+    as: "Required. Binds the original GitHub response JSON.",
     context: null,
   }),
 };

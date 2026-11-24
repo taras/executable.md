@@ -178,7 +178,7 @@ import {
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
-import { liveEnvironment } from "./live-env.ts";
+import { liveEnvironment, validateBindingName } from "./live-env.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -4403,6 +4403,7 @@ function* expandFunctionComponent(
 
   const expansion = snapshot(path, name, position);
 
+  let resultBindings: Map<string, Json | undefined> | undefined;
   let publishedBinding = false;
   const binding: TestHarnessBinding = {
     has(): boolean {
@@ -4551,6 +4552,26 @@ function* expandFunctionComponent(
               // deno-lint-ignore require-yield
               *hasBinding(_args, _next) {
                 return asBinding !== undefined;
+              },
+              // deno-lint-ignore require-yield
+              *bindResult([bindingName]) {
+                const checked = validateBindingName(bindingName);
+                if (!checked.ok) {
+                  throw checked.error;
+                }
+                if (asBinding === undefined || checked.value === undefined) {
+                  throw new Error(
+                    `An additional result binding on <${name} /> requires as and a binding name.`,
+                  );
+                }
+                if (bindingName === asBinding || resultBindings?.has(bindingName)) {
+                  throw new Error(`Duplicate result binding "${bindingName}" on <${name} />.`);
+                }
+                const staged = (resultBindings ??= new Map());
+                staged.set(bindingName, undefined);
+                return (value: Json) => {
+                  staged.set(bindingName, parseJson(value));
+                };
               },
               // deno-lint-ignore require-yield
               *hasCapture([captureName], _next) {
@@ -4709,10 +4730,22 @@ function* expandFunctionComponent(
         // By reference by default: the binding is the value the component
         // returned. `returns` is the opt-in that says this one is a validated
         // JSON record, and it is checked before binding.
-        parentEnv.values[asBinding] =
+        const value =
           returns === undefined || invocationObservation !== undefined
             ? output
             : yield* validateLiveReturnValue(name, output, returns);
+        parentEnv.values[asBinding] = value;
+        for (const [bindingName, bindingValue] of resultBindings ?? []) {
+          if (bindingValue === undefined) {
+            continue;
+          }
+          Object.defineProperty(parentEnv.values, bindingName, {
+            value: bindingValue,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:

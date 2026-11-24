@@ -31,6 +31,7 @@ import type {
   ErrorSegment,
   EvalEnv,
   FunctionComponentDefinition,
+  Json,
   Modifier,
   SourcePosition,
 } from "./types.ts";
@@ -208,6 +209,12 @@ export interface ComponentApi {
    * reading of the same prop.
    */
   hasBinding(): Operation<boolean>;
+  /**
+   * Reserve another JSON result binding in this invocation's caller scope.
+   * The engine publishes its value together with `as` after successful return
+   * validation and teardown.
+   */
+  bindResult(name: string): Operation<(value: Json) => void>;
   /**
    * Create a resource owned by the scope that invoked this component
    * (spec §4.4).
@@ -388,6 +395,10 @@ const COMPONENT_DEFAULTS: Omit<ComponentApi, "registry"> = {
   },
   *raise(error: ErrorSegment): Operation<ErrorSegment> {
     return yield* settle(error);
+  },
+  // deno-lint-ignore require-yield
+  *bindResult(): Operation<(value: Json) => void> {
+    throw new Error("Result bindings require a function component invocation.");
   },
   env: undefined,
   evalScope: undefined,
