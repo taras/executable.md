@@ -15,7 +15,9 @@ import {
   withResolvers,
 } from "effection";
 import process from "node:process";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+// @ts-expect-error Bun's FFI module is available only in the Bun driver.
+import { dlopen, FFIType } from "bun:ffi";
 import { decodeLocation } from "../../../packages/cli/src/repl/route.ts";
 import {
   privateDataEnvironment,
@@ -25,6 +27,14 @@ import {
   type WaitOptions,
 } from "./protocol.ts";
 import { viewport } from "./screen.ts";
+import {
+  answerLabel,
+  answerTiming,
+  answerTimingEnvironment,
+  answerTimingFile,
+  macSystemLibrary,
+  monotonicRaw,
+} from "./answer-timing.ts";
 
 interface Pty {
   write(input: string | Uint8Array): void;
@@ -95,6 +105,22 @@ export function useDriver(options: Launch) {
     }
     const backend = createXtermBackend({ cols: size.columns, rows: size.rows });
     let stopped = false;
+    const timingPath =
+      process.platform === "darwin" &&
+      basename(options.scenario ?? "") === "repl-sidekick-held-history.md"
+        ? join(directory, answerTimingFile)
+        : undefined;
+    const library =
+      timingPath === undefined
+        ? undefined
+        : dlopen(macSystemLibrary, {
+            clock_gettime_nsec_np: { args: [FFIType.u32], returns: FFIType.u64 },
+          });
+    yield* ensure(() => library?.close());
+    const clock = library && (() => BigInt(library.symbols.clock_gettime_nsec_np(monotonicRaw)));
+    const record = clock && timingPath && answerTiming(timingPath, clock);
+    let answerVisible = false;
+    let openingAttempts = 0;
 
     function* save(): Operation<string> {
       const text = screen || lastFrame().text;
@@ -165,6 +191,7 @@ export function useDriver(options: Launch) {
           ...process.env,
           HOME: home,
           XMD_SIDEKICK_SCENARIO: options.scenario,
+          [answerTimingEnvironment]: timingPath,
           ...(options.denoDir === undefined ? {} : { DENO_DIR: options.denoDir }),
           ...privateDataEnvironment(home),
           XDG_CONFIG_HOME: join(home, ".config"),
@@ -176,11 +203,22 @@ export function useDriver(options: Launch) {
           cols: size.columns,
           rows: size.rows,
           data(_terminal, bytes) {
+            const received = clock?.();
             chunks.push(Uint8Array.from(bytes));
             backend.feed(bytes);
             if (backend.getMode("altScreen")) {
               // Keep the last application screen when the child restores the normal buffer.
               screen = backend.getText();
+              if (record && received !== undefined) {
+                const visible = screen.includes(answerLabel);
+                if (visible && !answerVisible) {
+                  record({
+                    event: "pty-consumed",
+                    receivedNs: received.toString(),
+                  });
+                }
+                answerVisible = visible;
+              }
             }
             update();
           },
@@ -212,7 +250,11 @@ export function useDriver(options: Launch) {
       label: string,
       read: (frame: ReturnType<typeof viewport>) => T | undefined,
       ms: number,
+      opening?: number,
     ): Operation<T> {
+      if (opening !== undefined && record) {
+        record({ event: "wait-start", attempt: opening, timeoutMs: ms });
+      }
       return yield* race([
         (function* (): Operation<T> {
           while (true) {
@@ -222,6 +264,9 @@ export function useDriver(options: Launch) {
             }
             const found = read(lastFrame());
             if (found !== undefined) {
+              if (opening !== undefined && record) {
+                record({ event: "wait-matched", attempt: opening });
+              }
               return found;
             }
             yield* next.operation;
@@ -229,11 +274,14 @@ export function useDriver(options: Launch) {
         })(),
         (function* (): Operation<never> {
           yield* sleep(ms);
+          if (opening !== undefined && record) {
+            record({ event: "wait-expired", attempt: opening });
+          }
           throw new Error(`Timed out waiting for ${label}`);
         })(),
       ]);
     }
-    function waitFor(query: WaitOptions) {
+    function waitFor(query: WaitOptions, opening?: number) {
       const {
         text,
         region,
@@ -274,6 +322,7 @@ export function useDriver(options: Launch) {
           return expected === 0 ? null : hits[0];
         },
         timeout,
+        opening,
       );
     }
 
@@ -381,7 +430,10 @@ export function useDriver(options: Launch) {
             }
             case "open-sidekick-answer": {
               const { timeout = ACTION_TIMEOUT } = command;
-              const answer = yield* waitFor({ text: "[answer sidekick]", unique: true, timeout });
+              const answer = yield* waitFor(
+                { text: answerLabel, unique: true, timeout },
+                ++openingAttempts,
+              );
               if (answer === null || lastFrame().sidekickAnswerFocused) {
                 throw new Error("Expected a pending Sidekick question with its editor closed");
               }

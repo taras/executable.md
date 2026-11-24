@@ -448,6 +448,7 @@ export function* useReplElicitation(
    * something a reading wants, not something answering a question needs.
    */
   waits?: ReplWaits,
+  registered?: () => void,
 ): Operation<ReplElicitations> {
   const changes = createSignal<ReplQuestion | undefined, never>();
   let pending: ReplQuestion | undefined;
@@ -455,6 +456,9 @@ export function* useReplElicitation(
 
   function publish(question: ReplQuestion | undefined): void {
     pending = question;
+    if (question !== undefined) {
+      registered?.();
+    }
     changes.send(question);
   }
 

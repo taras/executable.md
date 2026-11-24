@@ -733,14 +733,14 @@ describe("the dedicated ReplBench job", () => {
 
     expect(bench?.if).toBeUndefined();
     expect(bench?.strategy?.hosts).toBe(
-      "${{ fromJSON(github.event_name == 'push' && '[\"macos-latest\",\"ubuntu-latest\"]' || '[\"ubuntu-latest\"]') }}",
+      "${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'repl-bench-macos')) && '[\"macos-latest\",\"ubuntu-latest\"]' || '[\"ubuntu-latest\"]') }}",
     );
     expect(tools?.if).toBeUndefined();
     expect(tools?.run).toContain("deno test ");
     expect(tools?.run?.trim().endsWith("examples/repl-bench/tests")).toBe(true);
   });
 
-  it("runs the tests that drive a host terminal only on pushes to main", function* () {
+  it("runs the full host-terminal suite only on pushes to main", function* () {
     const bench = (yield* workflow())["repl-bench"];
     const tools = bench?.steps.find((step) => step.name === "Check REPL bench tools");
     const terminal = bench?.steps.find((step) =>
@@ -768,11 +768,24 @@ describe("the dedicated ReplBench job", () => {
     expect(profile?.run?.trim().endsWith("examples/xmd-profile/tests")).toBe(true);
   });
 
-  it("uploads the failed journeys' journals beside their bench evidence", function* () {
+  it("checks the answer trace on opt-in macOS pull requests", function* () {
+    const bench = (yield* workflow())["repl-bench"];
+    const trace = bench?.steps.find(
+      (step) => step.name === "Verify the macOS Sidekick answer trace",
+    );
+
+    expect(trace?.if).toBe("github.event_name == 'pull_request' && matrix.host == 'macos-latest'");
+    expect(trace?.run).toContain("examples/repl-bench/journeys/repl-scripted-sidekick.test.md");
+    expect(trace?.run).toContain(".bench/*/sidekick-answer-timing.jsonl");
+  });
+
+  it("uploads the timing trace beside the existing bench evidence", function* () {
     const bench = (yield* workflow())["repl-bench"];
     const upload = bench?.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
 
-    expect(upload?.if).toBe("github.event_name == 'push' && (failure() || cancelled())");
+    expect(upload?.if).toBe(
+      "always() && ((github.event_name == 'push' && (failure() || cancelled())) || (github.event_name == 'pull_request' && matrix.host == 'macos-latest'))",
+    );
     expect(upload?.with?.["include-hidden-files"]).toBe("true");
     expect(upload?.with?.path?.trim().split("\n")).toEqual([
       "repl bench checkout/.bench/*/run.json",
@@ -780,6 +793,7 @@ describe("the dedicated ReplBench job", () => {
       "repl bench checkout/.bench/*/*.svg",
       "repl bench checkout/.bench/*/terminal.ansi",
       "repl bench checkout/.bench/*/closed.json",
+      "repl bench checkout/.bench/*/sidekick-answer-timing.jsonl",
       "repl bench checkout/.xmd/test-artifacts",
     ]);
   });

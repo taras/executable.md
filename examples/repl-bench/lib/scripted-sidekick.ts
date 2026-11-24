@@ -8,6 +8,7 @@ import { useTestAgentController } from "@executablemd/test-agent";
 import { createContext } from "effection";
 import type { Operation } from "effection";
 import { basename, dirname, join } from "node:path";
+import { installAnswerTiming } from "./answer-timing-deno.ts";
 import { denoCommand } from "./run.ts";
 
 const AGENT = "scripted";
@@ -19,6 +20,7 @@ export default Plugin({
     if (selected !== "repl") {
       return undefined;
     }
+    yield* installAnswerTiming();
     return {
       repl: {
         *initialize() {

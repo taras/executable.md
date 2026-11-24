@@ -155,7 +155,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: ${{ fromJSON(github.event_name == 'push' && '["macos-latest","ubuntu-latest"]' || '["ubuntu-latest"]') }}
+        host: ${{ fromJSON((github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'repl-bench-macos')) && '["macos-latest","ubuntu-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.host }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -175,7 +175,7 @@ jobs:
           deno-version: v2.9.5
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || matrix.host == 'macos-latest'
         with:
           bun-version: 1.4.0
 
@@ -207,8 +207,19 @@ jobs:
           deno run --allow-all --cached-only --frozen --node-modules-dir=none \
             packages/cli/src/deno.ts test examples/repl-bench/journeys --reporter=failures
 
+      - name: Verify the macOS Sidekick answer trace
+        if: github.event_name == 'pull_request' && matrix.host == 'macos-latest'
+        working-directory: repl bench checkout
+        run: |
+          deno run --allow-all --cached-only --frozen --node-modules-dir=none \
+            packages/cli/src/deno.ts test \
+            examples/repl-bench/journeys/repl-scripted-sidekick.test.md --reporter=failures
+          for event in wait-start registered frame-write-start frame-write-end pty-consumed wait-matched; do
+            grep -q "\"event\":\"$event\"" .bench/*/sidekick-answer-timing.jsonl
+          done
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: github.event_name == 'push' && (failure() || cancelled())
+        if: always() && ((github.event_name == 'push' && (failure() || cancelled())) || (github.event_name == 'pull_request' && matrix.host == 'macos-latest'))
         with:
           name: repl-bench-${{ matrix.host }}-attempt-${{ github.run_attempt }}
           path: |
@@ -217,6 +228,7 @@ jobs:
             repl bench checkout/.bench/*/*.svg
             repl bench checkout/.bench/*/terminal.ansi
             repl bench checkout/.bench/*/closed.json
+            repl bench checkout/.bench/*/sidekick-answer-timing.jsonl
             repl bench checkout/.xmd/test-artifacts
           include-hidden-files: "true"
 
