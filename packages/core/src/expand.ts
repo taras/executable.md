@@ -1931,15 +1931,15 @@ function* expandListSegments(
 
     if (
       segment.type === "component" &&
-      (segment.lineEnd === true || segment.lineIndent !== undefined)
+      (segment.lineEnd !== undefined || segment.lineIndent !== undefined)
     ) {
       const rendered = renderSegments(result.slice(produced));
       if (rendered !== "") {
         if (segment.lineIndent !== undefined) {
           result.splice(produced, 0, { type: "text", content: segment.lineIndent });
         }
-        if (segment.lineEnd === true && !rendered.endsWith("\n")) {
-          result.push({ type: "text", content: "\n" });
+        if (segment.lineEnd !== undefined && !rendered.endsWith("\n")) {
+          result.push({ type: "text", content: segment.lineEnd === true ? "\n" : segment.lineEnd });
         }
       }
     }

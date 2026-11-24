@@ -145,6 +145,28 @@ describe("Tier SIN — structural indentation", () => {
     expect(result.output).toBe("After\r\n");
   });
 
+  it("keeps each standalone delimiter's own ending at root and in a File body", function* () {
+    const source = [
+      "<If condition={true}>root CRLF</If>\r\n",
+      "<If condition={false}>empty root line</If>\r\n",
+      "<If condition={true}>root LF</If>\n",
+      '<File path="message.txt">\r\n',
+      "  <If condition={true}>file LF</If>\n",
+      "  <If condition={false}>empty file line</If>\r\n",
+      "  <If condition={true}>file CRLF</If>\r\n",
+      "  <If condition={true}>\n",
+      "    payload already has CRLF\r\n",
+      "  </If>\n",
+      "</File>\r\n",
+      "<If condition={true}>root EOF</If>",
+    ].join("");
+    const result = yield* run(source);
+    expect(result.output).toBe("root CRLF\r\nroot LF\nroot EOF");
+    expect(yield* result.read("message.txt")).toBe(
+      "file LF\nfile CRLF\r\npayload already has CRLF\r\n",
+    );
+  });
+
   it("SIN2: a line without the full prefix keeps all of its spaces", function* () {
     const unformatted = yield* run(
       [

@@ -428,11 +428,11 @@ standalone element's line is a delimiter line:
   its content inline — the indentation left after the structural prefix
   belongs to its rendering and is recorded as `lineIndent`. It precedes a
   nonempty rendering, so text rendered inside a list item stays in that item.
-- The element consumes its line's newline and records it as `lineEnd`. After
-  the element expands, the newline is appended when its rendering is nonempty
-  and does not already end in a newline. An empty rendering contributes
-  neither indentation nor a line, and newlines the rendering already holds stay
-  as they are.
+- The element consumes its line's newline and records its exact LF or CRLF
+  ending as `lineEnd`. After expansion, that same ending is appended when the
+  rendering is nonempty and does not already end in a newline. An empty
+  rendering contributes neither indentation nor a line. Existing newlines in
+  the rendering stay as they are.
 - An element at the end of the source has no newline to supply, so a missing
   final newline is preserved.
 

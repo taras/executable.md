@@ -64,9 +64,9 @@ export interface ComponentElement {
   /**
    * Set when the element stands on its own line and the scanner consumed that
    * line's newline: a nonempty result that does not end in one receives it
-   * (§2.2).
+   * (§2.2). A previously scanned `true` represents LF.
    */
-  lineEnd?: true;
+  lineEnd?: "\n" | "\r\n" | true;
   /**
    * The indentation before a standalone element that is not a block, after
    * the structural prefix: it precedes a nonempty rendering and is dropped
