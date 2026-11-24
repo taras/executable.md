@@ -1,5 +1,5 @@
 import type { HostFilesAccess } from "@executablemd/runtime";
-import { readSearchContext, searchWorkspace } from "./workspace-search.ts";
+import { readHistoryWindow, readProjectFile, searchWorkspace } from "./workspace-search.ts";
 import { resolveJournalMaxBytes } from "./journal-policy.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
@@ -241,7 +241,9 @@ export function sidekickRequests(
     ...(test === undefined ? {} : { test }),
     importAsset: importAsset ?? refusedImport,
     search: (request) => searchWorkspace(request, root.projectAccess, () => root.acknowledged()),
-    searchContext: (ref) => readSearchContext(ref, root.projectAccess, () => root.acknowledged()),
+    projectFile: (request) => readProjectFile(request, root.projectAccess),
+    historyWindow: (reader, request) =>
+      readHistoryWindow(reader, request, () => root.acknowledged()),
     *bindings(): Operation<Result<Json>> {
       // The root data as it stands: the retained head for every entry that has
       // settled, and the current root of the entry running now on top of it.

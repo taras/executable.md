@@ -54,17 +54,17 @@ matches literal, case-sensitive text. Add `scope="files"` or `scope="history"`
 to restrict where it looks. Read the page in feedback. When `next` is present,
 copy its `query`, `scope` and `after` into your next Search.
 
-Copy a match's `ref` object from feedback into `REPL.SearchContext`. For
-example, this opens context around offset 16 in `note.txt`.
+Read the reader name from `ref.reader` and paste the complete `ref.args`
+object as that reader's `request` prop in your next response. File matches use
+`REPL.File.Read`; use it directly when the path is already known.
 
 ```xmd
-<REPL.SearchContext ref={{"source":{"path":"note.txt"},"offset":16}} />
+<REPL.File.Read request={{"path":"note.txt","lines":"38:46"}} />
 ```
 
-File references read the current project file. History references
-read the saved entry and field, so an old command's result describes its
-earlier observation. Searching and opening references do not rerun entries
-or commands.
+File references compare the current file to the version search matched.
+Retained references read the saved entry and field. Searching and opening
+references perform no entry or command replay.
 
 ## Example
 

@@ -1,9 +1,11 @@
+import { Err, lift } from "effection";
+import { filesFailure } from "./files.ts";
 import { createContext, ensure, useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import type { Api, Around, Middleware } from "@effectionx/context-api";
-import type { FilesHandler } from "./files.ts";
+import type { DocumentFilesHandler } from "./files.ts";
 
-type Layers = Partial<Around<FilesHandler>>;
+type Layers = Partial<Around<DocumentFilesHandler>>;
 interface State {
   max: Layers[];
   min: Layers[];
@@ -74,13 +76,13 @@ function isOperation<T>(value: Operation<T> | T): value is Operation<T> {
 }
 
 export interface FileRecorderHandle {
-  assemble<K extends keyof FilesHandler>(method: K): FilesHandler[K];
+  assemble<K extends keyof DocumentFilesHandler>(method: K): DocumentFilesHandler[K];
 }
-export interface FilesApi extends Api<FilesHandler> {
+export interface FilesApi extends Api<DocumentFilesHandler> {
   register(boundary: Layers): Operation<FileRecorderHandle>;
 }
 
-export function createFilesApi(terminal: FilesHandler): FilesApi {
+export function createFilesApi(terminal: DocumentFilesHandler): FilesApi {
   function* around(
     layers: Layers,
     options: { at: "min" | "max" } = { at: "max" },
@@ -94,7 +96,7 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
         : { max: [...current.max, layers], min: [...current.min] },
     );
   }
-  function operations(exclude?: Layers, active: () => boolean = () => true): FilesHandler {
+  function operations(exclude?: Layers, active: () => boolean = () => true): DocumentFilesHandler {
     function call<A extends unknown[], T>(
       terminal: (...args: A) => Operation<T>,
       select: (layer: Layers) => Middleware<A, Operation<T>> | undefined,
@@ -122,6 +124,18 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
     return {
       checkFilePath: call(terminal.checkFilePath, (layer) => layer.checkFilePath),
       readTextFile: call(terminal.readTextFile, (layer) => layer.readTextFile),
+      observeTextFile: call(terminal.observeTextFile, (layer) => {
+        if (layer.observeTextFile !== undefined) {
+          return layer.observeTextFile;
+        }
+        return layer.readTextFile === undefined
+          ? undefined
+          : lift(() =>
+              Err<string>(
+                filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }),
+              ),
+            );
+      }),
       writeTextFile: call(terminal.writeTextFile, (layer) => layer.writeTextFile),
       copyFile: call(terminal.copyFile, (layer) => layer.copyFile),
       deleteFile: call(terminal.deleteFile, (layer) => layer.deleteFile),
@@ -141,7 +155,7 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
       yield* around(boundary);
       const selected = operations(boundary, () => live);
       return Object.freeze({
-        assemble: <K extends keyof FilesHandler>(method: K) => selected[method],
+        assemble: <K extends keyof DocumentFilesHandler>(method: K) => selected[method],
       });
     },
   };

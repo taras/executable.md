@@ -26,10 +26,10 @@ import {
 } from "@executablemd/test-support/failure-journal";
 
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { ensure, race, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, Permissions, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { searchText } from "../src/search-text.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import type { InlineRootDocument, RootDocumentSource } from "../src/root-source.ts";
@@ -345,6 +346,126 @@ describe("Tier IR — inline root documents", () => {
     );
 
     expect(output).toContain("notes from the working directory");
+  });
+
+  it("reads inclusive File lines and bounded Unicode windows", function* () {
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
+    yield* useWorkspace({ "notes.md": "before\nsecond\nthird\n" + "🦊".repeat(12000) });
+    const source = [
+      '<File path="notes.md" lines="2:3" as="lines" />',
+      '<File path="notes.md" lines="3" as="line" />',
+      '<File path="notes.md" offset={11996} limit={4} as="window" />',
+      "<Output><Json value={{lines, line, window}} /></Output>",
+    ].join("\n");
+    const output = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+    expect(output).toContain('"lines": "second\\nthird\\n"');
+    expect(output).toContain('"line": "third\\n"');
+    expect(output).toContain('"window": "🦊🦊🦊🦊"');
+  });
+
+  it("continues literal scanning across a chunk and cancels a long miss", function* () {
+    const late = "x".repeat(65534) + "needle needle";
+    const first = yield* searchText(late, "needle", -1, 1);
+    expect(first[0]?.offset).toBe(65534);
+    const next = yield* searchText(late, "needle", first[0].offset, 1);
+    expect(next[0]?.offset).toBe(65541);
+    const long = "z".repeat(2_000_000);
+    const result = yield* race([
+      searchText(long, "missing", -1, 20),
+      (function* () {
+        yield* sleep(0);
+        return "cancelled";
+      })(),
+    ]);
+    expect(result).toBe("cancelled");
+  });
+
+  it("opens authored Workspace Search file references live and restores acknowledged bounded reads", function* () {
+    const phrase = "needle from a project file";
+    const long = phrase + " " + "X".repeat(12000) + " do not retain this tail";
+    const root = yield* useWorkspace({ "notes.md": long });
+    let allowed = true;
+    yield* Permissions.around({
+      files: ([operation], next) => (operation === "read" && !allowed ? false : next(operation)),
+    });
+    let reads = 0;
+    yield* API.Fs.around({
+      *readTextFile([path], next) {
+        if (path.endsWith("/notes.md")) {
+          reads += 1;
+        }
+        return yield* next(path);
+      },
+    });
+    const search =
+      '<Workspace.Search query="' +
+      phrase +
+      '" as="page" />\n<Output><Json value={page} /></Output>';
+    const printed = asText(
+      yield* collect(yield* execute({ ...inlineSource(search), stream: new InMemoryStream() })),
+    );
+    const jsonStart = printed.indexOf("{");
+    const jsonEnd = printed.lastIndexOf("}");
+    const page = JSON.parse(printed.slice(jsonStart, jsonEnd + 1));
+    const { reader, args } = page.matches[0].ref;
+    expect(reader).toBe("File");
+    expect(page.matches).toHaveLength(1);
+    const source = `<${reader} request={${JSON.stringify(args)}} as="opened" />\n<Output><Json value={opened} /></Output>`;
+    const stream = new InMemoryStream();
+    const first = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+    expect(first).toContain('"changed": false');
+    expect(first).toContain(phrase);
+    const records = JSON.stringify(stream.snapshot());
+    expect(records).toContain("file-window");
+    expect(records).not.toContain("do not retain this tail");
+    expect(records).not.toContain("X".repeat(700));
+    yield* writeTextFile(join(root, "notes.md"), "edited " + phrase);
+    const changed = asText(
+      yield* collect(yield* execute({ ...inlineSource(source), stream: new InMemoryStream() })),
+    );
+    expect(changed).toContain('"changed": true');
+    expect(changed).toContain("edited");
+    expect(reads).toBe(3);
+    yield* scoped(function* () {
+      let legacyCalls = 0;
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          legacyCalls += 1;
+          return yield* next(input);
+        },
+      });
+      const unsupported = asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(source.replace("<Output><Json value={opened} /></Output>", "")),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+      expect(unsupported).toContain("bounded file read is unavailable");
+      expect(legacyCalls).toBe(0);
+      expect(reads).toBe(3);
+    });
+    allowed = false;
+    const before = reads;
+    const denied = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(source.replace("<Output><Json value={opened} /></Output>", "")),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    expect(denied).toContain("bounded file read is unavailable");
+    expect(reads).toBe(before);
+    const prefix = new InMemoryStream(
+      stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    );
+    const replayed = asText(
+      yield* collect(yield* execute({ ...inlineSource(source), stream: prefix })),
+    );
+    expect(replayed).toBe(first);
+    expect(reads).toBe(before);
   });
 
   const rootProps = "IR11: props are validated and defaulted for a supplied root";

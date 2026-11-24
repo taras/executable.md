@@ -1,3 +1,4 @@
+import { Err } from "effection";
 /**
  * `API.Files` — the document filesystem boundary.
  *
@@ -244,6 +245,12 @@ export interface FileWriteSuccess {
   readonly publication: "host-committed" | "transaction-staged";
 }
 
+export interface FileObservation {
+  readonly excludeGitMetadata: boolean;
+  /** Project caller-approved data inside the read, before returning it to middleware. */
+  project(text: string): Operation<Result<string>>;
+}
+
 export interface FilePathInput {
   readonly cwd: string;
   readonly path: string;
@@ -265,6 +272,12 @@ export interface GlobInput {
   readonly cwd: string;
   readonly include: string[];
   readonly exclude: string[];
+}
+
+export interface DocumentFilesHandler extends FilesHandler {
+  observeTextFile(
+    input: FilePathInput & { readonly observation: FileObservation },
+  ): Operation<Result<string>>;
 }
 
 export interface FilesHandler {
@@ -883,6 +896,10 @@ const composedFiles: FilesApi = createFilesApi({
     throw new FilesProviderUnavailableError();
   },
   // deno-lint-ignore require-yield
+  *observeTextFile(): Operation<Result<string>> {
+    return Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }));
+  },
+  // deno-lint-ignore require-yield
   *writeTextFile(_input: FileWriteInput): Operation<Result<FileWriteSuccess>> {
     throw new FilesProviderUnavailableError();
   },
@@ -908,7 +925,7 @@ const composedFiles: FilesApi = createFilesApi({
   },
 });
 
-export const Files: Api<FilesHandler> = {
+export const Files: Api<DocumentFilesHandler> = {
   operations: composedFiles.operations,
   around: composedFiles.around,
 };

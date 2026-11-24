@@ -174,6 +174,11 @@ read rather than re-reading a file that has since changed.
 A read of a path that does not exist fails. The write form creates the file and
 the directories above it as needed.
 
+A bounded read accepts inclusive one-based `lines="42"` or `lines="38:46"`.
+Use `offset={1200} limit={640}` for a code-point window within a long line.
+Pass the `args` from a `Workspace.Search` file reference as `request` to
+capture the current text and the change indicator.
+
 ## File.Patch
 
 Apply a unified diff to a file. Inspect the current source
@@ -341,6 +346,19 @@ matched paths, and there is no useful text to render.
 
 The list is sorted, so a document that iterates it produces the same output for
 the same tree. Directories and symbolic links are never results — only files.
+
+## Workspace.Search
+
+Find a literal phrase or symbol in project files.
+
+```mdx
+<Workspace.Search query="error message" as="page" />
+<File request={page.matches[0].ref.args} as="context" />
+```
+
+Each result identifies its file and location. Pass the returned `args` to
+the named reader using `request`. A fresh open checks permission again and
+reports whether the contents changed since the search.
 
 ## CodeBlock
 

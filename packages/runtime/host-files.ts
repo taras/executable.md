@@ -103,7 +103,8 @@ import { Permissions } from "./permissions.ts";
 import type {
   FileCopyInput,
   FilePathInput,
-  FilesHandler,
+  FileObservation,
+  DocumentFilesHandler,
   FilesOperation,
   FilesPhase,
   FilesReason,
@@ -468,7 +469,7 @@ function byCodePoint(left: string, right: string): number {
  * Exported so a test can drive one operation directly; entrypoints install it
  * with {@link useHostFiles}.
  */
-export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
+export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesHandler {
   options = Object.freeze({
     ...options,
     ...(options.access === undefined ? {} : { access: Object.freeze({ ...options.access }) }),
@@ -483,13 +484,18 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     return Ok(undefined);
   }
 
-  function* readTextFile(input: FilePathInput): Operation<Result<string>> {
+  function* readTextFile(
+    input: FilePathInput & { readonly observation?: FileObservation },
+  ): Operation<Result<string>> {
     const lexical = inadmissible(input);
     if (lexical !== undefined) {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
-    if (options.excludeGitMetadata && isGitMetadata(input.path)) {
+    if (
+      (options.excludeGitMetadata || input.observation?.excludeGitMetadata) &&
+      isGitMetadata(input.path)
+    ) {
       return nonWriteFailure("read", "lexical", "permission-denied");
     }
     if (!(yield* Permissions.operations.files("read"))) {
@@ -505,7 +511,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("read", "resolution", "resolved-escape");
     }
 
-    if (options.excludeGitMetadata && isGitMetadata(target.path)) {
+    if (
+      (options.excludeGitMetadata || input.observation?.excludeGitMetadata) &&
+      isGitMetadata(target.path)
+    ) {
       return nonWriteFailure("read", "resolution", "permission-denied");
     }
 
@@ -526,11 +535,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     notify(observe, { operation: "read", phase: "access" });
+    let text: string;
     try {
-      return Ok(yield* API.Fs.operations.readTextFile(target.path));
+      text = yield* API.Fs.operations.readTextFile(target.path);
     } catch (error) {
       return nonWriteFailure("read", "access", reasonOf(error));
     }
+    return input.observation === undefined ? Ok(text) : yield* input.observation.project(text);
   }
 
   /**
@@ -1014,6 +1025,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   return {
     checkFilePath,
     readTextFile,
+    observeTextFile: readTextFile,
     writeTextFile,
     copyFile,
     deleteFile,
@@ -1094,6 +1106,9 @@ export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
       },
       *readTextFile([input]) {
         return yield* handler.readTextFile(input);
+      },
+      *observeTextFile([input]) {
+        return yield* handler.observeTextFile(input);
       },
       *writeTextFile([input]) {
         return yield* handler.writeTextFile(input);

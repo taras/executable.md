@@ -1,4 +1,10 @@
-import type { SearchContext, SearchPage, SearchRequest } from "./workspace-search.ts";
+import type {
+  ProjectFilePage,
+  HistoryReader,
+  HistoryWindow,
+  SearchPage,
+  SearchRequest,
+} from "./workspace-search.ts";
 import type { EntryPlacement } from "../entry-placement.ts";
 import type { ReplTesting, ReplTestReport } from "./testing.ts";
 /**
@@ -130,7 +136,8 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  */
 export interface SidekickRequests {
   search(request: SearchRequest): Operation<Result<SearchPage>>;
-  searchContext(ref: Json): Operation<Result<SearchContext>>;
+  projectFile(request: Json): Operation<Result<ProjectFilePage>>;
+  historyWindow(reader: HistoryReader, request: Json): Operation<Result<HistoryWindow>>;
   readonly test?: ReplTesting;
   inspectImage?(path: string): Operation<Result<string>>;
   importAsset(source: string, destination: string): Operation<Result<string>>;
@@ -291,6 +298,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   ...ENTRY_INSPECTIONS,
   "REPL.Search",
   "REPL.SearchContext",
+  "REPL.File.Read",
   ELICIT_CONTROL,
   ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
 ]);
@@ -592,7 +600,7 @@ export function sidekickObservations(
       kind: "function",
       name: "REPL.Search",
       description:
-        'Find literal text with `<REPL.Search query="error message" />`. Follow a match with REPL.SearchContext.',
+        'Find literal text with `<REPL.Search query="error message" />`. Pass a match’s args as request to its named reader.',
       props: {
         type: "object",
         properties: {
@@ -618,26 +626,22 @@ export function sidekickObservations(
         );
       },
     }),
-    reading("REPL.SearchContext", "Open context around a search match", {
+    reading("REPL.File.Read", "Read a bounded project file window", {
       kind: "function",
-      name: "REPL.SearchContext",
+      name: "REPL.File.Read",
       description:
-        'Open a bounded window with `<REPL.SearchContext ref={{"source":{"path":"note.txt"},"offset":16}} />`.',
+        'Read project context with `<REPL.File.Read request={{"path":"note.txt","lines":"2:4"}} />`.',
       props: {
         type: "object",
-        properties: { ref: { type: "object" } },
-        required: ["ref"],
+        properties: { request: { type: "object" } },
+        required: ["request"],
         additionalProperties: false,
       },
-      *fn(props: Record<string, Json>): Operation<SearchContext | string> {
-        const { ref } = props;
-        if (ref === undefined) {
-          throw new Error("Workspace Search needs a context reference.");
-        }
+      *fn(props: Record<string, Json>): Operation<ProjectFilePage | string> {
         return yield* inspected(
           journal,
-          { component: "REPL.SearchContext", arguments: { ...props } },
-          () => requests.searchContext(ref),
+          { component: "REPL.File.Read", arguments: { ...props } },
+          () => requests.projectFile(props.request),
         );
       },
     }),
@@ -689,18 +693,27 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       name: "REPL.Entry.Source",
       props: {
         type: "object",
-        properties: { ...ENTRY_SELECTION },
+        properties: { ...ENTRY_SELECTION, request: { type: "object" } },
         additionalProperties: false,
       },
       description:
         "Read the exact source one entry was admitted with. " +
         "`<REPL.Entry.Source entry={22} />` answers with a window of that source, counted in " +
         "Unicode code points, and the arguments of the windows either side of it.",
-      *fn(props: EntryReadRequest): Operation<EntryTextPage | string> {
-        return yield* inspected(
+      *fn(
+        props: EntryReadRequest & { request?: Json },
+      ): Operation<EntryTextPage | HistoryWindow | string> {
+        return yield* inspected<EntryTextPage | HistoryWindow>(
           journal,
           { component: "REPL.Entry.Source", arguments: { ...props } },
-          () => requests.inspectSource(props),
+          () =>
+            props.request === undefined
+              ? requests.inspectSource(props)
+              : Object.keys(props).length === 1
+                ? requests.historyWindow("REPL.Entry.Source", props.request)
+                : (function* () {
+                    return Err(new Error("Pass a history request by itself."));
+                  })(),
         );
       },
     }),
@@ -710,6 +723,7 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       props: {
         type: "object",
         properties: {
+          request: { type: "object" },
           ...ENTRY_SELECTION,
           prompt: { type: "number" },
           field: { type: "string" },
@@ -721,11 +735,20 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
         '`<REPL.Entry.Prompt entry={22} prompt={9} field="error" />` answers with that turn\'s ' +
         "reply, request or complete failure message, its own status and where it was written. " +
         "A turn that recorded no failure answers with null text rather than an empty one.",
-      *fn(props: EntryPromptRequest): Operation<EntryPromptPage | string> {
-        return yield* inspected(
+      *fn(
+        props: EntryPromptRequest & { request?: Json },
+      ): Operation<EntryPromptPage | HistoryWindow | string> {
+        return yield* inspected<EntryPromptPage | HistoryWindow>(
           journal,
           { component: "REPL.Entry.Prompt", arguments: { ...props } },
-          () => requests.inspectPrompt(props),
+          () =>
+            props.request === undefined
+              ? requests.inspectPrompt(props)
+              : Object.keys(props).length === 1
+                ? requests.historyWindow("REPL.Entry.Prompt", props.request)
+                : (function* () {
+                    return Err(new Error("Pass a history request by itself."));
+                  })(),
         );
       },
     }),
@@ -734,18 +757,27 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       name: "REPL.Entry.Output",
       props: {
         type: "object",
-        properties: { ...ENTRY_SELECTION },
+        properties: { ...ENTRY_SELECTION, request: { type: "object" } },
         additionalProperties: false,
       },
       description:
         "Read what one entry printed. `<REPL.Entry.Output entry={22} />` answers with the last " +
         "window of that entry's output; `offset={0}` reads from the beginning. An entry that " +
         "retained none answers with an empty window.",
-      *fn(props: EntryReadRequest): Operation<EntryTextPage | string> {
-        return yield* inspected(
+      *fn(
+        props: EntryReadRequest & { request?: Json },
+      ): Operation<EntryTextPage | HistoryWindow | string> {
+        return yield* inspected<EntryTextPage | HistoryWindow>(
           journal,
           { component: "REPL.Entry.Output", arguments: { ...props } },
-          () => requests.inspectOutput(props),
+          () =>
+            props.request === undefined
+              ? requests.inspectOutput(props)
+              : Object.keys(props).length === 1
+                ? requests.historyWindow("REPL.Entry.Output", props.request)
+                : (function* () {
+                    return Err(new Error("Pass a history request by itself."));
+                  })(),
         );
       },
     }),
@@ -755,6 +787,7 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       props: {
         type: "object",
         properties: {
+          request: { type: "object" },
           entry: { type: "number" },
           yq: { type: "string", minLength: 1 },
           maxBytes: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
@@ -769,11 +802,20 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
         "Read .exec.exitCode, .exec.stdout and .exec.stderr on a command record; " +
         "reuse next, prev or last as yq with the same positive entry. " +
         "Use maxBytes={8388608} for an 8 MiB compact UTF-8 JSON response budget; navigation carries it, and a later explicit budget overrides it.",
-      *fn(props: EntryJournalRequest): Operation<EntryJournalPage | string> {
-        return yield* inspected(
+      *fn(
+        props: EntryJournalRequest & { request?: Json },
+      ): Operation<EntryJournalPage | HistoryWindow | string> {
+        return yield* inspected<EntryJournalPage | HistoryWindow>(
           journal,
           { component: "REPL.Entry.Journal", arguments: { ...props } },
-          () => requests.inspectJournal(props),
+          () =>
+            props.request === undefined
+              ? requests.inspectJournal(props)
+              : Object.keys(props).length === 1
+                ? requests.historyWindow("REPL.Entry.Journal", props.request)
+                : (function* () {
+                    return Err(new Error("Pass a history request by itself."));
+                  })(),
         );
       },
     }),

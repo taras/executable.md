@@ -427,3 +427,8 @@ export { useSecretInputs } from "./src/secrets/input-host.ts";
 
 export { applyUnifiedDiff, sourceLines, UnifiedDiffError } from "./src/unified-diff.ts";
 export type { SourceLine } from "./src/unified-diff.ts";
+
+export { SEARCH_PAGE_SIZE, searchText, validSearchQuery } from "./src/search-text.ts";
+export { fileReadArguments, textWindow } from "./src/file-window.ts";
+export { observeFileWindow } from "./src/file-observation.ts";
+export { searchProjectFiles, SearchProject } from "./src/project-search.ts";

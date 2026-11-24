@@ -48,7 +48,7 @@ import { join } from "node:path";
 import { createAcpxProvider } from "../../acp/src/provider.ts";
 import { createAcpxSessionStore } from "../../acp/src/session-store.ts";
 import { fileURLToPath } from "node:url";
-import { Err, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -59,6 +59,8 @@ import {
   Execution,
   INLINE_SOURCE_PATH,
   retainedSource,
+  execute,
+  collect,
   useTempFileCompiler,
 } from "@executablemd/core";
 import { Agent } from "@executablemd/agent/api";
@@ -232,8 +234,14 @@ function requests(
   return {
     importAsset: (_source, destination) => answer("importAsset", destination),
     search: () => answer("search", { matches: [], next: null }),
-    searchContext: () =>
-      answer("searchContext", { source: { kind: "file", path: "test" }, offset: 0, text: "" }),
+    projectFile: () =>
+      answer("projectFile", { source: { kind: "file", path: "test" }, changed: null, text: "" }),
+    historyWindow: () =>
+      answer("historyWindow", {
+        source: { kind: "history", entry: 1, field: "source" },
+        offset: 0,
+        text: "",
+      }),
     bindings: () => answer<Json>("bindings", { names: ["Ada", "Grace"] }),
     entrySyntax: (names) =>
       answer(
@@ -727,7 +735,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
         "REPL.Search",
-        "REPL.SearchContext",
+        "REPL.File.Read",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -773,16 +781,19 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
       "entry",
       "offset",
       "limit",
+      "request",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Bindings")?.props).toEqual([]);
     // The saved-evidence reads keep their props closed, and only Prompt takes
     // the two that choose a turn and which of its texts to read.
     expect(surface.find((entry) => entry.name === "REPL.Entry.Journal")?.props).toEqual([
+      "request",
       "entry",
       "yq",
       "maxBytes",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Entry.Prompt")?.props).toEqual([
+      "request",
       "entry",
       "offset",
       "limit",
@@ -829,7 +840,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
         "REPL.Search",
-        "REPL.SearchContext",
+        "REPL.File.Read",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -3238,7 +3249,12 @@ function respond(request) {
     };
     const pageSchema = z.object({
       matches: z.array(
-        z.object({ source: z.json(), line: z.number(), excerpt: z.string(), ref: z.json() }),
+        z.object({
+          source: z.json(),
+          line: z.number(),
+          excerpt: z.string(),
+          ref: z.json(),
+        }),
       ),
       next: z.object({ query: z.string(), scope: z.string(), after: z.json() }).nullable(),
     });
@@ -3255,9 +3271,8 @@ function respond(request) {
     }
     function* context(ref: Json) {
       const asked = fresh();
-      answered(
-        yield* replyThrough(`<REPL.SearchContext ref={${JSON.stringify(ref)}} />`, root, asked),
-      );
+      const { reader, args } = z.object({ reader: z.string(), args: z.json() }).parse(ref);
+      answered(yield* replyThrough(`<${reader} request={${JSON.stringify(args)}} />`, root, asked));
       return asked.settled[0];
     }
     const hits = (yield* search(shared)).matches;
@@ -3289,8 +3304,16 @@ function respond(request) {
     expect((yield* search(shared, "history")).matches).toEqual(hits.slice(1));
     expect((yield* search("private[needle]")).matches).toEqual([]);
     expect((yield* search("partial[needle]")).matches).toEqual([]);
-    expect((yield* context({ source: { path: "withheld.txt" }, offset: 520 })).ok).toBe(false);
-    expect((yield* context({ source: { path: "private/hidden.txt" }, offset: 0 })).ok).toBe(false);
+    expect(
+      (yield* context({ reader: "REPL.File.Read", args: { path: "withheld.txt", offset: 520 } }))
+        .ok,
+    ).toBe(false);
+    expect(
+      (yield* context({
+        reader: "REPL.File.Read",
+        args: { path: "private/hidden.txt", offset: 0 },
+      })).ok,
+    ).toBe(false);
     for (const [phrase, field] of [
       ["source[needle]", "source"],
       ["rendered[needle]", "output"],
@@ -3332,6 +3355,107 @@ function respond(request) {
         expect([...opened.text].length).toBeLessThanOrEqual(640);
       }
     }
+    const fileRead = fresh();
+    answered(
+      yield* replyThrough(
+        '<REPL.File.Read request={{"path":"note.txt","lines":"1"}} />',
+        root,
+        fileRead,
+      ),
+    );
+    expect(observed(fileRead, 0)).toEqual({
+      source: { kind: "file", path: "note.txt" },
+      changed: null,
+      text: "updated " + shared + "\n",
+    });
+    const { reader, args } = z
+      .object({ reader: z.literal("REPL.File.Read"), args: z.json() })
+      .parse(hits[0].ref);
+    for (const changed of [false, true]) {
+      if (changed) {
+        yield* writeTextFile(file, "later " + shared);
+      }
+      const opened = fresh();
+      answered(
+        yield* replyThrough(`<${reader} request={${JSON.stringify(args)}} />`, root, opened),
+      );
+      expect(observed(opened, 0)).toMatchObject({
+        source: hits[0].source,
+        changed,
+        text: expect.stringContaining(changed ? "later" : "updated"),
+      });
+      expect((yield* context(hits[2].ref)).observed).toMatchObject({
+        source: hits[2].source,
+        text: expect.stringContaining("before"),
+      });
+    }
+    const authored = yield* scoped(function* () {
+      yield* useHostFiles({ access });
+      yield* API.Env.around({
+        *cwd() {
+          return access.project;
+        },
+      });
+      const program = `
+<Workspace.Search query={${JSON.stringify(shared)}} as="page" />
+<File request={page.matches[0].ref.args} as="opened" />
+<Output><Json value={{page,opened}} /></Output>`;
+      return yield* collect(
+        yield* execute({
+          ...retainedSource("authored-search.md", program),
+          stream: new InMemoryStream(),
+        }),
+      );
+    });
+    const authoredText = z.string().parse(authored);
+    const authoredPage = z
+      .object({
+        page: z.object({
+          matches: z.array(z.object({ source: z.json(), ref: z.object({ reader: z.string() }) })),
+        }),
+        opened: z.object({ changed: z.boolean(), text: z.string() }),
+      })
+      .parse(
+        JSON.parse(
+          authoredText.slice(authoredText.indexOf("{"), authoredText.lastIndexOf("}") + 1),
+        ),
+      );
+    expect(authoredPage.page.matches).toEqual([
+      { source: hits[0].source, ref: { reader: "File" } },
+    ]);
+    expect(authoredPage.opened).toEqual({ changed: false, text: "later " + shared });
+    expect((yield* context(hits[2].ref)).observed).toMatchObject({
+      source: hits[2].source,
+      text: expect.stringContaining("before"),
+    });
+    const elapsed = yield* scoped(function* () {
+      const entered = withResolvers<void>();
+      let released = false;
+      yield* API.Fs.around({
+        *readTextFile([path], next) {
+          if (!path.endsWith("/note.txt")) {
+            return yield* next(path);
+          }
+          yield* ensure(() => {
+            released = true;
+          });
+          entered.resolve();
+          yield* suspend();
+          return "";
+        },
+      });
+      const asked = fresh();
+      const search = yield* spawn(() =>
+        replyThrough('<REPL.Search query="never delivered" scope="files" />', root, asked),
+      );
+      yield* entered.operation;
+      const now = performance.now();
+      yield* search.halt();
+      expect(released).toBe(true);
+      expect(asked.settled).toEqual([]);
+      return performance.now() - now;
+    });
+    console.log(`Workspace Search cancellation joined in ${elapsed.toFixed(2)} ms`);
     expect(calls).toBe(1);
   });
 
@@ -3388,12 +3512,14 @@ function respond(request) {
     const page = z
       .object({ matches: z.array(z.object({ ref: z.json() })) })
       .parse(observed(search, 0));
-    expect(page.matches).toEqual([{ ref: { source: { path: ordinary }, offset: 0 } }]);
+    expect(page.matches).toMatchObject([
+      { ref: { reader: "REPL.File.Read", args: { path: ordinary } } },
+    ]);
     for (const path of [alias, ".git/fixture.txt", authoredMetadata, ordinary]) {
       const asked = fresh();
-      const ref = { source: { path }, offset: 0 };
+      const args = { path, offset: 0 };
       answered(
-        yield* replyThrough(`<REPL.SearchContext ref={${JSON.stringify(ref)}} />`, root, asked),
+        yield* replyThrough(`<REPL.File.Read request={${JSON.stringify(args)}} />`, root, asked),
       );
       if (path === ordinary) {
         expect(observed(asked, 0)).toMatchObject({ text: marker });
@@ -3424,13 +3550,11 @@ function respond(request) {
       throw new Error("Missing retained terminal failure");
     }
     const opened = fresh();
-    answered(
-      yield* replyThrough(
-        `<REPL.SearchContext ref={${JSON.stringify(failure.ref)}} />`,
-        root,
-        opened,
-      ),
-    );
+    const { args } = z
+      .object({ reader: z.literal("REPL.Entry.Journal"), args: z.json() })
+      .parse(failure.ref);
+    const context = `<REPL.Entry.Journal request={${JSON.stringify(args)}} />`;
+    answered(yield* replyThrough(context, root, opened));
     expect(observed(opened, 0)).toMatchObject({
       source: failure.source,
       text: expect.stringContaining(query),
@@ -3439,7 +3563,7 @@ function respond(request) {
       ...root,
       acknowledged: () => Err<ReplModel>(new Error("History disclosure refused.")),
     };
-    for (const source of [search, `<REPL.SearchContext ref={${JSON.stringify(failure.ref)}} />`]) {
+    for (const source of [search, context]) {
       const refusal = fresh();
       answered(yield* replyThrough(source, denied, refusal));
       expect(refusal.settled).toEqual([{ order: 0, ok: false }]);

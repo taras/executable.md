@@ -51,7 +51,7 @@ import { createMountPolicy } from "../../mount-files.ts";
 import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpath } from "node:fs/promises";
-import { Err, until } from "effection";
+import { Err, Ok, until } from "effection";
 import { filesFailure, Permissions } from "@executablemd/runtime";
 import {
   localRecordName,
@@ -356,6 +356,23 @@ export function* useReplFileRecorder(
       routed(recorder, operation, request, perform, workspace, authored, policy, access),
     {
       guard: () => policy.guard(),
+      *observe(input) {
+        if (!(yield* Permissions.operations.files("read"))) {
+          return Err(
+            filesFailure({ operation: "read", phase: "resolution", reason: "permission-denied" }),
+          );
+        }
+        const reason = yield* hostFileAccessReason(access, "read", input);
+        if (reason !== undefined) {
+          return Err(filesFailure({ operation: "read", phase: "resolution", reason }));
+        }
+        const target = yield* targetOf(input);
+        const managed = covering(recorder.placements(), target);
+        if (managed !== undefined) {
+          yield* managed.own();
+        }
+        return Ok(undefined);
+      },
       restoreSelection: () => recorder.selection(),
       route: (source, destination) => copyRoute(recorder, source, destination, roots),
     },

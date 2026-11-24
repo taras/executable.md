@@ -3940,11 +3940,15 @@ recomputes against readable project files and retained evidence on each call.
 File edits can move an occurrence across the saved offset. Search retains no
 index or collection of future matches.
 
-Pass the match’s `ref` object to `REPL.SearchContext` to read up to 640 code
-points around the location. The page gives the source, window offset and text.
-Opening a file reference reads the current file through the same access
-policy. Opening a history reference reads the saved field. Both controls
-return their pages as Sidekick feedback and neither replays any operation.
+A match's `ref` gives a reader name and its `args` object. Pass that
+object as the named reader's `request` in a follow-up response. File matches
+use `REPL.File.Read`. Retained references use the corresponding
+`REPL.Entry.Source`, `REPL.Entry.Output`, `REPL.Entry.Prompt` or
+`REPL.Entry.Journal`. Each revalidates the selector and disclosure before
+returning at most 640 code points from a search reference. The reference never admits or resumes an
+entry. A file open reads the currently authorized file and states whether it
+changed since the search. `REPL.File.Read` also accepts a direct request
+such as `{"path":"note.txt","lines":"38:46"}`.
 
 ### Reading one entry
 

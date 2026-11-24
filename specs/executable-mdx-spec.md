@@ -9960,6 +9960,24 @@ semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
 
 ---
 
+### Bounded File reads and project search
+
+The read form accepts `lines="42"` or `lines="38:46"` for an inclusive
+one-based line selection. Alternatively, `offset={1200} limit={640}` selects
+a zero-based Unicode code-point window. A bounded read returns at most 4096
+code points. Its provider applies current authority and projects disclosed
+text before returning a bounded value. A provider without observation support
+refuses. An acknowledged observation restores under ordinary continuation rules.
+
+`<Workspace.Search query="error message" as="page" />` finds a case-sensitive
+literal in project files. A page returns up to 20 matches and continuation
+arguments. File references name `File` and carry the matching path, bounded
+window and content revision in `args`. Pass the object to
+`<File request={page.matches[0].ref.args} as="context" />`. The bounded
+result states `path`, `text` and whether the current content has changed.
+Workspace Search uses project authority. REPL history uses separate host
+authorization.
+
 ### 6.13.3 Copying a file: `<File.Copy>`
 
 ```mdx

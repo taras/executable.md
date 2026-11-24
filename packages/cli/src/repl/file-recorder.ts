@@ -10,7 +10,7 @@ import {
 } from "@executablemd/runtime";
 import type {
   FileCopyInput,
-  FilesHandler,
+  DocumentFilesHandler,
   FilesOperation,
   FilesPhase,
   FilePathInput,
@@ -51,6 +51,7 @@ export interface EntryFileCalls {
 }
 interface CopyRouting {
   guard(): Operation<void>;
+  observe?(input: FilePathInput): Operation<Result<void>>;
   restoreSelection?(): Operation<unknown>;
   route(source: string, destination: string): Operation<Operation<void> | undefined>;
 }
@@ -127,6 +128,7 @@ function copyRecorder(routing: CopyRouting) {
 function recordingBody(
   route: FileRecordingRoute,
   copy: ReturnType<typeof copyRecorder> | undefined,
+  routing: CopyRouting,
 ) {
   return {
     *read(
@@ -155,10 +157,16 @@ function recordingBody(
       );
       return result.ok ? Ok(undefined) : result;
     },
-    boundary(): Partial<Around<FilesHandler>> {
+    boundary(): Partial<Around<DocumentFilesHandler>> {
       const body = this;
       return {
         readTextFile: ([input], next) => body.read(input, () => next(input)),
+        *observeTextFile([input], next) {
+          yield* routing.guard();
+          const permitted =
+            routing.observe === undefined ? Ok(undefined) : yield* routing.observe(input);
+          return permitted.ok ? yield* next(input) : permitted;
+        },
         ensureDirectory: ([input], next) => body.ensure(input, () => next(input)),
         *writeTextFile([input], next) {
           const result = yield* route("file-write", { ...input }, () => writeOutcome(next(input)));
@@ -189,7 +197,7 @@ export function* useEntryFileRecorder(
   const scope = yield* useScope();
   const alreadyInstalled = scope.hasOwn(entryCopyInstalled);
   scope.set(entryCopyInstalled, true);
-  const body = recordingBody(route, alreadyInstalled ? undefined : copyRecorder(copy));
+  const body = recordingBody(route, alreadyInstalled ? undefined : copyRecorder(copy), copy);
   const handle = yield* registerFileRecorder(body.boundary());
   const read = assembleFileCall(handle, "readTextFile");
   const ensure = assembleFileCall(handle, "ensureDirectory");
