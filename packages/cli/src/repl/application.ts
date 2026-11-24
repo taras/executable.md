@@ -8992,11 +8992,21 @@ function drawerContent(
             { here: view.focused },
           );
         const entry = entries.get(input.entry);
-        const status = entry === undefined ? "" : workState(entry, view.model, view.live).word;
+        const status = entry === undefined ? undefined : workState(entry, view.model, view.live);
+        const glyph =
+          status === undefined
+            ? ""
+            : status.word === "UNFINISHED"
+              ? "·"
+              : status.word.split(" ")[0];
         const heading = line(
           `drawer:round:${input.point.marker}`,
-          `${input.entry}: ${status}`,
+          `${input.entry}: ${glyph}`,
           styleOf("output"),
+          tokenRuns([
+            { text: `${input.entry}: `, token: "output" },
+            { text: glyph, token: status?.style.role ?? "metadata" },
+          ]),
         );
         const read = readDescription(heading.description);
         content.push({
