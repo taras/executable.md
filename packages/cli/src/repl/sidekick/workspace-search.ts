@@ -109,9 +109,6 @@ function* readProjectText(
   cwd: string,
   path: string,
 ): Operation<string | undefined> {
-  if (/(^|[\\/])\.git($|[\\/])/.test(path)) {
-    return undefined;
-  }
   const read = yield* files.readTextFile({ cwd, path });
   if (!read.ok || read.value.includes("\0") || !(yield* retainsOptionalText(read.value))) {
     return undefined;
@@ -198,7 +195,7 @@ export function* searchWorkspace(
     if (access === undefined) {
       return Err(new Error("Project file search is unavailable."));
     }
-    const files = hostFilesHandler({ access });
+    const files = hostFilesHandler({ access, excludeGitMetadata: true });
     const listing = yield* files.globFiles({
       cwd: access.project,
       include: ["**/*"],
@@ -244,7 +241,11 @@ export function* readSearchContext(
     if (access === undefined) {
       return unavailable();
     }
-    const text = yield* readProjectText(hostFilesHandler({ access }), access.project, source.path);
+    const text = yield* readProjectText(
+      hostFilesHandler({ access, excludeGitMetadata: true }),
+      access.project,
+      source.path,
+    );
     return text !== undefined
       ? Ok({
           source: { kind: "file", path: source.path },

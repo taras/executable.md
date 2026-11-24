@@ -39,7 +39,7 @@ import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/
 import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { appendFile, open, readFile } from "node:fs/promises";
+import { appendFile, open, readFile, symlink } from "node:fs/promises";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { Stdio } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
@@ -71,6 +71,7 @@ import {
   API,
   captureHostFilesAccess,
   cwd,
+  hostFilesHandler,
   platform,
   Permissions,
   useHostFiles,
@@ -3332,6 +3333,75 @@ function respond(request) {
       }
     }
     expect(calls).toBe(1);
+  });
+
+  it("1428: Workspace Search excludes synthetic Git metadata even through an internal alias", function* () {
+    const project = yield* useTempDirectory("workspace-search-metadata-");
+    const privateRoot = join(project, "private");
+    const metadata = join(project, ".git", "fixture.txt");
+    const marker = "synthetic-search-metadata-marker";
+    const alias = "alias.txt";
+    const ordinary = "ordinary.txt";
+    const authoredMetadata = ".git/ordinary-alias.txt";
+    yield* ensureDir(join(project, ".git"));
+    yield* writeTextFile(metadata, marker);
+    yield* writeTextFile(join(project, ordinary), marker);
+    yield* until(symlink(metadata, join(project, alias), "file"));
+    yield* until(symlink(join(project, ordinary), join(project, authoredMetadata), "file"));
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    const root: RootReading = { ...cold(projectedOf([])), projectAccess: access };
+    const files = hostFilesHandler({ access });
+    const listing = answered(
+      yield* files.globFiles({ cwd: access.project, include: ["**/*"], exclude: [] }),
+    );
+    expect(listing).toContain(ordinary);
+    expect(listing).not.toContain(alias);
+    expect(answered(yield* files.readTextFile({ cwd: access.project, path: alias }))).toBe(marker);
+
+    const reads: string[] = [];
+    let listedAlias = false;
+    yield* API.Fs.around({
+      *glob([request], next) {
+        const listed = yield* next(request);
+        listedAlias = true;
+        return [{ path: alias, isFile: true }, { path: authoredMetadata, isFile: true }, ...listed];
+      },
+      *readTextFile([path], next) {
+        reads.push(String(path));
+        return yield* next(path);
+      },
+    });
+    const search = fresh();
+    answered(
+      yield* replyThrough(
+        `<REPL.Search scope="files" query={${JSON.stringify(marker)}} />`,
+        root,
+        search,
+      ),
+    );
+    expect(listedAlias).toBe(true);
+    const page = z
+      .object({ matches: z.array(z.object({ ref: z.json() })) })
+      .parse(observed(search, 0));
+    expect(page.matches).toEqual([{ ref: { source: { path: ordinary }, offset: 0 } }]);
+    for (const path of [alias, ".git/fixture.txt", authoredMetadata, ordinary]) {
+      const asked = fresh();
+      const ref = { source: { path }, offset: 0 };
+      answered(
+        yield* replyThrough(`<REPL.SearchContext ref={${JSON.stringify(ref)}} />`, root, asked),
+      );
+      if (path === ordinary) {
+        expect(observed(asked, 0)).toMatchObject({ text: marker });
+      } else {
+        expect(asked.settled).toEqual([{ order: 0, ok: false }]);
+      }
+    }
+    expect(reads).not.toContain(join(access.project, ".git", "fixture.txt"));
   });
 
   it("1428: searches a disclosed saved failure and refuses unreadable history", function* () {

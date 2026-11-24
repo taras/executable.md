@@ -3916,9 +3916,11 @@ default. Use `"files"` for the launch project or `"history"` for this REPL's
 acknowledged entries.
 
 Files use the project Glob and text-read access checks. Search skips Git
-metadata, unreadable files and text containing NUL. The response clears the
-complete file text for disclosure before matching or opening context. A failed
-project listing refuses a request that includes files. History uses the same
+metadata, unreadable files and text containing NUL. Both search and context
+exclude Git metadata by authored path and resolved destination, including through
+internal symlinks. The response clears the complete file text for disclosure
+before matching or opening context. A failed project listing refuses a request
+that includes files. History uses the same
 readable retained projection as entry inspection. It searches admitted source,
 retained rendered output, retained command stdout and stderr, and saved
 entry and Prompt failure messages. An unreadable history refuses the history

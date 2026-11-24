@@ -135,6 +135,8 @@ export interface HostFilesOptions {
   /** Test boundary for the native copy and its settlement. */
   readonly nativeCopy?: typeof nativeCopyFile;
   readonly access?: HostFilesAccess;
+  /** Exclude Git metadata from text reads, including through aliases. */
+  readonly excludeGitMetadata?: boolean;
   /**
    * The directory temporary directories are minted under, defaulting to the
    * host's temporary root. The host's root is shared by every process on the
@@ -175,6 +177,10 @@ function permits(access: HostFilesAccess, path: string, write: boolean): boolean
     return true;
   }
   return within(access.project, path) && !within(access.private, path);
+}
+
+function isGitMetadata(path: string): boolean {
+  return /(^|[\\/])\.git($|[\\/])/.test(path);
 }
 
 /** Check a live request after restoration, before coverage discovery. */
@@ -483,6 +489,9 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
+    if (options.excludeGitMetadata && isGitMetadata(input.path)) {
+      return nonWriteFailure("read", "lexical", "permission-denied");
+    }
     if (!(yield* Permissions.operations.files("read"))) {
       return nonWriteFailure("read", "resolution", "permission-denied");
     }
@@ -494,6 +503,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
 
     if (options.access !== undefined && !permits(options.access, target.path, false)) {
       return nonWriteFailure("read", "resolution", "resolved-escape");
+    }
+
+    if (options.excludeGitMetadata && isGitMetadata(target.path)) {
+      return nonWriteFailure("read", "resolution", "permission-denied");
     }
 
     notify(observe, { operation: "read", phase: "target" });
