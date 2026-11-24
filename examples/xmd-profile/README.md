@@ -182,8 +182,10 @@ typing comparison in ReplBench still supplies milliseconds.
 [scrolling.md](baselines/scrolling.md) measures entry-reading wheel bursts at sparse,
 full, long-history and long-entry sizes, plus spaced notches at the full size.
 [scrolling-draft.md](baselines/scrolling-draft.md) measures arrow keys with a still
-window, a window moved by warm-up, and a longer draft. The wheel does not move
-the draft; caret keys move its reading window.
+window, a window moved by warm-up, and a longer draft. Its `draft-wheel` case
+measures bursts that move the draft window three rows per notch without moving
+the caret. It records
+[scrolling-draft-wheel.baseline.md](baselines/scrolling-draft-wheel.baseline.md).
 
 ## Profile a REPL session
 
