@@ -311,6 +311,7 @@ function standalone(element: ComponentElement, rendered: string): string {
   if (rendered === "") {
     return "";
   }
-  const ending = element.lineEnd === true && !rendered.endsWith("\n") ? "\n" : "";
+  const lineEnd = element.lineEnd === true ? "\n" : element.lineEnd;
+  const ending = rendered.endsWith("\n") ? "" : (lineEnd ?? "");
   return (element.lineIndent ?? "") + rendered + ending;
 }

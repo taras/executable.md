@@ -562,8 +562,8 @@ function scanTrackedBody(
         }
         pos = ending?.end ?? component.end;
         textStart = pos;
-        if (ending?.newline === true) {
-          component.segment.lineEnd = true;
+        if (ending?.newline !== undefined) {
+          component.segment.lineEnd = ending.newline;
         }
         continue;
       }
@@ -723,18 +723,21 @@ function beginsLine(text: string, lineContent: number, pos: number): boolean {
  * Whether only spaces and tabs follow `pos` on its line, and where that line
  * ends: after its newline, or at the end of the text.
  */
-function lineEndingAfter(text: string, pos: number): { end: number; newline: boolean } | undefined {
+function lineEndingAfter(
+  text: string,
+  pos: number,
+): { end: number; newline?: "\n" | "\r\n" } | undefined {
   let at = pos;
   while (at < text.length && (text[at] === " " || text[at] === "\t")) {
     at++;
   }
   if (at >= text.length) {
-    return { end: at, newline: false };
+    return { end: at };
   }
   if (text.startsWith("\r\n", at)) {
-    return { end: at + 2, newline: true };
+    return { end: at + 2, newline: "\r\n" };
   }
-  return text[at] === "\n" ? { end: at + 1, newline: true } : undefined;
+  return text[at] === "\n" ? { end: at + 1, newline: "\n" } : undefined;
 }
 
 /** `text` from a line start `from` to `to`, with `prefix` removed where a line has it. */
@@ -978,7 +981,7 @@ function parseComponentTag(
   // An opening tag that is its own line opens a block: the body starts on the
   // next line, one structural level deeper.
   const opening = begins ? lineEndingAfter(text, openingEnd) : undefined;
-  const block = opening?.newline === true;
+  const block = opening?.newline !== undefined;
   if (unfinishedTail !== undefined && name !== "File.Patch") {
     if (walk.unfinished !== undefined) {
       unfinishedTail.push({

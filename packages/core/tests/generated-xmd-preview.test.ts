@@ -209,6 +209,19 @@ describe("Tier GP — a standalone nested region is placed as execution places i
         "<Output>\n  - First\n\n    <Output>inner</Output>\n  - Last\n</Output>\n",
         "- First\n\n  inner\n- Last\n",
       ],
+      [
+        [
+          "<Output>\n",
+          "  <Output>inner CRLF</Output>\r\n",
+          "  <Output></Output>\r\n",
+          "  <Output>inner LF</Output>\n",
+          "  <Output>\n",
+          "    payload already has CRLF\r\n",
+          "  </Output>\n",
+          "</Output>",
+        ].join(""),
+        "inner CRLF\r\ninner LF\npayload already has CRLF\r\n",
+      ],
       ["<Output>\n  Before\n  <Output></Output>\n  After\n</Output>\n", "Before\nAfter\n"],
     ];
     for (const [source, expected] of cases) {
