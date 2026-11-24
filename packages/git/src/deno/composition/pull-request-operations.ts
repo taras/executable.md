@@ -42,8 +42,17 @@
  * `pull-request-read-retention.ts`, which obtains neither.
  */
 
-import { getExpansion } from "@executablemd/core";
-import type { Operation } from "effection";
+import {
+  getExpansion,
+  isJsonObject,
+  parseJson,
+  sourceDescription,
+  type JsonObject,
+} from "@executablemd/core";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import { scoped, type Operation } from "effection";
+import { PullRequestReadError } from "../../composition/errors.ts";
+import { SEARCH_ELEMENT } from "../../composition/components/GitHubSearch.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import {
@@ -55,7 +64,8 @@ import { readRequest } from "../../composition/pull-request-read-records.ts";
 import type { PullRequestReadResult } from "../../composition/pull-request-read-records.ts";
 import type { PullRequestResult } from "../../composition/pull-request-records.ts";
 import { getWorkflowRun } from "@executablemd/workflow";
-import { retainPullRequestRead } from "./pull-request-read-retention.ts";
+import { joinedReadCoordinator, retainPullRequestRead } from "./pull-request-read-retention.ts";
+import { gitOperationFingerprint } from "./operations.ts";
 
 /**
  * The durable effect type one evidence read is retained under.
@@ -75,6 +85,44 @@ export { PULL_REQUEST_READ } from "./pull-request-read-retention.ts";
 export function useRetainedPullRequestReads(): Operation<void> {
   return PullRequestReadExecution.around(
     {
+      *search([repository, request, transport]): Operation<JsonObject> {
+        const run = yield* getWorkflowRun();
+        const expansion = yield* getExpansion();
+        const configuration = gitOperationFingerprint([
+          repository,
+          request.query,
+          request.sort ?? null,
+          request.order ?? null,
+          String(request.page),
+          String(request.perPage),
+        ]);
+        const stored = yield* scoped(function* () {
+          return yield createDurableOperation(
+            {
+              type: "github_search",
+              name: `${expansion.id}:${configuration}`,
+              input: { repository, request, runId: run.runId, expansionId: expansion.id },
+              configuration,
+              ...sourceDescription(expansion.position),
+            },
+            transport,
+            { coordinator: joinedReadCoordinator },
+          );
+        });
+        const result = parseJson(stored);
+        if (
+          !isJsonObject(result) ||
+          !isJsonObject(result.value) ||
+          (result.next !== null && !isJsonObject(result.next))
+        ) {
+          throw new PullRequestReadError(
+            "protocol",
+            SEARCH_ELEMENT,
+            "the retained search page is invalid.",
+          );
+        }
+        return result;
+      },
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
         const run = yield* getWorkflowRun();
         const expansion = yield* getExpansion();

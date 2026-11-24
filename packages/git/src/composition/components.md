@@ -309,6 +309,34 @@ neutral pass, and one failure fails — or `incomplete` with a `reason` of
 `timeout`, `head-changed` or `read-error`. Branch on `outcome` before filtering
 `checks`: an empty list of failures can mean CI is still running.
 
+## GitHub.Search
+
+Search the selected GitHub repository for issues or pull requests.
+Use GitHub qualifiers in `query`, including one of `is:issue` and `is:pr`.
+The host supplies the repository scope and authorizes the read.
+
+```mdx
+<GitHub.Search query="is:pr is:open label:bug" sort="created" perPage={20} as="page" />
+<Query value={page.value} yq="[.items[].html_url]" as="pullRequestUrls" />
+```
+
+`page.value` holds the original GitHub response, including `incomplete_results`.
+The `Query` projects URLs from that page. Pass a selected URL to
+`PullRequest.Reviews`, `PullRequest.Comments` or `PullRequest.Checks` to read
+its evidence. When `page.next` is present, pass its fields to another search
+within the same repository. It is `null` after the last accessible page.
+
+```mdx
+<GitHub.Search
+  query={page.next.query}
+  sort={page.next.sort}
+  order={page.next.order}
+  page={page.next.page}
+  perPage={page.next.perPage}
+  as="nextPage"
+/>
+```
+
 ## IssueTracker
 
 Selects the issue tracker its content works with.

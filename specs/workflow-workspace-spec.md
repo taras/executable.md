@@ -69,7 +69,7 @@ every other invocation does.
 - Agent permissions remain caller-selected.
 
 Repository operations are part of that environment under Deno and inside the
-compiled binary. The ordinary provider gives a document the same sixteen
+compiled binary. The ordinary provider gives a document the same seventeen
 repository components a workflow run has, over the caller's own filesystem:
 
 - The **ambient Repository** is the Git checkout the command was run in,
@@ -100,11 +100,10 @@ repository components a workflow run has, over the caller's own filesystem:
 - `<Git.Push>` keeps the observe/adopt/fast-forward/refuse rules and stores
   private evidence of what it published. A paired `<PullRequest>` write is
   authorized by that evidence, so a new run must publish again before writing.
-- `<Issue>` and pull-request reads, including self-closing `<PullRequest />`,
-  reach the same configured transports under the same host ceilings, retaining
+- `<Issue>`, pull-request reads and `<GitHub.Search>` reach the same configured transports under the same host ceilings, retaining
   nothing.
 
-Node and Bun register the same sixteen declarations and install no operational
+Node and Bun register the same seventeen declarations and install no operational
 repository provider, so `xmd syntax` describes one language everywhere and
 every repository operation there reports an absent provider before a lock, a
 credential, a subprocess or a request exists. `<Dir>` is canonical core's
@@ -2341,6 +2340,42 @@ restores its result without a read, a sleep or a progress line. Cancellation
 aborts outstanding work and publishes neither the effect in progress nor a
 result binding.
 
+#### GitHub repository search
+
+`<GitHub.Search query="is:pr is:open" as="page" />` is a self-closing
+value component from the bundled Git Plugin. It searches the GitHub repository
+selected by the enclosing `Repository` or by the ordinary run's ambient
+selection. The provider authenticates that selection and checks its GitHub
+repository against the `allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`
+before opening a GitHub session. Configuration is read on invocation.
+
+The authored query uses GitHub search syntax and contains exactly one positive
+`is:issue` or `is:pr` qualifier. Repository, organization and user scope
+qualifiers are refused. The adapter sends the exact authored query with the
+selected repository's `repo:` qualifier. Optional `sort` and `order` use
+GitHub REST values. Order requires sort and defaults to `desc` when sorting.
+With neither,
+GitHub uses best match. The adapter preserves GitHub's item order.
+
+Each invocation fetches one page. `page` defaults to 1 and `perPage` defaults
+to 20. Page size is an integer from 1 through 100. A page whose first result
+would be beyond GitHub's 1,000 accessible results is refused before transport.
+
+The binding has two members. `value` is the GitHub search response JSON
+unchanged, including `total_count`, `incomplete_results`, nullable fields and
+unfamiliar members. `next` is the complete search arguments for the next page,
+with the same query, ordering and page size, or `null` when the pagination
+header offers no next page within the accessible results. The transport
+headers and credentials stay with the adapter. An authentication or transport
+failure, a malformed response, or an item from a different repository refuses
+the read. A valid incomplete response
+binds its original page and incompleteness indicator.
+
+An ordinary run reads afresh. A workflow retains the admitted repository, full
+request and result as one `github_search` read. Replay restores the retained
+answer without opening a GitHub session. `Query` can project fields from
+`value` within the fetched page.
+
 ### 7.8 Local repository reads
 
 Five read-only components answer questions about the checkout a Repository
@@ -4397,7 +4432,7 @@ unchanged.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
-| the same sixteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
+| the same Git declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; nothing holds the shared Git directory. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
 | `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and keeps it until teardown; a completed one takes none. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |

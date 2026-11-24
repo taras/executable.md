@@ -27,7 +27,9 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Operation } from "effection";
+import type { JsonObject } from "@executablemd/core";
+import type { SearchRequest } from "./components/GitHubSearch.ts";
+import { scoped, type Operation } from "effection";
 import type {
   PullRequestReadRequestKind,
   PullRequestReadResult,
@@ -48,6 +50,12 @@ export interface AdmittedPullRequestRead {
 }
 
 export interface PullRequestReadExecutionApi {
+  search(
+    repository: string,
+    request: SearchRequest,
+    transport: () => Operation<JsonObject>,
+  ): Operation<JsonObject>;
+
   /**
    * Perform one admitted read under this profile's lifecycle.
    *
@@ -71,6 +79,7 @@ export interface PullRequestReadExecutionApi {
  */
 export const PullRequestReadExecution: Api<PullRequestReadExecutionApi> =
   createApi<PullRequestReadExecutionApi>(PULL_REQUEST_READ_EXECUTION, {
+    search: (_repository, _request, transport) => scoped(transport),
     *perform(
       _admitted: AdmittedPullRequestRead,
       transport: () => Operation<PullRequestReadResult>,
