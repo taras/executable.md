@@ -155,7 +155,7 @@ export const HEAD_LABELS: Readonly<Record<ReplHeadState, string>> = Object.freez
 /**
  * What one retained position is, said as a category and nothing more.
  *
- * The drawer's row for a marker. `N` is its one-based ordinal in the full
+ * The Positions view's row for a marker. `N` is its one-based ordinal in the full
  * list and `E` is the admitted order of the entry it belongs to — both
  * counted from the thin list itself, so no row needs a payload to describe
  * itself. The wording is the same live and historical: a recorded answer is

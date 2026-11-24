@@ -82,7 +82,8 @@ function* pressHistory(
   if (!dispatched.ok || dispatched.value.outcome !== "action") {
     throw new Error("the [History] control asked for nothing");
   }
-  return reduceRepl(state, dispatched.value.action, model, LIVE).state;
+  const opened = reduceRepl(state, dispatched.value.action, model, LIVE).state;
+  return reduceRepl(opened, { kind: "history-positions" }, model, LIVE).state;
 }
 
 function markers(observed: Observed): readonly string[] {
@@ -222,6 +223,7 @@ describe("History over a long retained history", () => {
     const closed = initialState("public-history-capacity");
     const opened = Object.freeze({
       ...closed,
+      historyPositions: true,
       route: Object.freeze({
         ...closed.route,
         drawers: Object.freeze([Object.freeze({ kind: "history" as const })]),

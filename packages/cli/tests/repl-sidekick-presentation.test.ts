@@ -42,7 +42,7 @@ import { useReplPage } from "./support/repl-page.ts";
 import {
   COMPOSER,
   replaceAgent,
-  openHistory,
+  openHistoryPositions,
   openConfigure,
   tab,
   scrollDrawerTo,
@@ -1027,7 +1027,7 @@ function* openedQuestion(page: ReplPage): Operation<void> {
 }
 
 function* historyOver(page: ReplPage): Operation<boolean> {
-  yield* openHistory(page);
+  yield* openHistoryPositions(page);
   yield* page.press("[close]");
   yield* page.until(
     "History leaving",
@@ -1325,7 +1325,7 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* draftText(page, "note");
     yield* configureOpened(page);
     yield* chooseOffered(page, "Fast");
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
     yield* page.key("Escape");
     yield* page.until(
       "History closing over Configure",
@@ -2600,7 +2600,7 @@ function* entryRun(page: ReplPage, source: string, ordinal: number): Operation<v
 }
 
 function* freezeFirst(page: ReplPage): Operation<void> {
-  yield* openHistory(page);
+  yield* openHistoryPositions(page);
   yield* page.press("2 · Entry outcome recorded");
   yield* page.until("the first entry's outcome selected", (one) => one.shows("[live]"));
 }

@@ -58,6 +58,8 @@
     <ReplBench.Key key="Shift+Tab" />
     <ReplBench.WaitForText text="[History]" as="history" />
     <ReplBench.Click at={history} />
+    <ReplBench.WaitForText text="[Positions]" as="positions" />
+    <ReplBench.Click at={positions} />
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.Region name="history">
       <ReplBench.Key key="Tab" />
@@ -81,6 +83,8 @@
     <ReplBench.WaitForText text="> [History]" />
 
     <ReplBench.Click at={history} />
+    <ReplBench.WaitForText text="[Positions]" as="positions" />
+    <ReplBench.Click at={positions} />
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.WaitForText text="> 24 · Entry outcome recorded" />
     <Each in={[23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1]} let="row">

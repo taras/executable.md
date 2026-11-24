@@ -1841,9 +1841,17 @@ position, and `[live]` returns from any of them to the head. The selected
 position keeps its own surface and the head its own colour, so the two can sit
 side by side.
 
-The History drawer lists retained positions in descending history order, newest
-first. Keyboard and pointer activation select the displayed position by its
-retained marker. Display order changes neither journal order nor entry identity.
+The History drawer shows one row per admitted round, newest first. Each row
+has distinct Input and Output controls. Input selects that round's retained
+entry-admission marker; Output selects its retained root-outcome marker. An
+unfinished round has Input but no Output control until its outcome is retained.
+Neither a live head nor an intermediate marker substitutes for an absent outcome.
+Keyboard and pointer activation use the same retained markers.
+
+Positions opens every retained position in descending journal order, including
+component, binding, generated, answer and Agent positions. Rounds returns to the
+round list. These views share the existing measured viewport and preserve the
+journal's order and entry identities.
 Wheel and trackpad scrolling over the list moves three displayed rows per tick
 through the existing viewport, including batched ticks, clamped at both ends.
 Scrolling down reaches older positions and scrolling up returns to newer ones.

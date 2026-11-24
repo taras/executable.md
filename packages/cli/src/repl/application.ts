@@ -1101,6 +1101,7 @@ export interface ReplState {
     readonly caret?: ReplCaret;
   };
   readonly heldHistory?: true;
+  readonly historyPositions?: boolean;
   readonly draftCaret?: ReplCaret;
   readonly draftOpen?: boolean;
   readonly humanRound?: string;
@@ -2609,7 +2610,11 @@ export function reduceRepl(
           state.asking?.open === true ||
           state.catalog);
       return navigate(
-        heldHistory ? { ...state, heldHistory: true } : state,
+        heldHistory
+          ? { ...state, heldHistory: true, historyPositions: false }
+          : action.drawer.kind === "history"
+            ? { ...state, historyPositions: false }
+            : state,
         model,
         {
           ...state.route,
@@ -3017,6 +3022,22 @@ export function reduceRepl(
         },
       };
     }
+    case "history-positions":
+      return settled({
+        ...state,
+        historyPositions: !state.historyPositions,
+        viewports: {
+          ...state.viewports,
+          readings: {
+            ...state.viewports.readings,
+            [readingKeyOf(state, { kind: "history" }) ?? ""]: 0,
+          },
+        },
+        restore:
+          action.marker === undefined
+            ? undefined
+            : Object.freeze({ kind: "reveal", key: `drawer:marker:${action.marker}` }),
+      });
     case "select-marker": {
       // Adopted rather than resolved here: a position is a *different reading* of
       // the file, and this model is the one the view being left was built from.
@@ -8300,20 +8321,22 @@ function drawerFor(
     ? (from: number, count: number) => catalogReveals(content, from, count)
     : (from: number, count: number) =>
         flatReveals(
-          content.map((one) => one.described),
+          content.map((one) => ({ ...one.described, key: drawerFocusKey(one.described) })),
           from,
           count,
         );
   const admitted = windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
-    configuring &&
-    view.focused !== "drawer:reading:anchor" &&
-    admitted.some((one) => {
-      const read = readDescription(one.description);
-      return isControl(read.component, read.input);
-    })
+    view.selection.drawers.at(-1)?.kind === "history" && !view.state.historyPositions
       ? admitted
-      : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
+      : configuring &&
+          view.focused !== "drawer:reading:anchor" &&
+          admitted.some((one) => {
+            const read = readDescription(one.description);
+            return isControl(read.component, read.input);
+          })
+        ? admitted
+        : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
   for (const placed of readings) {
     rows.push(placed);
   }
@@ -8357,6 +8380,24 @@ function drawerFor(
   }
   if (!inline && drawable && offered("footer:exit")) {
     rows.push(exit);
+  }
+  if (view.selection.drawers.at(-1)?.kind === "history") {
+    rows.push(
+      row(
+        "drawer:history:positions",
+        view.state.historyPositions ? "[Rounds]" : "[Positions]",
+        {
+          select: "history-positions",
+          marker:
+            (view.state.historyPositions
+              ? [...view.navigation.checkpoints].reverse().find((one) => one.kind === "entry")
+              : view.navigation.checkpoints.at(-1)
+            )?.marker ?? "",
+        },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
   }
   rows.push(
     row(
@@ -8857,29 +8898,84 @@ function drawerContent(
     dismissing = request.key;
   } else if (open.kind === "history") {
     title = "History";
-    // Every retained position, through the same window. A marker outside it is
-    // not described, so it is not a cell, not a target and not a Tab stop —
-    // which is what makes reaching the last one a thing the controls do rather
-    // than something clipping hides.
-    // The whole recorded order, not the selected prefix: the positions after
-    // the one being read are where a reader can go next, and a drawer that
-    // stopped at the selection would be a list of where they had already
-    // been. Every position gets its own row — a group is how the rail *draws*
-    // two of them, never how it counts them — and each says what kind it is
-    // without reading anything the position holds.
-    for (const one of [...numbered(view.navigation)].reverse()) {
-      content.push({
-        described: row(
-          `drawer:marker:${one.point.marker}`,
-          padControl(pointLabel(one.point, one.ordinal, one.entry), width),
-          { select: "marker", marker: one.point.marker },
-          styleOf("history", {
-            selected: view.state.route.at === one.point.marker,
-            inspected: true,
-          }),
-          { here: view.focused },
-        ),
-      });
+    // Both views use the whole recorded navigation, including positions beyond
+    // the selected prefix, without reading their payloads.
+    const points = numbered(view.navigation);
+    if (view.state.historyPositions || !points.some((one) => one.point.kind === "entry")) {
+      for (const one of [...points].reverse()) {
+        content.push({
+          described: row(
+            `drawer:marker:${one.point.marker}`,
+            padControl(pointLabel(one.point, one.ordinal, one.entry), width),
+            { select: "marker", marker: one.point.marker },
+            styleOf("history", {
+              selected: view.state.route.at === one.point.marker,
+              inspected: true,
+            }),
+            { here: view.focused },
+          ),
+        });
+      }
+    } else {
+      const outcomes = new Map(
+        points.filter((one) => one.point.kind === "terminal").map((one) => [one.entry, one]),
+      );
+      const rounds = points.filter((one) => one.point.kind === "entry").reverse();
+      for (const [index, input] of rounds.entries()) {
+        const older = rounds[index + 1];
+        const newer = rounds[index - 1];
+        const neighbours = {
+          ...(older === undefined ? {} : { ArrowDown: `drawer:marker:${older.point.marker}` }),
+          ...(newer === undefined ? {} : { ArrowUp: `drawer:marker:${newer.point.marker}` }),
+          Home: `drawer:marker:${rounds[0].point.marker}`,
+          End: `drawer:marker:${rounds[rounds.length - 1].point.marker}`,
+        };
+        const output = outcomes.get(input.entry);
+        const control = (point: typeof input, label: string) =>
+          row(
+            `drawer:marker:${point.point.marker}`,
+            label,
+            {
+              select: "marker",
+              marker: point.point.marker,
+              historyRound: String(input.entry),
+              historySelected: view.state.route.at === point.point.marker,
+              reveal: {
+                ...neighbours,
+                ...(label === "[Input]" && output !== undefined
+                  ? { ArrowRight: `drawer:marker:${output.point.marker}` }
+                  : label === "[Output]"
+                    ? { ArrowLeft: `drawer:marker:${input.point.marker}` }
+                    : {}),
+              },
+            },
+            styleOf("history", {
+              selected: view.state.route.at === point.point.marker,
+              inspected: true,
+            }),
+            { here: view.focused },
+          );
+        const heading = line(
+          `drawer:round:${input.point.marker}`,
+          `Round ${input.entry}:`,
+          styleOf("history"),
+        );
+        const read = readDescription(heading.description);
+        content.push({
+          described: {
+            ...heading,
+            description: describeNode<ReplAction>({
+              key: read.key,
+              component: read.component,
+              input: { ...fields(read.input), historyRound: String(input.entry) },
+              children: [
+                control(input, "[Input]").description,
+                ...(output === undefined ? [] : [control(output, "[Output]").description]),
+              ],
+            }),
+          },
+        });
+      }
     }
   } else {
     const question = view.live.question;
@@ -9467,6 +9563,11 @@ interface DrawerRow {
  * pass is asking about. The drawer's opening focus request goes to the first field
  * line the window actually holds.
  */
+function drawerFocusKey(one: Described): string {
+  const child = readDescription(one.description).children[0];
+  return child === undefined ? one.key : readDescription(child).key;
+}
+
 function windowed(
   content: readonly DrawerRow[],
   context: ReplPresentationContext,
@@ -9490,7 +9591,7 @@ function windowed(
   return rows.map((candidate, at) => {
     const named = candidate.field;
     if (at !== index || named === undefined) {
-      const reveal = beyond?.get(candidate.described.key);
+      const reveal = beyond?.get(drawerFocusKey(candidate.described));
       return reveal === undefined ? candidate.described : revealing(candidate.described, reveal);
     }
     const read = readDescription(candidate.described.description);
@@ -9501,7 +9602,7 @@ function windowed(
         component: read.component,
         input: {
           ...fields(read.input),
-          ...(beyond?.get(candidate.described.key) === undefined
+          ...(beyond?.get(drawerFocusKey(candidate.described)) === undefined
             ? {}
             : { reveal: beyond.get(candidate.described.key) }),
         },
@@ -9520,6 +9621,17 @@ function revealing(described: Described, reveal: Readonly<Record<string, string>
       key: read.key,
       component: read.component,
       input: { ...fields(read.input), reveal },
+      children: read.children.map((child) => {
+        const nested = readDescription(child);
+        return describeNode<ReplAction>({
+          key: nested.key,
+          component: nested.component,
+          input: {
+            ...fields(nested.input),
+            reveal: { ...fields(fields(nested.input)?.["reveal"] ?? null), ...reveal },
+          },
+        });
+      }),
       layout: read.layout,
       ...(read.focus ? { focus: true } : {}),
     }),
@@ -10777,7 +10889,12 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
     return "drawer-title";
   }
-  if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
+  if (
+    key === "drawer:history:positions" ||
+    key === "drawer:close" ||
+    key === "drawer:sidekick:stop" ||
+    key === "drawer:form:submit"
+  ) {
     return "drawer-actions";
   }
   if (key.startsWith("drawer:")) {
@@ -10897,6 +11014,7 @@ function slotOf(key: string): ReplSlot | undefined {
 
 /** One classified candidate: what it is, and what measurement would draw. */
 interface ReplCandidate {
+  readonly historyRound?: string;
   readonly key: string;
   readonly slot: ReplSlot;
   readonly text: string;
@@ -10955,10 +11073,20 @@ function candidatesOf(
     if (slot !== undefined) {
       found.push({
         key: read.key,
+        ...(typeof fields(read.input)?.["historyRound"] === "string"
+          ? { historyRound: String(fields(read.input)?.["historyRound"]) }
+          : {}),
         slot,
         text: measurementTextOf(read.component, read.input),
         control: isControl(read.component, read.input),
-        style: styles.get(read.key) ?? ORDINARY,
+        style:
+          styles.get(read.key) ??
+          (typeof fields(read.input)?.["historyRound"] === "string"
+            ? styleOf("history", {
+                selected: fields(read.input)?.["historySelected"] === true,
+                inspected: true,
+              })
+            : ORDINARY),
         runs: runs.get(read.key),
       });
     }
@@ -11052,6 +11180,52 @@ function drawerActions(candidates: readonly ReplCandidate[]): ReplBox {
         runs: candidate.runs,
       }),
     ),
+  });
+}
+
+function drawerBoxes(candidates: readonly ReplCandidate[], width: number | undefined): ReplBox[] {
+  const groups = new Map<string, ReplCandidate[]>();
+  const boxes: ReplBox[] = [];
+  for (const candidate of candidates) {
+    if (candidate.historyRound === undefined) {
+      boxes.push(rowBox(candidate, "drawer", width));
+    } else {
+      const group = groups.get(`box:drawer:round:${candidate.historyRound}`);
+      if (group !== undefined) {
+        group.push(candidate);
+      } else {
+        const children = [candidate];
+        groups.set(`box:drawer:round:${candidate.historyRound}`, children);
+        boxes.push(
+          box({
+            id: `box:drawer:round:${candidate.historyRound}`,
+            region: "drawer",
+            props: partsRowProps(1, 1, width),
+            children: children.map((one) => rowBox(one, "drawer", undefined)),
+          }),
+        );
+      }
+    }
+  }
+  return boxes.map((one) => {
+    const group = groups.get(one.id);
+    return group === undefined
+      ? one
+      : box({
+          ...one,
+          children: group.map((candidate) =>
+            box({
+              id: `box:drawer:${candidate.key}`,
+              key: candidate.key,
+              region: "drawer",
+              props: CONTROL_PROPS,
+              text: candidate.text,
+              control: candidate.control,
+              style: candidate.style,
+              runs: candidate.runs,
+            }),
+          ),
+        });
   });
 }
 
@@ -11938,9 +12112,7 @@ export function presentationFor(
             id,
             region: "drawer",
             props: viewportProps(),
-            children: of("drawer").map((candidate) =>
-              rowBox(candidate, "drawer", context.widths?.drawer),
-            ),
+            children: drawerBoxes(of("drawer"), context.widths?.drawer),
           }),
           drawerActions(of("drawer-actions")),
         ],
@@ -12302,7 +12474,14 @@ function offsetFor(
     const at =
       window === SESSIONS_WINDOW
         ? (sessions.positions.get(requested.key) ?? -1)
-        : rows.findIndex((one) => one.key === requested.key);
+        : rows.findIndex(
+            (one) =>
+              one.key === requested.key ||
+              ("description" in one &&
+                readDescription(one.description).children.some(
+                  (child) => readDescription(child).key === requested.key,
+                )),
+          );
     if (at >= 0) {
       if (
         window === DRAWER_WINDOW &&
@@ -14995,7 +15174,7 @@ function workspacePresentation(input: {
             id,
             region: "drawer",
             props: viewportProps(),
-            children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+            children: drawerBoxes(of("drawer"), context.widths?.drawer),
           }),
           drawerActions(of("drawer-actions")),
         ],
