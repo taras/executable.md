@@ -61,7 +61,7 @@ import { canonicalPullRequestUrl } from "../../composition/pull-request-target.t
 /** What one read produced, or that it could not be completed. */
 export type EvidenceReading =
   | { readonly state: "read"; readonly result: PullRequestReadResult }
-  | { readonly state: "unavailable" }
+  | { readonly state: "unavailable"; readonly retryable: boolean }
   | { readonly state: "protocol-invalid" };
 
 /**
@@ -83,14 +83,17 @@ export class EvidenceUnreadable extends Error {
 
   readonly state: "unavailable" | "protocol-invalid";
 
-  constructor(state: "unavailable" | "protocol-invalid") {
+  constructor(
+    state: "unavailable" | "protocol-invalid",
+    readonly retryable = true,
+  ) {
     super(state);
     this.state = state;
   }
 }
 
-function unavailable<T>(): Result<T> {
-  return Err(new EvidenceUnreadable("unavailable"));
+function unavailable<T>(retryable = true): Result<T> {
+  return Err(new EvidenceUnreadable("unavailable", retryable));
 }
 
 function invalid<T>(): Result<T> {
@@ -99,7 +102,18 @@ function invalid<T>(): Result<T> {
 
 /** The refusal a failed collection carries, read back rather than asserted. */
 function refusal(error: Error): EvidenceReading {
-  return { state: error instanceof EvidenceUnreadable ? error.state : "unavailable" };
+  if (error instanceof EvidenceUnreadable && error.state === "protocol-invalid") {
+    return { state: "protocol-invalid" };
+  }
+  return {
+    state: "unavailable",
+    retryable: error instanceof EvidenceUnreadable && error.retryable,
+  };
+}
+
+function retryableStatus(status: number): boolean {
+  // GitHub also uses 403 for rate limits.
+  return status === 403 || status === 408 || status === 429 || status >= 500;
 }
 
 type Collected<T> = Result<T[]>;
@@ -156,7 +170,7 @@ function* collect<T>(
 ): Operation<Collected<T>> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return unavailable();
+    return unavailable(false);
   }
   const gathered: T[] = [];
   let url = first;
@@ -168,7 +182,7 @@ function* collect<T>(
       return unavailable();
     }
     if (response.status !== 200) {
-      return unavailable();
+      return unavailable(retryableStatus(response.status));
     }
     const payload = readJson(response.body);
     const listed = envelope === undefined ? payload : member(payload, envelope);
@@ -187,11 +201,11 @@ function* collect<T>(
       return Ok(gathered);
     }
     if (walk.kind === "unfollowable") {
-      return unavailable();
+      return unavailable(false);
     }
     url = walk.url;
   }
-  return unavailable();
+  return unavailable(false);
 }
 
 function collectionUrl(
@@ -443,7 +457,7 @@ function* observeHead(
 ): Operation<Observed> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return unavailable();
+    return unavailable(false);
   }
   const url = `${access.endpoint}/repos/${name.owner}/${name.repository}/pulls/${number}`;
   let response;
@@ -453,7 +467,7 @@ function* observeHead(
     return unavailable();
   }
   if (response.status !== 200) {
-    return unavailable();
+    return unavailable(retryableStatus(response.status));
   }
   const payload = readJson(response.body);
   // Every field this answer is authenticated by is required. An answer that
@@ -478,7 +492,7 @@ function* readCombinedStatus(
 ): Operation<Collected<CheckEvidence>> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return unavailable();
+    return unavailable(false);
   }
   const url =
     `${access.endpoint}/repos/${name.owner}/${name.repository}/commits/${headSha}/status` +
@@ -490,7 +504,7 @@ function* readCombinedStatus(
     return unavailable();
   }
   if (response.status !== 200) {
-    return unavailable();
+    return unavailable(retryableStatus(response.status));
   }
   const payload = readJson(response.body);
   // The combined status has to say which commit it is about, and say this one.
@@ -602,17 +616,17 @@ export function* readPullRequestDetails(
 ): Operation<EvidenceReading> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return { state: "unavailable" };
+    return { state: "unavailable", retryable: false };
   }
   const url = `${access.endpoint}/repos/${name.owner}/${name.repository}/pulls/${number}`;
   let response: GitHubHttpResponse;
   try {
     response = yield* access.send({ method: "GET", url, headers: sent });
   } catch {
-    return { state: "unavailable" };
+    return { state: "unavailable", retryable: true };
   }
   if (response.status !== 200) {
-    return { state: "unavailable" };
+    return { state: "unavailable", retryable: retryableStatus(response.status) };
   }
   const reading = readPullRequest(readJson(response.body), "sha1");
   if (reading === undefined) {

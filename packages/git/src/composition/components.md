@@ -298,12 +298,12 @@ proceed once CI is green — read the checks, then decide, rather than merging a
 hoping.
 
 ```mdx
-<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+<PullRequest.Checks url={pullRequest.url} watch as="checkResult" />
 ```
 
-In a REPL entry, `watch` waits instead of reading once: it pins the head it first
-sees and polls until every reported check has settled or `timeoutSeconds` runs
-out, showing progress live. It binds `{ outcome, reason?, headSha, checks }`.
+In a REPL entry, `watch` pins the first head it sees and polls for settled
+checks, showing progress live. Supply `timeoutSeconds` to set a deadline.
+The watch binds `{ outcome, reason?, headSha, checks }`.
 `outcome` is `success` or `failure` once every check has settled — skipped and
 neutral pass, and one failure fails — or `incomplete` with a `reason` of
 `timeout`, `head-changed` or `read-error`. Branch on `outcome` before filtering

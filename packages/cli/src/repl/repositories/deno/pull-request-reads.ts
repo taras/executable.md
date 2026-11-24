@@ -239,7 +239,7 @@ function admitRetainedWatch(owner: string, event: Extract<DurableEvent, { type: 
   const type = event.description.type;
   const valid =
     type === PULL_REQUEST_CHECKS_WATCH_DEADLINE
-      ? parseChecksWatchDeadline(value) !== undefined
+      ? parseChecksWatchDeadline(value, question.timeoutSeconds) !== undefined
       : type === PULL_REQUEST_CHECKS_WATCH_HEAD
         ? parseChecksWatchHead(value) !== undefined
         : parseCheckWatchResult(value) !== undefined;
@@ -374,7 +374,7 @@ function* watched(
 /**
  * What an admitted cycle raised, kept apart from a refusal made before admission.
  *
- * A failure after admission is a read the watch may retry; one before it is a
+ * A failure after admission is classified by the watch; one before it is a
  * question this host will not ask, which waiting does not change.
  */
 class WatchReadFailure extends Error {

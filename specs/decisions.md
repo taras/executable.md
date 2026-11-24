@@ -943,8 +943,9 @@ A watch observes every check run and commit status reported for the pinned
 head and waits until every one has settled, including after one has already
 failed. Successful, skipped and neutral results pass; terminal failures,
 errors, cancellation, timeout and action-required results fail. An empty
-collection keeps waiting. The caller's budget expiring returns `incomplete`
-with the latest accepted collection. Omitting `watch` keeps the snapshot array
+collection keeps waiting. A watch runs without a deadline unless the caller
+supplies `timeoutSeconds`. Expiry returns `incomplete` with the latest accepted
+collection. Omitting `watch` keeps the snapshot array
 contract. Post-merge verification of a specific workflow attempt stays with
 `gh`. The contract is
 [workflow-workspace-spec.md §7.7.1](workflow-workspace-spec.md#771-watching-checks).

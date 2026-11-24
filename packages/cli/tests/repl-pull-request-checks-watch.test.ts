@@ -500,9 +500,10 @@ function pullRequest(fixture: Fixture) {
 }
 
 /** The watch every row runs unless it says otherwise. */
-function watching(timeoutSeconds = 60, after: readonly string[] = []): string {
+function watching(timeoutSeconds: number | null = 60, after: readonly string[] = []): string {
+  const timeout = timeoutSeconds === null ? "" : ` timeoutSeconds={${timeoutSeconds}}`;
   return [
-    `<PullRequest.Checks url=${JSON.stringify(URL_1)} watch timeoutSeconds={${timeoutSeconds}} as="checkResult" />`,
+    `<PullRequest.Checks url=${JSON.stringify(URL_1)} watch${timeout} as="checkResult" />`,
     "",
     "<Json value={checkResult} />",
     "",
@@ -842,8 +843,9 @@ describe("a watch's lifetime", () => {
       yield* suspend();
     };
     const stream = new InMemoryStream();
-    const task = yield* started(fixture, watching(), stream);
+    const task = yield* started(fixture, watching(null), stream);
     yield* reached.operation;
+    expect(fixture.clock.waiters).toEqual([]);
     yield* task.halt();
     const events = yield* stream.readAll();
     expect(results(events)).toEqual([]);
@@ -906,7 +908,7 @@ describe("a watch's lifetime", () => {
       "",
       "after {answer.choice}",
     ];
-    const source = watching(60, question);
+    const source = watching(null, question);
     const first = new InMemoryStream();
     const reached = withResolvers<void>();
     const task = yield* started(fixture, source, first, { holdQuestion: () => reached.resolve() });
@@ -915,7 +917,7 @@ describe("a watch's lifetime", () => {
     yield* task.halt();
     expect(results(prefix)).toHaveLength(1);
 
-    const before = checkRequests(fixture);
+    const before = fixture.store.requests.length;
     fixture.ci.refuses = 500;
     const continued = yield* run(fixture, source, new InMemoryStream([...prefix]), {
       answer: { choice: "continue" },
@@ -925,7 +927,8 @@ describe("a watch's lifetime", () => {
     expect(Reflect.get(Object(rendered(continued.output.split("after")[0] ?? "")), "outcome")).toBe(
       "success",
     );
-    expect(checkRequests(fixture)).toBe(before);
+    expect(fixture.store.requests).toHaveLength(before);
+    expect(fixture.clock.waiters).toEqual([]);
     expect(progress(continued.live)).toEqual([]);
   });
 });
@@ -936,7 +939,6 @@ describe("what a watch refuses before contacting anything", () => {
     const element = `<PullRequest.Checks url=${JSON.stringify(URL_1)}`;
     const cases: [string, string][] = [
       [`${element} timeoutSeconds={60} as="checks" />`, "`timeoutSeconds` bounds a watch"],
-      [`${element} watch as="checks" />`, "a watch needs `timeoutSeconds`"],
       [`${element} watch timeoutSeconds={0} as="checks" />`, "Prop validation failed"],
       [`${element} watch timeoutSeconds={1.5} as="checks" />`, "Prop validation failed"],
       [`${element} watch timeoutSeconds={60} />`, "must be invoked with `as`"],
@@ -1143,8 +1145,9 @@ describe("the head a watch observed before its collection failed", () => {
     fixture.ci.runs = [checkRun(31, "build", "completed", "success")];
     fixture.ci.partial = true;
     const stream = new InMemoryStream();
-    const task = yield* started(fixture, watching(), stream);
+    const task = yield* started(fixture, watching(null), stream);
     const retry = yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
+    expect(fixture.clock.waiters.map(({ at }) => at)).toEqual([retry]);
     delete fixture.ci.partial;
     fixture.clock.advanceTo(retry);
     const ran = yield* finished(task);
@@ -1166,7 +1169,7 @@ describe("the head a watch observed before its collection failed", () => {
     fixture.ci.runs = [checkRun(31, "build", "completed", "success")];
     fixture.ci.partial = true;
     const first = new InMemoryStream();
-    const task = yield* started(fixture, watching(), first);
+    const task = yield* started(fixture, watching(null), first);
     yield* fixture.clock.waitFor((at) => at === START + CHECK_WATCH_RETRY_MS);
     yield* task.halt();
     const prefix = [...(yield* first.readAll())];
@@ -1175,18 +1178,77 @@ describe("the head a watch observed before its collection failed", () => {
     ]);
     expect(results(prefix)).toEqual([]);
 
-    fixture.clock.now = START + 20_000;
+    fixture.clock.now = START + 86_400_000;
     pullRequest(fixture).headSha = MOVED;
     delete fixture.ci.partial;
     fixture.ci.statuses = [commitStatus(42, "green", "success")];
-    const again = yield* run(fixture, watching(), new InMemoryStream([...prefix]));
+    const again = yield* run(fixture, watching(null), new InMemoryStream([...prefix]));
     expect(again.refusal).toBe(undefined);
     expect(results(again.events)).toEqual([
       { outcome: "incomplete", reason: "head-changed", headSha: HEAD, checks: [] },
     ]);
     expect(retained(again.events, PULL_REQUEST_CHECKS_WATCH_DEADLINE)).toEqual([
-      { deadline: START + 60_000 },
+      { deadline: null },
     ]);
     expect(pagedAt(fixture, MOVED)).toBe(false);
+  });
+});
+
+describe("read failures without a deadline", () => {
+  it("W23: a terminal error before pinning binds read-error without a retry", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.pullRefuses = 401;
+    let requests = 0;
+    // deno-lint-ignore require-yield
+    fixture.ci.before = function* () {
+      requests += 1;
+    };
+    const task = yield* started(fixture, watching(null), new InMemoryStream());
+    const ran = yield* finished(task);
+    expect(results(ran.events)).toEqual([
+      { outcome: "incomplete", reason: "read-error", headSha: null, checks: [] },
+    ]);
+    expect(requests).toBe(1);
+    expect(progress(ran.live)).toEqual([]);
+  });
+
+  it("W24: invalid evidence stops an unbounded watch with its last accepted checks", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.runs = [checkRun(31, "build", "in_progress", null)];
+    const task = yield* started(fixture, watching(null), new InMemoryStream());
+    const poll = yield* pollAt(fixture);
+    fixture.ci.runs = [{ ...checkRun(32, "other", "completed", "success"), head_sha: MOVED }];
+    fixture.clock.advanceTo(poll);
+    const ran = yield* finished(task);
+    expect(results(ran.events)).toEqual([
+      {
+        outcome: "incomplete",
+        reason: "read-error",
+        headSha: HEAD,
+        checks: [runRecord(31, "build", "in_progress", null)],
+      },
+    ]);
+    expect(progress(ran.live)).toEqual(["Checks at aaaaaaa: 0 passed, 0 failed, 1 pending"]);
+  });
+
+  it("W25: a long explicit timeout keeps polling across a maximum timer arm", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.statuses = [commitStatus(42, "green", "pending")];
+    const seconds = Number.MAX_SAFE_INTEGER;
+    const task = yield* started(fixture, watching(seconds), new InMemoryStream());
+    const arm = yield* fixture.clock.waitFor((at) => at === START + 2_147_483_647);
+    yield* pollAt(fixture);
+    fixture.clock.advanceTo(arm);
+    yield* fixture.clock.waitFor((at) => at === arm + 2_147_483_647);
+    const next = yield* fixture.clock.waitFor((at) => at === arm + CHECK_WATCH_POLL_MS);
+    fixture.ci.statuses = [commitStatus(42, "green", "success")];
+    fixture.clock.advanceTo(next);
+    const ran = yield* finished(task);
+    expect(results(ran.events)).toEqual([
+      { outcome: "success", headSha: HEAD, checks: [statusRecord(42, "green", "success")] },
+    ]);
+    expect(retained(ran.events, PULL_REQUEST_CHECKS_WATCH_DEADLINE)).toEqual([
+      { deadline: String(BigInt(START) + BigInt(seconds) * 1000n) },
+    ]);
   });
 });
