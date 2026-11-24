@@ -15,7 +15,7 @@
  * no enclosing handler, what the boundary receives is what the command
  * emitted, and that is all such a case asserts.
  */
-import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -37,6 +37,7 @@ import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
 import type { ModifierFactory } from "../src/modifiers.ts";
 import { API } from "@executablemd/runtime";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 
 interface Seen {
   /** Every chunk displayed, in arrival order, with the channel it arrived on. */
@@ -44,6 +45,9 @@ interface Seen {
   stdout: string;
   stderr: string;
 }
+
+const OWNER = "packages/core/tests/foreground-exec.test.ts";
+const ROOT_PATH = "doc.md";
 
 /** Watch the display while `body` runs. */
 function* watching<T>(body: (seen: Seen) => Operation<T>): Operation<T> {
@@ -80,12 +84,12 @@ function* runDocument(
     modifiers?: Record<string, ModifierFactory>;
   } = {},
 ): Operation<{ output: string; stream: InMemoryStream }> {
-  const stream = options.stream ?? new InMemoryStream();
-  yield* useStubFs({ "doc.md": source });
+  const stream = options.stream ?? (yield* useJournalStream(ROOT_PATH));
+  yield* useStubFs({ [ROOT_PATH]: source });
   const output = String(
     yield* collect(
       yield* execute({
-        path: "doc.md",
+        path: ROOT_PATH,
         stream,
         ...(options.retainProcessOutput === undefined
           ? {}
@@ -124,6 +128,7 @@ function execOutcome(stream: InMemoryStream): Record<string, unknown> | undefine
 }
 
 describe("Tier FG — foreground execution", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("FG1: a chunk is displayed before the child exits", function* () {
     const dir = yield* useTempDirectory("xmd-fg-");
     const release = path.join(dir, "release");
@@ -840,6 +845,7 @@ describe("Tier FG — foreground execution", () => {
  * never adds one to a record the host did not ask for.
  */
 describe("Tier FG — bound command results", () => {
+  beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
 
   /** How many children a run started, whatever else the case installs. */
