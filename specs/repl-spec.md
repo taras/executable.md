@@ -2803,14 +2803,15 @@ withdrawn for the continuation too.
 Wait for CI in the same entry that needs the answer:
 
 ```xmd
-<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+<PullRequest.Checks url={pullRequest.url} watch as="checkResult" />
 <Json value={checkResult} />
 ```
 
-The entry waits until every check reported for the pull request's head has
-settled, or until the budget ends, and binds `{ outcome, reason?, headSha,
-checks }` as [the watch contract](workflow-workspace-spec.md#771-watching-checks)
-describes. While it waits, **Output · live** shows the short head and how many
+The entry watches the pinned head until the checks settle, the head changes,
+or the entry is stopped. A terminal read error ends the watch early. Supply
+`timeoutSeconds` to set a deadline. The
+[watch contract](workflow-workspace-spec.md#771-watching-checks) defines the
+`{ outcome, reason?, headSha, checks }` result. While it waits, **Output · live** shows the short head and how many
 checks passed, failed and are pending, and says when a read is being retried.
 Those lines are live only: the entry's output is what the document renders once
 the watch settles.
@@ -2819,8 +2820,7 @@ Draft **Stop** interrupts the entry: the request in flight is aborted, its
 session closes, and no result is bound. Sidekick **Stop** ends the Send and
 leaves an admitted entry watching; a Send that submitted it waits for its
 receipt. Reopening an unfinished entry continues the watch with the
-head it pinned and the deadline it started with, so the remaining budget is
-what is left of the original one. Reopening a completed one restores its result
+head it pinned and the original deadline if one was supplied. Reopening a completed one restores its result
 without asking GitHub anything. The Sidekick reads this as `<Guide.CI />`.
 
 ### The issue an entry filed, and the one it read

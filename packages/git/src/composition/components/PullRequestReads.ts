@@ -78,22 +78,22 @@ const checksProps: PropsSchema = {
       type: "string",
       minLength: 1,
       description:
-        "The name of the only provider that may answer, for a URL another provider would " +
-        "also recognize, such as a self-hosted deployment: lower-case letters, digits " +
-        "and hyphens, starting with a letter.",
+        "Selects the provider, including for URLs automatic matching may not recognize, " +
+        "such as a self-hosted deployment. Use lower-case letters, digits and hyphens, " +
+        "starting with a letter.",
     },
     watch: {
       type: "boolean",
       description:
         "Wait until every check reported for the pinned head settles, instead of reading " +
-        "once, and bind one watch result. Needs `timeoutSeconds`; only a REPL entry watches.",
+        "once, and bind one watch result. Only a REPL entry watches.",
     },
     timeoutSeconds: {
       type: "integer",
       minimum: 1,
       description:
-        "How many seconds a watch waits before it ends `incomplete`: a positive whole " +
-        "number, required with `watch` and refused without it.",
+        "Optional positive safe integer in seconds. Omit it to watch without a deadline. " +
+        "Requires `watch`.",
     },
   },
   required: ["url"],
@@ -255,7 +255,7 @@ function read(
     props: Record<string, Json>,
     operations: PullRequestReadOperations,
   ): Operation<Json> {
-    const watching = kind === "checks" ? watchBudget(props, element) : undefined;
+    const timeoutSeconds = kind === "checks" ? watchTimeout(props, element) : undefined;
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -277,8 +277,8 @@ function read(
       );
     }
 
-    if (watching !== undefined) {
-      return yield* watched(operations, { url, provider, timeoutSeconds: watching }, element);
+    if (kind === "checks" && props.watch === true) {
+      return yield* watched(operations, { url, provider, timeoutSeconds }, element);
     }
 
     const result = yield* operations.read({ url, kind, provider });
@@ -309,28 +309,28 @@ function read(
 }
 
 /**
- * The budget a checks read watches for, or `undefined` for a snapshot.
+ * Validate an explicit timeout before a provider sees the request.
  *
  * Decided before the URL is read, so an incomplete watch is refused before any
  * provider, credential or request is involved.
  */
-function watchBudget(written: Record<string, Json>, element: string): number | undefined {
+function watchTimeout(written: Record<string, Json>, element: string): number | undefined {
   const budget = written.timeoutSeconds;
-  if (written.watch !== true) {
-    if (budget !== undefined) {
-      throw new PullRequestReadError(
-        "invalid-watch",
-        element,
-        "`timeoutSeconds` bounds a watch, so it is written with `watch`.",
-      );
-    }
+  if (budget === undefined) {
     return undefined;
+  }
+  if (written.watch !== true) {
+    throw new PullRequestReadError(
+      "invalid-watch",
+      element,
+      "`timeoutSeconds` bounds a watch, so it is written with `watch`.",
+    );
   }
   if (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < 1) {
     throw new PullRequestReadError(
       "invalid-watch",
       element,
-      "a watch needs `timeoutSeconds`, a positive whole number of seconds to wait.",
+      "`timeoutSeconds` must be a positive safe integer in seconds.",
     );
   }
   return budget;
@@ -339,7 +339,7 @@ function watchBudget(written: Record<string, Json>, element: string): number | u
 /** One watch, with its final answer read whole before it binds. */
 function* watched(
   operations: PullRequestReadOperations,
-  invocation: { url: string; provider: string | undefined; timeoutSeconds: number },
+  invocation: { url: string; provider: string | undefined; timeoutSeconds: number | undefined },
   element: string,
 ): Operation<Json> {
   const result = parseCheckWatchResult(yield* operations.watch(invocation));
@@ -397,7 +397,7 @@ const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentatio
       description:
         `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` ` +
         `reads check runs and commit statuses for its head. In a REPL entry, add ` +
-        `\`watch timeoutSeconds={600}\` to wait until every reported check settles.`,
+        `\`watch\` to wait for checks to settle. Supply \`timeoutSeconds\` to set a deadline.`,
       as:
         "Required. Each check's kind, name, head commit and outcome; with `watch`, one " +
         "result with the outcome, reason, pinned head and those checks.",

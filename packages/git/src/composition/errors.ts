@@ -332,7 +332,12 @@ export class PullRequestReadError extends StaleInputError {
 
   readonly reason: PullRequestReadReason;
 
-  constructor(reason: PullRequestReadReason, element: string, sentence: string) {
+  constructor(
+    reason: PullRequestReadReason,
+    element: string,
+    sentence: string,
+    readonly retryable = reason === "unavailable",
+  ) {
     super(`${element} could not read the evidence it names: ${sentence}`);
     this.reason = reason;
   }

@@ -68,7 +68,7 @@ export interface PullRequestChecksWatchRequest {
   readonly operation: "watch";
   readonly url: string;
   readonly provider: string | null;
-  readonly timeoutSeconds: number;
+  readonly timeoutSeconds: number | null;
   readonly runId: string;
   readonly expansionId: string;
 }
@@ -76,7 +76,7 @@ export interface PullRequestChecksWatchRequest {
 export function checksWatchRequest(
   url: string,
   provider: string | undefined,
-  timeoutSeconds: number,
+  timeoutSeconds: number | undefined,
   runId: string,
   expansionId: string,
 ): PullRequestChecksWatchRequest {
@@ -84,7 +84,7 @@ export function checksWatchRequest(
     operation: "watch" as const,
     url,
     provider: provider ?? null,
-    timeoutSeconds,
+    timeoutSeconds: timeoutSeconds ?? null,
     runId,
     expansionId,
   });
@@ -125,9 +125,10 @@ export function parseChecksWatchRequest(
     return undefined;
   }
   if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isSafeInteger(timeoutSeconds) ||
-    timeoutSeconds < 1
+    timeoutSeconds !== null &&
+    (typeof timeoutSeconds !== "number" ||
+      !Number.isSafeInteger(timeoutSeconds) ||
+      timeoutSeconds < 1)
   ) {
     return undefined;
   }
@@ -139,7 +140,13 @@ export function parseChecksWatchRequest(
   ) {
     return undefined;
   }
-  return checksWatchRequest(url, provider ?? undefined, timeoutSeconds, runId, expansionId);
+  return checksWatchRequest(
+    url,
+    provider ?? undefined,
+    timeoutSeconds ?? undefined,
+    runId,
+    expansionId,
+  );
 }
 
 /**
@@ -154,7 +161,7 @@ export function checksWatchConfiguration(request: PullRequestChecksWatchRequest)
     request.operation,
     request.url,
     request.provider,
-    String(request.timeoutSeconds),
+    request.timeoutSeconds === null ? null : String(request.timeoutSeconds),
   ]);
 }
 
@@ -174,13 +181,28 @@ function describe(
 }
 
 /** The retained deadline, read back. */
-export function parseChecksWatchDeadline(received: unknown): number | undefined {
+export function parseChecksWatchDeadline(
+  received: unknown,
+  timeoutSeconds: number | null,
+): bigint | null | undefined {
   const value = jsonObject(received);
   if (value === undefined || Object.keys(value).length !== 1) {
     return undefined;
   }
   const deadline = value.deadline;
-  return typeof deadline === "number" && Number.isSafeInteger(deadline) ? deadline : undefined;
+  if (timeoutSeconds === null) {
+    return deadline === null ? null : undefined;
+  }
+  if (typeof deadline === "number" && Number.isSafeInteger(deadline)) {
+    return BigInt(deadline);
+  }
+  if (typeof deadline === "string" && /^[1-9][0-9]*$/.test(deadline)) {
+    const exact = BigInt(deadline);
+    if (exact > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return exact;
+    }
+  }
+  return undefined;
 }
 
 /** What the pinning half established, read back. */
@@ -221,10 +243,17 @@ export function retainPullRequestChecksWatch(
       yield createDurableOperation<DurableJson>(
         describe(PULL_REQUEST_CHECKS_WATCH_DEADLINE, request, position),
         function* (): Operation<DurableJson> {
+          if (request.timeoutSeconds === null) {
+            return { deadline: null };
+          }
           const now = yield* PullRequestWatchClock.operations.now();
-          return { deadline: now + request.timeoutSeconds * 1000 };
+          const exact = BigInt(Math.trunc(now)) + BigInt(request.timeoutSeconds) * 1000n;
+          return {
+            deadline: exact <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(exact) : String(exact),
+          };
         },
       ),
+      request.timeoutSeconds,
     );
     if (deadline === undefined) {
       throw restored();
@@ -241,7 +270,7 @@ export function retainPullRequestChecksWatch(
         { coordinator: joinedReadCoordinator },
       ),
     );
-    if (head === undefined) {
+    if (head === undefined || (deadline === null && head.headSha === null && !head.failing)) {
       throw restored();
     }
     state.headSha = head.headSha;
@@ -256,7 +285,11 @@ export function retainPullRequestChecksWatch(
         { coordinator: joinedReadCoordinator },
       ),
     );
-    if (result === undefined || result.headSha !== head.headSha) {
+    if (
+      result === undefined ||
+      result.headSha !== head.headSha ||
+      (deadline === null && result.reason === "timeout")
+    ) {
       throw restored();
     }
     return result;

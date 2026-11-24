@@ -2236,12 +2236,13 @@ another question is still the wrong answer.
 `<PullRequest.Checks>` also waits for a pull request's checks to settle:
 
 ```md
-<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+<PullRequest.Checks url={pullRequest.url} watch as="checkResult" />
 ```
 
 Without `watch` the element is the snapshot read above and binds the same
-array, `[]` included. With `watch` it requires a positive integer
-`timeoutSeconds`, renders nothing and binds one result:
+array, `[]` included. With `watch` it renders nothing and binds one result.
+By default the watch has no time deadline. An explicit positive safe integer
+`timeoutSeconds` bounds the watch:
 
 ```ts
 type CheckWatchResult = {
@@ -2254,11 +2255,10 @@ type CheckWatchResult = {
 
 `success` and `failure` are settled results and carry no `reason`; `incomplete`
 always carries one. `headSha` is the head the watch pinned, or `null` when no
-collection named one before the budget ended. `checks` is the last complete
+successful details read named one before the watch ended. `checks` is the last complete
 collection accepted for that head, in provider order, each record exactly the
-snapshot's record. `timeoutSeconds` without `watch`, `watch` without a positive
-integer `timeoutSeconds`, and a missing `as` refuse before a provider, credential
-or request is involved. The bound result is read whole before it binds, the way
+snapshot's record. A timeout without `watch`, an invalid explicit timeout,
+and a missing `as` refuse before a provider, credential or request is involved. The bound result is read whole before it binds, the way
 a snapshot is.
 
 **Completion.** The watch observes every check run and commit status reported
@@ -2283,22 +2283,30 @@ when the collection just read would have settled the watch; a head that moved
 before a collection is reported without paging the new head's checks. A watch
 never follows a moved head; starting another watch is the caller's decision.
 
-**Budget and failures.** The deadline is taken before the first read, and one
-race against it bounds every request, page, retry delay and poll sleep. A cycle
-polls immediately, then every ten seconds after an accepted unsettled
-collection and five seconds after a read that could not complete. A read that
-could not complete — unavailable, protocol-invalid, or a page walk that did not
-finish — keeps the last accepted collection and is retried; a partial
-collection is never accepted. When the budget ends, the result is `incomplete`
-with `read-error` if the latest read failed and no later one succeeded, and
-`timeout` otherwise. A refusal made before a cycle contacts anything — a URL no
-installed provider handles, a target outside a host's ceiling — is the
-element's failure, not a retry.
+**Timing and failures.** With an explicit timeout, one absolute deadline
+starts before the first read and bounds every request, page, retry delay and
+poll sleep. An expired deadline starts no read. Each timer arm lasts at most
+2,147,483,647 milliseconds. Intermediate timer wakes keep the same deadline
+and leave polling in flight. Both forms poll immediately and wait ten seconds
+after an accepted unsettled collection or five seconds before retrying a read.
+A failed read leaves the last accepted collection intact.
+
+A bounded watch retries admitted read failures until the deadline. At expiry
+it binds `incomplete` with `read-error` after an unresolved read failure, or
+`timeout` otherwise. A watch without a deadline retries transient failures
+until a read succeeds, the watch is cancelled, or it encounters a terminal
+failure. GitHub transport failures, HTTP 403 (which can signal rate limiting),
+408, 429 and 5xx are retryable. A missing credential, other unsuccessful HTTP
+responses, invalid evidence, and a page walk outside the pagination rules are
+terminal. An admitted terminal failure ends a watch without a deadline with
+`incomplete` and `read-error`, the pinned head if available, and the last
+accepted collection. Admission refusals, including an unmatched URL or a
+target outside the host's ceiling, fail the element before polling.
 
 **Progress.** Each accepted collection whose summary differs from the last one
 shown writes one live line through `DocumentOutput`: `Checks at <short head>:
 <passed> passed, <failed> failed, <pending> pending`. A read that could not
-complete writes `Checks at <short head>: retrying after a read error`, or
+complete and will be retried writes `Checks at <short head>: retrying after a read error`, or
 `Checks: retrying after a read error` before a head is pinned. A line identical
 to the last one shown is not written again. Progress is live output only; it is not part of the element's rendered
 output or its binding.
@@ -2313,25 +2321,25 @@ workflow or ordinary run refuses `watch`. Time is read through
 wall-clock by default, so a host or suite can supply its own.
 
 **Retention.** A watch retains three effects, each named
-`{site}:{fingerprint}` over the question `["watch", url, provider,
-timeoutSeconds]` and carrying the complete request — the operation, URL,
-provider, budget, owner and site — as input:
+`{site}:{fingerprint}` over the question
+`["watch", url, provider-or-null, decimal-timeoutSeconds-or-null]`.
+The input records the operation, URL, provider, timeout in seconds or JSON
+null, owner and site. Bounded watches keep their original input and fingerprint.
 
 | Type | Retained value |
 | --- | --- |
-| `pull_request_checks_watch_deadline` | `{ deadline }`, milliseconds since the epoch |
-| `pull_request_checks_watch_head` | `{ headSha, failing }` once the pull request names a head or the budget ends |
+| `pull_request_checks_watch_deadline` | `{ deadline }` with JSON null for a watch without a deadline. A bounded deadline is epoch milliseconds, encoded as a JSON integer through `Number.MAX_SAFE_INTEGER` and as a canonical decimal string above it. |
+| `pull_request_checks_watch_head` | `{ headSha, failing }` when the head is pinned or pinning ends without a head |
 | `pull_request_checks_watch_result` | the result above |
 
-Polling happens only inside the bodies of the second and third effects, which
-run in a child attempt whose outcome is published after that attempt's sessions
-have closed. Intermediate collections are never retained. A continued watch
-replays the effects it already has: it keeps its original deadline and pinned
-head, and polls again only for what is not yet retained. A completed watch
-restores its result without a read, a sleep or a line of progress. Cancellation
-publishes nothing for the effect in progress, so an interrupted watch binds
-nothing.
-
+Polling happens only inside the head and result effects. Each runs in a child
+attempt and publishes its outcome after the attempt's sessions close.
+Intermediate collections are never retained. A continued watch restores its
+deadline or absence of one and any pinned head, then runs the first unfinished
+effect. Time away counts against an explicit deadline. A completed watch
+restores its result without a read, a sleep or a progress line. Cancellation
+aborts outstanding work and publishes neither the effect in progress nor a
+result binding.
 
 ### 7.8 Local repository reads
 

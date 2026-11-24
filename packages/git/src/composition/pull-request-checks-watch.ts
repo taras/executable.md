@@ -2,9 +2,9 @@
  * Waiting for one pull request's checks to settle
  * (specs/workflow-workspace-spec.md §7.7.1).
  *
- * `<PullRequest.Checks watch timeoutSeconds={…} as="result" />` reads the same
+ * `<PullRequest.Checks watch as="result" />` reads the same
  * complete check-run and commit-status collection a snapshot reads, repeatedly,
- * until every reported check has settled or the caller's budget runs out. What
+ * until the checks settle, the head changes, or the watch ends. What
  * this module owns is provider-neutral: the result record, how a collection is
  * classified, and the polling loop. The reads themselves are the existing
  * `checks` and `details` transport reads, so matching, the host ceiling, the
@@ -21,7 +21,7 @@
  *
  * ## One deadline bounds everything
  *
- * The whole loop races one sleep to the deadline, so requests, pagination,
+ * A bounded watch races the loop against its deadline, so requests, pagination,
  * retry delays and poll sleeps all end when the budget does. The state the loop
  * mutates is what the result is built from afterwards, so a deadline that lands
  * mid-request still reports the last accepted collection.
@@ -74,7 +74,7 @@ export interface CheckWatchInvocation {
   /** The explicit discriminator, for a self-hosted or non-standard URL. */
   readonly provider: string | undefined;
   /** The caller's whole budget, in seconds. */
-  readonly timeoutSeconds: number;
+  readonly timeoutSeconds: number | undefined;
 }
 
 /** The stable name every loaded copy composes the watch through. */
@@ -265,7 +265,7 @@ export interface CheckWatchReads {
  */
 export interface CheckWatchState {
   /** When the budget ends, in the clock's milliseconds. */
-  readonly deadline: number;
+  readonly deadline: bigint | null;
   /** The pinned head, once the pull request has named one. */
   headSha: string | null;
   /** The last complete collection accepted for the pinned head. */
@@ -281,7 +281,7 @@ export interface CheckWatchState {
 /** Writes one line of live progress. */
 export type CheckWatchProgress = (line: string) => Operation<void>;
 
-export function checkWatchState(deadline: number): CheckWatchState {
+export function checkWatchState(deadline: bigint | null): CheckWatchState {
   return { deadline, headSha: null, checks: [], failing: false };
 }
 
@@ -302,7 +302,9 @@ export function* pinCheckHead(
     while (state.headSha === null) {
       const head = yield* observedHead(reads);
       if (!head.ok) {
-        yield* failed(state, progress);
+        if (!(yield* retryRead(state, progress, head.error))) {
+          return;
+        }
         continue;
       }
       state.headSha = head.value;
@@ -335,7 +337,9 @@ export function* settleChecks(
       if (state.observed !== true) {
         const head = yield* observedHead(reads);
         if (!head.ok) {
-          yield* failed(state, progress);
+          if (!(yield* retryRead(state, progress, head.error))) {
+            return;
+          }
           continue;
         }
         if (head.value !== pinned) {
@@ -346,7 +350,9 @@ export function* settleChecks(
       delete state.observed;
       const collected = yield* collection(reads);
       if (!collected.ok) {
-        yield* failed(state, progress);
+        if (!(yield* retryRead(state, progress, collected.error))) {
+          return;
+        }
         continue;
       }
       if (collected.value.headSha !== pinned) {
@@ -356,7 +362,9 @@ export function* settleChecks(
       const items = collected.value.items;
       const verified = yield* observedHead(reads);
       if (!verified.ok) {
-        yield* failed(state, progress);
+        if (!(yield* retryRead(state, progress, verified.error))) {
+          return;
+        }
         continue;
       }
       if (verified.value !== pinned) {
@@ -409,18 +417,42 @@ function* collection(
 
 /** Run `body` until it returns or the deadline passes, whichever is first. */
 function* withinDeadline(state: CheckWatchState, body: () => Operation<void>): Operation<void> {
-  const remaining = state.deadline - (yield* PullRequestWatchClock.operations.now());
-  if (remaining <= 0) {
-    return;
+  const deadline = state.deadline;
+  if (deadline === null) {
+    yield* body();
+  } else if ((yield* remaining(deadline)) > 0n) {
+    yield* race([body(), untilDeadline(deadline)]);
   }
-  yield* race([body(), PullRequestWatchClock.operations.sleep(remaining)]);
 }
 
-function* failed(state: CheckWatchState, progress: CheckWatchProgress): Operation<void> {
+function* untilDeadline(deadline: bigint): Operation<void> {
+  for (;;) {
+    const left = yield* remaining(deadline);
+    if (left <= 0n) {
+      return;
+    }
+    const timerLimit = 2_147_483_647n;
+    yield* PullRequestWatchClock.operations.sleep(Number(left < timerLimit ? left : timerLimit));
+  }
+}
+
+function* remaining(deadline: bigint): Operation<bigint> {
+  return deadline - BigInt(Math.trunc(yield* PullRequestWatchClock.operations.now()));
+}
+
+function* retryRead(
+  state: CheckWatchState,
+  progress: CheckWatchProgress,
+  error: Error,
+): Operation<boolean> {
   state.failing = true;
+  if (state.deadline === null && !(error instanceof PullRequestReadError && error.retryable)) {
+    return false;
+  }
   const head = state.headSha === null ? "" : ` at ${short(state.headSha)}`;
   yield* show(state, progress, `Checks${head}: retrying after a read error`);
   yield* PullRequestWatchClock.operations.sleep(CHECK_WATCH_RETRY_MS);
+  return true;
 }
 
 function* show(

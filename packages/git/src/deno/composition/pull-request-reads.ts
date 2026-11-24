@@ -404,6 +404,7 @@ export function gitHubPullRequestReadHandler(
             element,
             "the Git host did not answer with the complete collection. None of what it did " +
               "answer is evidence that there is nothing there.",
+            reading.retryable,
           );
         }
         if (reading.state === "protocol-invalid") {
