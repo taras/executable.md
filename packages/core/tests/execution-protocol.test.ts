@@ -444,9 +444,8 @@ describe("Tier EP — the execution protocol", () => {
 
       const run = (doc: string) =>
         function* (): Operation<string> {
-          return String(
-            yield* collect(yield* execute({ ...inlineSource(doc), stream: new InMemoryStream() })),
-          );
+          const stream = yield* useJournalStream("<eval>");
+          return String(yield* collect(yield* execute({ ...inlineSource(doc), stream })));
         };
       const first = yield* spawn(run("# First\n"));
       const second = yield* spawn(run("# Second\n"));
@@ -862,6 +861,7 @@ describe("Tier EP — the execution protocol", () => {
   // public chain finishes, and each one materially affects execution — so the
   // accepted snapshot is what the assertions read, not the edited original.
   it("EP26: the accepted options are a detached snapshot", function* () {
+    const stream = yield* useJournalStream("<eval>");
     // Control: replacing the same fields *before* delegating still works.
     const replaced = yield* scoped(function* () {
       yield* Execution.around({
@@ -869,7 +869,7 @@ describe("Tier EP — the execution protocol", () => {
           yield* next(request.withOptions({ ...request.options, ...inlineSource("# Control\n") }));
         },
       });
-      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
     });
     expect(String(replaced)).toContain("Control");
 
@@ -2290,6 +2290,7 @@ describe("Tier DP — the document protocol", () => {
       ].join("\n");
 
       const captured: Array<Record<string, Json>> = [];
+      const stream = yield* useJournalStream("<eval>");
       const output = yield* scoped(function* () {
         yield* registerComponents([
           {
@@ -2308,9 +2309,7 @@ describe("Tier DP — the document protocol", () => {
             yield* next(request.withProps(props));
           },
         });
-        return String(
-          yield* collect(yield* execute({ ...inlineSource(source), stream: new InMemoryStream() })),
-        );
+        return String(yield* collect(yield* execute({ ...inlineSource(source), stream })));
       });
 
       // Carried as data: not dropped, and not installed as the copy's prototype.
@@ -2332,6 +2331,7 @@ describe("Tier DP — the document protocol", () => {
         },
       );
 
+      const stream = yield* useJournalStream("<eval>");
       const output = yield* scoped(function* () {
         yield* Execution.around({
           *document([request], next) {
@@ -2340,9 +2340,7 @@ describe("Tier DP — the document protocol", () => {
             yield* next(request.withProps({}));
           },
         });
-        return yield* collect(
-          yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }),
-        );
+        return yield* collect(yield* execute({ ...inlineSource(DOC), stream }));
       });
 
       expect(refusals.length).toEqual(1);

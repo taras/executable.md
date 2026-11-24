@@ -989,16 +989,23 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     // terminal `next` reaches is the one this import created, so the invocation
     // is still in its execution's domain.
     const seen = record();
-    yield* run("<Probe />\n", [probe(seen)], function* () {
-      yield* Component.around(
-        {
-          *importComponent([name, position], next) {
-            return yield* scoped(() => next(name, position));
+    const stream = yield* useJournalStream("<eval>");
+    yield* run(
+      "<Probe />\n",
+      [probe(seen)],
+      function* () {
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              return yield* scoped(() => next(name, position));
+            },
           },
-        },
-        { at: "max" },
-      );
-    });
+          { at: "max" },
+        );
+      },
+      undefined,
+      stream,
+    );
 
     expect(seen.refusals).toEqual([]);
     expect(seen.taken).toHaveLength(1);
@@ -1007,7 +1014,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     // identity is the authored element's and the delegation changed nothing
     // about which element asked.
     const direct = record();
-    yield* run("<Probe />\n", [probe(direct)]);
+    const directStream = yield* useJournalStream("<eval>");
+    yield* run("<Probe />\n", [probe(direct)], undefined, undefined, directStream);
     expect(seen.taken).toEqual(direct.taken);
   });
 
@@ -1090,28 +1098,35 @@ describe("Tier CIV — the import's own terminal is the association", () => {
 
     const seen = record();
     const nested: string[] = [];
-    yield* run("<Probe />\n", [probe(seen), probe(seen, "Other")], function* () {
-      yield* Component.around(
-        {
-          *importComponent([name, position], next) {
-            if (name !== "Probe") {
+    const stream = yield* useJournalStream("<eval>");
+    yield* run(
+      "<Probe />\n",
+      [probe(seen), probe(seen, "Other")],
+      function* () {
+        yield* Component.around(
+          {
+            *importComponent([name, position], next) {
+              if (name !== "Probe") {
+                return yield* next(name, position);
+              }
+              const answered = yield* importThroughTerminal(
+                "Other",
+                position,
+                // deno-lint-ignore require-yield
+                function* (asked: string) {
+                  throw foreignTerminalReport(asked);
+                },
+              );
+              nested.push(`${answered.kind}:${answered.name}`);
               return yield* next(name, position);
-            }
-            const answered = yield* importThroughTerminal(
-              "Other",
-              position,
-              // deno-lint-ignore require-yield
-              function* (asked: string) {
-                throw foreignTerminalReport(asked);
-              },
-            );
-            nested.push(`${answered.kind}:${answered.name}`);
-            return yield* next(name, position);
+            },
           },
-        },
-        { at: "max" },
-      );
-    });
+          { at: "max" },
+        );
+      },
+      undefined,
+      stream,
+    );
 
     // The nested import was answered by this execution's ordinary resolution,
     // with this execution's own implementation of that component.
@@ -1121,7 +1136,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     expect(seen.refusals).toEqual([]);
     expect(seen.taken).toHaveLength(1);
     const direct = record();
-    yield* run("<Probe />\n", [probe(direct)]);
+    const directStream = yield* useJournalStream("<eval>");
+    yield* run("<Probe />\n", [probe(direct)], undefined, undefined, directStream);
     expect(seen.taken).toEqual(direct.taken);
   });
 
