@@ -38,10 +38,35 @@ describe("draft window", () => {
     yield* page.until("three earlier draft rows", () => first() === before - 3);
     yield* page.wheel("up", { row: 10, column: 60 });
     yield* page.until("six earlier draft rows", () => first() === before - 6);
-    yield* page.resize({ columns: 200, rows: 52 });
+    yield* page.resize({ columns: 201, rows: 53 });
     expect(first()).toBe(before - 6);
     yield* page.key("ArrowRight");
     yield* page.until("the caret row returns", (one) => one.shows("DRAFT-END-119"));
+  });
+  it("applies every draft wheel notch in a burst with one paint and clamps", function* () {
+    const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
+    yield* generateTypingDraft(page, 120);
+    const first = () =>
+      Number(
+        page
+          .screen()
+          .rows.find((row) => row.includes("DRAFT-"))
+          ?.match(/DRAFT-[A-Z]+-(\d+)/)?.[1],
+      );
+    const bottom = first();
+    for (const [direction, notches, expected] of [
+      ["up", 4, bottom - 12],
+      ["down", 2, bottom - 6],
+      ["down", 50, bottom],
+      ["up", 50, 0],
+    ] satisfies readonly (readonly ["up" | "down", number, number])[]) {
+      const painted = page.repl.terminal.drawn;
+      const reading = page.screen().index;
+      page.repl.terminal.feed(`\x1b[<${direction === "up" ? 64 : 65};61;11M`.repeat(notches));
+      yield* page.until("the burst paint", (one) => one.index > reading);
+      expect(first()).toBe(expected);
+      expect(page.repl.terminal.drawn - painted).toBe(1);
+    }
   });
   it("renders the caret after moving down through a retained draft window", function* () {
     const page = yield* useReplPage({ size: { columns: 200, rows: 52 } });
