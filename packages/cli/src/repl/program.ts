@@ -6044,7 +6044,11 @@ export function* prepareFrame(
     }
     if (profileFor(view.size) === "wide") {
       const bounded = wideHistoryWidths(
-        (id) => fitted.value.boundsOf(id)?.width,
+        (id) => {
+          const width = fitted.value.boundsOf(id)?.width;
+          // Overflowing map text can enlarge the measured row beyond the terminal.
+          return width === undefined ? undefined : Math.min(width, view.size.columns);
+        },
         (id) => apart.value.boundsOf(id)?.width,
       );
       if (bounded !== undefined) {

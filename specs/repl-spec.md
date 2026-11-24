@@ -1857,6 +1857,11 @@ cannot be built at all, because the file holds a record this process can no
 longer read, the whole screen is the refusal — not a map standing beside a
 prefix that still looks plausible.
 
+The History map yields space to the footer controls as entries accumulate.
+Its allocation never exceeds the terminal width left after those controls,
+including when measuring an overflowing map reports a wider row. The History
+launcher remains visible and operable at supported widths.
+
 The contextual controls sit at the right of the History row, side by side, each
 as wide as its own label so a pointer on one reaches that one. Order is priority:
 a control that will not fit whole is not drawn at all rather than drawn half off
