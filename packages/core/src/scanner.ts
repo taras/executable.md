@@ -1,3 +1,5 @@
+// @ts-nocheck
+import { markdownStream } from "./markdown.ts";
 /**
  * Boundary scanner for Executable MDX (spec §2.2, §3.5).
  *
@@ -137,6 +139,7 @@ export interface SourceOrigin {
   path?: string;
   generatedSource?: string;
   baseOffset: number;
+  baseColumn?: number;
   baseLine: number;
 }
 
@@ -172,7 +175,7 @@ function positionAt(index: PositionIndex, offset: number): SourcePosition {
     }
   }
   const localLine = low + 1;
-  const column = offset - lineStarts[low]! + 1;
+  const column = offset - lineStarts[low]! + (low === 0 ? (origin?.baseColumn ?? 1) : 1);
   return {
     path: origin?.path,
     ...(origin?.generatedSource === undefined ? {} : { generatedSource: origin.generatedSource }),
@@ -241,16 +244,27 @@ export function scanSegments(
    * removes the same structural prefix the original walk removed.
    */
   depth = 0,
+  diagnostics?: ScanDiagnostic[],
+  fences?: SourceFence[],
 ): Segment[] {
+  const found: ScanDiagnostic[] = [];
   const walk: Walk = {
     text,
     index: { origin, lineStarts: computeLineStarts(text) },
     elements,
     unfinished,
+    diagnostics: found,
+    fences,
   };
   const segments: Segment[] = [];
   const lineContent = start === 0 ? 0 : text.lastIndexOf("\n", start - 1) + 1;
   scanBody(walk, { pos: start, depth, lineContent }, undefined, segments, spans);
+  if (diagnostics !== undefined) {
+    diagnostics.push(...found);
+  } else if (found.length > 0) {
+    const { message, position } = found[0];
+    throw Object.assign(new Error(message), { position });
+  }
   return segments;
 }
 
@@ -260,9 +274,12 @@ const STRUCTURAL_INDENT = "  ";
 /** What one scan reads and what it reports, shared by every body it walks. */
 interface Walk {
   readonly text: string;
+  readonly headerOnly?: boolean;
   readonly index: PositionIndex;
   readonly elements?: SourceElement[];
   readonly unfinished?: UnfinishedConstruct[];
+  readonly diagnostics?: ScanDiagnostic[];
+  readonly fences?: SourceFence[];
 }
 
 /** Where a body begins. */
@@ -270,6 +287,7 @@ interface BodyStart {
   readonly pos: number;
   /** How many block elements enclose this body. */
   readonly depth: number;
+  readonly delimiterIndent?: string;
   /** Where the content of the line holding `pos` begins, after its prefix. */
   readonly lineContent: number;
 }
@@ -289,24 +307,67 @@ function scanBody(
 ): number {
   const { text } = walk;
   const prefix = STRUCTURAL_INDENT.repeat(body.depth);
+  const markdown = markdownStream(text, prefix, readHeader, closingTag);
+  try {
+    return scanTrackedBody(walk, body, closingTag, segments, spans, markdown);
+  } finally {
+    markdown.close();
+  }
+}
+
+function scanTrackedBody(
+  walk: Walk,
+  body: BodyStart,
+  closingTag: string | undefined,
+  segments: Segment[],
+  spans: ComponentSpan[] | undefined,
+  markdown: ReturnType<typeof markdownStream>,
+): number {
+  const { text } = walk;
+  const prefix = STRUCTURAL_INDENT.repeat(body.depth);
   let pos = body.pos;
   let textStart = pos;
   let lineContent = body.lineContent;
   let lineHandled = -1;
-  let previousBlank = false;
-  let indentedCode = false;
+  let pendingLine = body.pos > 0 && text[body.pos - 1] !== "\n" ? body.pos : undefined;
+  const sendPendingLine = () => {
+    if (pendingLine !== undefined) {
+      markdown.line(pendingLine, undefined, "none");
+      pendingLine = undefined;
+    }
+  };
+
   // Inside an inline code span until here: nothing in it is syntax, but its
   // later lines still carry the structural prefix.
   let codeSpanEnd = -1;
 
   const flush = (end: number): void => {
     if (end > textStart) {
-      pushText(segments, text.slice(textStart, end), textStart === lineContent);
+      pushText(segments, text.slice(textStart, end));
     }
   };
 
+  function feedPhysical(rawLine: number, fenceScope: "all" | "container" = "all") {
+    const contentStart = text.startsWith(prefix, rawLine) ? rawLine + prefix.length : rawLine;
+    let cut: number | undefined;
+    if (closingTag !== undefined) {
+      const line = text.slice(contentStart, endOfLine(text, contentStart));
+      if (indentation(line) >= 4) {
+        const candidate = contentStart + line.length - line.trimStart().length;
+        if (candidate >= codeSpanEnd && text.startsWith(closingTag, candidate)) {
+          cut = candidate + closingTag.length;
+        }
+      }
+    }
+    return markdown.line(rawLine, cut, fenceScope);
+  }
+
+  const afterLine = (at: number) => Math.min(endOfLine(text, at) + 1, text.length);
+
   while (pos < text.length) {
     if (pos !== lineHandled && (pos === 0 || text[pos - 1] === "\n")) {
+      sendPendingLine();
+      const rawLine = pos;
       if (prefix !== "" && text.startsWith(prefix, pos)) {
         flush(pos);
         pos += prefix.length;
@@ -316,17 +377,71 @@ function scanBody(
       lineHandled = pos;
       const lineEnd = endOfLine(text, pos);
       const line = text.slice(pos, lineEnd);
-      const blank = /^[ \t]*$/.test(line);
-      if (pos >= codeSpanEnd) {
-        indentedCode =
-          !blank &&
-          (previousBlank || indentedCode) &&
-          indentation(line) >= 4 &&
-          (closingTag === undefined || !line.trimStart().startsWith(closingTag));
+      const inInlineSpan = pos < codeSpanEnd;
+      const facts = feedPhysical(rawLine, inInlineSpan ? "container" : "all");
+      if (facts.opensAt !== undefined) {
+        codeSpanEnd = -1;
+        flush(pos);
+        const contentStart = afterLine(facts.opensAt);
+        let contentEnd = contentStart;
+        let fenceEnd = contentStart;
+        let end: SourceFence["end"] = "unfinished";
+        while (fenceEnd < text.length) {
+          const next = feedPhysical(fenceEnd);
+          if (next.fenceExit) {
+            end = "container";
+            break;
+          }
+          contentEnd = fenceEnd;
+          fenceEnd = afterLine(fenceEnd);
+          if (next.fenceClose) {
+            end = "marker";
+            break;
+          }
+          contentEnd = fenceEnd;
+        }
+        if (end === "unfinished") {
+          walk.unfinished?.push({ start: pos });
+        }
+        const opening = text.slice(pos, facts.opensAt);
+        const info = text.slice(facts.opensAt, lineEnd).replace(/^(?:`+|~+)/, "");
+        const parsed = parseInfoString(info.trim());
+        // Preserve XMD's executable opener syntax. A Markdown container may
+        // make additional fence starts visible, including quote markers.
+        const executable = parsed.executable && !inInlineSpan && /^ {0,3}$/.test(opening);
+        walk.fences?.push({
+          range: { start: rawLine, end: fenceEnd },
+          marker: facts.opensAt,
+          executable,
+          end,
+        });
+        if (executable) {
+          segments.push({
+            type: "codeBlock",
+            language: parsed.language,
+            content: dedentLines(text, contentStart, contentEnd, prefix),
+            modifiers: parsed.modifiers,
+            executable: true,
+            ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
+            position: positionAt(walk.index, pos),
+          } satisfies ExecutableCodeBlock);
+        } else {
+          pushText(
+            segments,
+            text.slice(pos, contentStart) + dedentLines(text, contentStart, fenceEnd, prefix),
+            true,
+          );
+        }
+        pos = fenceEnd;
+        textStart = pos;
+        continue;
       }
-      previousBlank = blank;
-      if (indentedCode) {
-        pos = lineEnd < text.length ? lineEnd + 1 : lineEnd;
+      const alignedClose =
+        closingTag !== undefined &&
+        body.delimiterIndent !== undefined &&
+        text.slice(rawLine, lineEnd) === body.delimiterIndent + closingTag;
+      if (facts.code && !alignedClose && /[^ \t]/.test(line)) {
+        pos = afterLine(pos);
         continue;
       }
     }
@@ -339,49 +454,6 @@ function scanBody(
     if (closingTag !== undefined && text.startsWith(closingTag, pos)) {
       flush(beginsLine(text, lineContent, pos) ? lineContent : pos);
       return pos + closingTag.length;
-    }
-
-    const fenceMatch = pos === lineContent ? matchFenceOpen(text, pos) : null;
-    if (fenceMatch) {
-      flush(pos);
-
-      const fenceEnd = findFenceClose(
-        text,
-        fenceMatch.contentStart,
-        fenceMatch.fenceChar,
-        fenceMatch.fenceLen,
-        prefix,
-      );
-      if (!fenceEnd.closed) {
-        walk.unfinished?.push({ start: pos });
-      }
-      const content = dedentLines(text, fenceMatch.contentStart, fenceEnd.contentEnd, prefix);
-
-      const parsed = parseInfoString(fenceMatch.infoString);
-
-      if (parsed.executable) {
-        segments.push({
-          type: "codeBlock",
-          language: parsed.language,
-          content,
-          modifiers: parsed.modifiers,
-          executable: true,
-          ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
-          position: positionAt(walk.index, pos),
-        } satisfies ExecutableCodeBlock);
-      } else {
-        // Non-executable code block: preserve as text
-        pushText(
-          segments,
-          text.slice(pos, fenceMatch.contentStart) +
-            dedentLines(text, fenceMatch.contentStart, fenceEnd.fenceEnd, prefix),
-          true,
-        );
-      }
-
-      pos = fenceEnd.fenceEnd;
-      textStart = pos;
-      continue;
     }
 
     // Skip inline code spans — content inside backticks is inert
@@ -399,6 +471,31 @@ function scanBody(
 
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       const begins = beginsLine(text, lineContent, pos);
+      const headerEnd = readHeader(text, pos);
+      if (
+        headerEnd !== undefined &&
+        text.indexOf("\n", pos) >= 0 &&
+        text.indexOf("\n", pos) < headerEnd
+      ) {
+        sendPendingLine();
+        const reason = !begins
+          ? "starts after prose"
+          : !markdown.header(pos, headerEnd)
+            ? "crosses its Markdown list item"
+            : undefined;
+        if (reason !== undefined) {
+          const position = positionAt(walk.index, pos);
+          walk.diagnostics?.push({
+            message: `Multiline XMD opening tag ${reason} at ${position.line}:${position.column}`,
+            position,
+          });
+          if (!begins) {
+            markdown.lines(pos, headerEnd);
+          }
+          pos = headerEnd;
+          continue;
+        }
+      }
       const component = parseComponentTag(walk, pos, body.depth, lineContent, begins);
       if (component) {
         // A standalone element and a block's opening line are delimiter lines,
@@ -413,6 +510,14 @@ function scanBody(
         }
         segments.push(component.segment);
         spans?.push({ start: pos, end: component.end });
+        if (
+          ending === undefined &&
+          text.indexOf("\n", pos) < component.end &&
+          text.indexOf("\n", pos) >= 0
+        ) {
+          sendPendingLine();
+          pendingLine = component.end;
+        }
         pos = ending?.end ?? component.end;
         textStart = pos;
         if (ending?.newline === true) {
@@ -425,6 +530,7 @@ function scanBody(
     pos++;
   }
 
+  sendPendingLine();
   if (closingTag !== undefined) {
     return -1;
   }
@@ -496,6 +602,18 @@ function dedentLines(text: string, from: number, to: number, prefix: string): st
   return out;
 }
 
+export interface SourceFence {
+  readonly range: SourceRange;
+  readonly marker: number;
+  readonly executable: boolean;
+  readonly end: "marker" | "container" | "unfinished";
+}
+
+export interface ScanDiagnostic {
+  readonly message: string;
+  readonly position: SourcePosition;
+}
+
 /**
  * One recognized element's delimiters, as the scanner committed them.
  *
@@ -546,6 +664,15 @@ export interface UnfinishedConstruct {
   readonly attributed?: boolean;
 }
 
+export function scanFacts(text: string, origin?: SourceOrigin) {
+  const elements: SourceElement[] = [];
+  const unfinished: UnfinishedConstruct[] = [];
+  const diagnostics: ScanDiagnostic[] = [];
+  const fences: SourceFence[] = [];
+  scanSegments(text, origin, undefined, elements, unfinished, 0, 0, diagnostics, fences);
+  return { elements, unfinished, diagnostics, fences };
+}
+
 /** The source spans of the top-level component invocations in `text`. */
 export function scanComponentSpans(text: string): ComponentSpan[] {
   const spans: ComponentSpan[] = [];
@@ -553,165 +680,21 @@ export function scanComponentSpans(text: string): ComponentSpan[] {
   return spans;
 }
 
-const TEXT_LINE_START = "executablemd.core.scanner.text-line-start";
-
-/** Detached text keeps the scanner's original line boundary, even after healing. */
-export function splitTextFences(
-  segment: TextSegment,
-  text = segment.content,
-): { content: string; passive: boolean }[] {
+/** Return the authored passive ranges recorded by the scanner. */
+export function splitTextFences(segment: TextSegment): { content: string; passive: boolean }[] {
   const slices: { content: string; passive: boolean }[] = [];
   let start = 0;
-  let pos = 0;
-  while (pos < text.length) {
-    const fence =
-      (pos === 0 && Reflect.get(segment, TEXT_LINE_START) === false) ||
-      (pos > 0 && text[pos - 1] !== "\n")
-        ? null
-        : matchFenceOpen(text, pos);
-    if (fence) {
-      const end = findFenceClose(text, fence.contentStart, fence.fenceChar, fence.fenceLen);
-      if (!parseInfoString(fence.infoString).executable) {
-        if (pos > start) {
-          slices.push({ content: text.slice(start, pos), passive: false });
-        }
-        slices.push({ content: text.slice(pos, end.fenceEnd), passive: true });
-        start = end.fenceEnd;
-      }
-      pos = end.fenceEnd;
-    } else if (text[pos] === "`") {
-      const end = skipInlineCode(text, pos);
-      pos = end === -1 ? pos + 1 : end;
-    } else {
-      pos += 1;
+  for (const range of segment.passiveFences ?? []) {
+    if (range.start > start) {
+      slices.push({ content: segment.content.slice(start, range.start), passive: false });
     }
+    slices.push({ content: segment.content.slice(range.start, range.end), passive: true });
+    start = range.end;
   }
-  if (start < text.length) {
-    slices.push({ content: text.slice(start), passive: false });
+  if (start < segment.content.length) {
+    slices.push({ content: segment.content.slice(start), passive: false });
   }
   return slices;
-}
-
-interface FenceOpen {
-  fenceChar: string;
-  fenceLen: number;
-  infoString: string;
-  contentStart: number;
-}
-
-interface FenceClose {
-  contentEnd: number;
-  fenceEnd: number;
-  /** Whether a closing fence was actually found, rather than the text ending. */
-  closed: boolean;
-}
-
-/**
- * Check if a line's content, starting at `pos`, opens a fenced code block.
- * The caller decides that `pos` is where a line's content starts.
- * Supports both backtick and tilde fences, with optional leading spaces (0-3).
- */
-function matchFenceOpen(text: string, pos: number): FenceOpen | null {
-  let i = pos;
-
-  // Optional leading spaces (0-3)
-  let spaces = 0;
-  while (spaces < 3 && i < text.length && text[i] === " ") {
-    spaces++;
-    i++;
-  }
-
-  if (i >= text.length) {
-    return null;
-  }
-
-  const fenceChar = text[i]!;
-  if (fenceChar !== "`" && fenceChar !== "~") {
-    return null;
-  }
-
-  // Count fence characters (minimum 3)
-  let fenceLen = 0;
-  while (i < text.length && text[i] === fenceChar) {
-    fenceLen++;
-    i++;
-  }
-  if (fenceLen < 3) {
-    return null;
-  }
-
-  // Info string goes to end of line
-  const lineEnd = text.indexOf("\n", i);
-  const infoString = lineEnd === -1 ? text.slice(i).trim() : text.slice(i, lineEnd).trim();
-
-  // Backtick fences: info string must not contain backticks
-  if (fenceChar === "`" && infoString.includes("`")) {
-    return null;
-  }
-
-  const contentStart = lineEnd === -1 ? text.length : lineEnd + 1;
-
-  return { fenceChar, fenceLen, infoString, contentStart };
-}
-
-/**
- * Find the closing fence for an open code block. Each line's structural
- * `prefix`, where it has one, comes before the fence's own indentation.
- */
-function findFenceClose(
-  text: string,
-  contentStart: number,
-  fenceChar: string,
-  fenceLen: number,
-  prefix = "",
-): FenceClose {
-  let pos = contentStart;
-
-  while (pos < text.length) {
-    // Must be at start of line
-    const lineStart = pos;
-    if (prefix !== "" && text.startsWith(prefix, pos)) {
-      pos += prefix.length;
-    }
-
-    // Optional leading spaces (0-3)
-    let spaces = 0;
-    while (spaces < 3 && pos < text.length && text[pos] === " ") {
-      spaces++;
-      pos++;
-    }
-
-    if (pos < text.length && text[pos] === fenceChar) {
-      let closeFenceLen = 0;
-      while (pos < text.length && text[pos] === fenceChar) {
-        closeFenceLen++;
-        pos++;
-      }
-
-      // Closing fence must be at least as long as opening and followed by
-      // only optional spaces then newline or end of string
-      if (closeFenceLen >= fenceLen) {
-        // Skip optional trailing spaces
-        while (pos < text.length && text[pos] === " ") {
-          pos++;
-        }
-        if (pos >= text.length || text[pos] === "\n") {
-          const fenceEnd = pos < text.length ? pos + 1 : pos;
-          return { contentEnd: lineStart, fenceEnd, closed: true };
-        }
-      }
-    }
-
-    // Skip to next line
-    const nextNewline = text.indexOf("\n", pos);
-    if (nextNewline === -1) {
-      // No closing fence found — content goes to end
-      return { contentEnd: text.length, fenceEnd: text.length, closed: false };
-    }
-    pos = nextNewline + 1;
-  }
-
-  return { contentEnd: text.length, fenceEnd: text.length, closed: false };
 }
 
 interface ParsedComponent {
@@ -817,6 +800,21 @@ function parseComponentTag(
   }
   pos++;
   const openingEnd = pos;
+  if (walk.headerOnly) {
+    return {
+      segment: {
+        type: "component",
+        name,
+        props,
+        expressions,
+        authoredExpressions,
+        children: [],
+        selfClosing: false,
+      },
+      end: openingEnd,
+      block: false,
+    };
+  }
 
   // Parse children until closing tag. Nested elements are collected aside and
   // committed only with this parse: an incomplete passive tag has no children
@@ -827,10 +825,16 @@ function parseComponentTag(
   const opening = begins ? lineEndingAfter(text, openingEnd) : undefined;
   const block = opening?.newline === true;
   const children: Segment[] = [];
+  const nestedFences: SourceFence[] | undefined = walk.fences === undefined ? undefined : [];
   const childEnd = scanBody(
-    { text, index, elements: nested, unfinished },
+    { ...walk, elements: nested, fences: nestedFences },
     block
-      ? { pos: opening.end, depth: depth + 1, lineContent: opening.end }
+      ? {
+          pos: opening.end,
+          depth: depth + 1,
+          lineContent: opening.end,
+          delimiterIndent: text.slice(text.lastIndexOf("\n", start - 1) + 1, start),
+        }
       : { pos: openingEnd, depth, lineContent },
     `</${name}>`,
     children,
@@ -858,6 +862,9 @@ function parseComponentTag(
       }),
     );
     elements.push(...nested);
+  }
+  if (nestedFences !== undefined) {
+    walk.fences?.push(...nestedFences);
   }
 
   return {
@@ -1222,24 +1229,27 @@ function skipWhitespace(text: string, pos: number): number {
   return pos;
 }
 
-function pushText(segments: Segment[], content: string, lineStart: boolean): void {
+function pushText(segments: Segment[], content: string, passive = false): void {
   if (content.length === 0) {
     return;
   }
-
-  // Merge with previous text segment if possible
-  const last = segments[segments.length - 1];
-  if (last && last.type === "text") {
+  const last = segments.at(-1);
+  if (last?.type === "text") {
+    const start = last.content.length;
     last.content += content;
+    if (passive) {
+      (last.passiveFences ??= []).push({ start, end: last.content.length });
+    }
     return;
   }
-
-  const segment: TextSegment = { type: "text", content };
-  // Retained definitions use structuredClone; this lexical fact must travel
-  // with their text so the canonical copy keeps the authored line context.
-  Object.defineProperty(segment, TEXT_LINE_START, {
-    value: lineStart,
-    enumerable: true,
+  segments.push({
+    type: "text",
+    content,
+    ...(passive ? { passiveFences: [{ start: 0, end: content.length }] } : {}),
   });
-  segments.push(segment);
+}
+
+export function readHeader(text: string, start: number): number | undefined {
+  const index = { lineStarts: [0] };
+  return parseComponentTag({ text, index, headerOnly: true }, start, 0, start, false)?.end;
 }

@@ -12,7 +12,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { Stdio } from "@effectionx/process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -310,6 +310,58 @@ describe("Tier SIN — structural indentation", () => {
     for (const contents of ["Ada", "Ada\n"]) {
       const result = yield* run('<File path="name.txt" />', { "name.txt": contents });
       expect({ contents, output: result.output }).toEqual({ contents, output: contents });
+    }
+  });
+});
+
+describe("Markdown boundary execution", () => {
+  it("preserves quoted passive bytes and executes a root tag after a list fence", function* () {
+    const quote = '> ~~~bash exec\n> <File path="absent.txt" />  \n> {source} **\t\n> ~~~\n';
+    const list = '- item\n\n  ~~~\n  <File path="absent.txt" />\n';
+    const result = yield* run(quote + "\n" + list + '<File path="name.txt" />\n', {
+      "name.txt": "Ada",
+    });
+    expect(result.output).toBe(quote + "\n" + list + "Ada\n");
+  });
+
+  it("retains loose nested list indentation with tabs and keeps code inert", function* () {
+    const source =
+      '<Output>\n  10.\tOuter\n\n  \t-\tInner\n\n  \t\t<File path="name.txt" />\n\n  \t\t\t<File path="absent.txt" />\n</Output>\n';
+    const result = yield* run(source, { "name.txt": "Ada" });
+    expect(result.output).toBe(
+      '10.\tOuter\n\n\t-\tInner\n\n\t\tAda\n\n\t\t\t<File path="absent.txt" />\n',
+    );
+  });
+
+  it("keeps HTML tags eligible and physical executable fences active inside HTML", function* () {
+    const source =
+      '<pre>\n    <File path="name.txt" />\n~~~bash exec\nprintf shell\n~~~\n    <File path="name.txt" />\n</pre>\n';
+    const result = yield* run(source, { "name.txt": "Ada" });
+    expect(result.output).toBe("<pre>\n    Ada\n    Ada\n</pre>\n");
+    expect(result.stdout).toBe("shell");
+  });
+
+  it("refuses both multiline header violations before an earlier file effect", function* () {
+    const workspace = yield* useTempDirectory("xmd-header-refusal-");
+    const file = join(workspace, "early.txt");
+    const path = join(workspace, "doc.md");
+    yield* useHostFiles();
+    for (const [malformed, message] of [
+      ["Before <If\n  condition={true}\n>Ready</If>\n", "starts after prose"],
+      [
+        "10. First\n\n    <If condition={true /*\n\n1. Phantom\n    */}>\n      Ready\n    </If>\n",
+        "crosses its Markdown list item",
+      ],
+    ]) {
+      yield* writeTextFile(path, `<File path=${JSON.stringify(file)}>early</File>\n\n` + malformed);
+      let failure: unknown;
+      try {
+        yield* collect(yield* execute({ path, stream: new InMemoryStream() }));
+      } catch (error) {
+        failure = error;
+      }
+      expect(String(failure)).toContain(message);
+      expect(yield* exists(file)).toBe(false);
     }
   });
 });

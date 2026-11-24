@@ -1,0 +1,7 @@
+{
+  "toolchain": "1.99.1",
+  "compilerCommit": "58cf8f9c35b355199727627d07ae34a4e2846d67",
+  "target": "wasm32-unknown-unknown",
+  "wasmSha256": "303fa99c0173ea940d4a84cc078e8aff48fdb4b2a3a0acbb48cde4bde43e698e",
+  "moduleSha256": "2e807d3c94ebdfa1813390c6055a3db33be447a88db4457aaccba61aaee6c9d9"
+}

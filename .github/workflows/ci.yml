@@ -598,13 +598,10 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      # `deno install` rather than `deno task deps`: the task also caches the
-      # graphs a browser build and a release compile walk, and it reaches them
-      # by spawning a child — which does not survive the Windows runner's path
-      # handling. Nothing here builds the bundle or compiles the CLI, so the
-      # plain frozen install is the whole preparation this job needs.
+      # The runtime-only test graph does not need Core's prepared Markdown
+      # module or the other producers used by the CLI graph.
       - name: Install dependencies
-        run: deno install --frozen
+        run: deno install --entrypoint --frozen packages/runtime/tests/host-files.test.ts
 
       # The compile below runs under `--node-modules-dir=none`, which resolves
       # npm packages from the Deno cache rather than from `node_modules`. This

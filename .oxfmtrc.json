@@ -5,7 +5,8 @@
   // `packages/*/npm` is generated dnt output, written by a test while the
   // battery runs; format-checking it fails on a file nobody wrote by hand.
   // `packages/cli/generated` is the prepared terminal runtime, held to the
-  // hashes its recipe records.
+  // hashes its recipe records. The prepared Core Markdown module is likewise
+  // held to its recipe hash.
   // The retained-repository history fixtures are journals an older revision
   // emitted, held to the SHA-256 their own receipt records: reserializing one
   // changes the bytes the evidence is, and the suite that continues them
@@ -19,6 +20,7 @@
     "packages/acp/vendor/acpx/**",
     "packages/acp/vendor/adapters/claude/sdk-transform.mjs",
     "packages/cli/src/repl/vendor/freedom/**",
-    "packages/cli/generated/**"
+    "packages/cli/generated/**",
+    "packages/core/generated/**"
   ]
 }

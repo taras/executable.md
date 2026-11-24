@@ -19,11 +19,11 @@
 
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
-import { scanSegments } from "./scanner.ts";
-import type { SourceElement } from "./scanner.ts";
+import { scanFacts, scanSegments } from "./scanner.ts";
+import type { ScanDiagnostic, SourceElement, SourceFence, UnfinishedConstruct } from "./scanner.ts";
 import type { SourceRange } from "./document-targets.ts";
 
-export type { SourceElement, SourceRange };
+export type { ScanDiagnostic, SourceElement, SourceFence, SourceRange, UnfinishedConstruct };
 
 /**
  * Every executable element `text` is written with, in opening order.
@@ -48,6 +48,41 @@ export function inspectSource(
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
   return Ok(Object.freeze(body === 0 ? elements : elements.map((one) => shifted(one, body))));
+}
+
+export interface SourceDraftInspection {
+  readonly elements: readonly SourceElement[];
+  readonly fences: readonly SourceFence[];
+  readonly diagnostics: readonly ScanDiagnostic[];
+  readonly unfinished: readonly UnfinishedConstruct[];
+}
+
+/** Authored syntax facts from the scan, including facts from incomplete drafts. */
+export function inspectSourceDraft(
+  text: string,
+  kind: "document" | "fragment",
+): SourceDraftInspection {
+  const body = kind === "document" ? envelopeBody(text) : 0;
+  const baseLine = text.slice(0, body).split("\n").length;
+  const { elements, diagnostics, unfinished, fences } = scanFacts(text.slice(body), {
+    baseOffset: body,
+    baseLine,
+    baseColumn: body === 0 ? 1 : body - text.lastIndexOf("\n", body - 1),
+  });
+  return {
+    elements: elements.map((element) => shifted(element, body)),
+    fences: fences.map((fence) => ({
+      ...fence,
+      marker: fence.marker + body,
+      range: { start: fence.range.start + body, end: fence.range.end + body },
+    })),
+    diagnostics,
+    unfinished: unfinished.map(({ start, contentStart, ...fact }) => ({
+      ...fact,
+      start: start + body,
+      ...(contentStart === undefined ? {} : { contentStart: contentStart + body }),
+    })),
+  };
 }
 
 function shifted(element: SourceElement, by: number): SourceElement {

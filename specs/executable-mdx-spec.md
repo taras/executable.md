@@ -390,18 +390,29 @@ spaces only, so a leading tab is always content. The rule applies to every line
 of an inline element's content — but not to lines inside a tag, whose text is
 the delimiter's. A blank line therefore keeps the spaces beyond its prefix.
 
-Lines are recognized after their prefix is removed. A fence opens and closes
-under the ordinary rule of at most three spaces of indentation, so a fence moves
-with its enclosing block and its contents keep their own indentation: a heredoc
-whose delimiter is at the fence's column reaches the shell at column one.
+**Markdown blocks.** After removing the structural prefix, the scanner uses
+CommonMark's Markdown container boundaries for quotes, lists, indented code
+and fences. Tabs advance to the next multiple of four columns. In a list the
+item's content column accounts for its marker and padding, so a loose
+continuation can contain an executable tag. Four columns beyond the containing
+content column can start indented code, which cannot interrupt a paragraph.
+A closing delimiter aligned with its XMD block opener can close that block
+outside a fence.
 
-**Markdown indented code.** After the prefix is removed, a line indented by four
-or more columns, counting a tab to the next multiple of four, is Markdown
-indented code when it follows a blank line of the same body or continues such a
-line, blank lines included. XMD recognizes no element, fence or code span on
-such a line; it is passive text. A line that does not follow a blank line
-continues a paragraph or list and is scanned as usual, and a line beginning
-with the body's own closing tag is never indented code.
+A fenced block ends at its matching closing fence or when its Markdown
+container ends. Its contents are inert XMD unless it has an executable opener.
+An executable opener begins a physical content line with zero to three spaces
+and has an `exec` info modifier. Openers after a quote or list marker are
+passive even with `exec`. An executable list continuation opener keeps the
+original payload indentation after removing the XMD structural prefix. Tags
+inside HTML blocks remain eligible under the ordinary XMD rules, and physical
+XMD fences still take precedence there.
+
+A multiline XMD opening tag starts on its own line. If the tag belongs to a
+Markdown list item, each continuation line must reach that item's content
+column. Attribute lines in a recognized multiline header are opaque to
+Markdown. A multiline tag that starts after prose or crosses its list-item
+boundary is refused before execution performs any effects.
 
 **Standalone lines.** An element is **standalone** when only spaces and tabs
 precede its opening tag on its line and only spaces and tabs follow its end —
@@ -6314,6 +6325,15 @@ and an incomplete passive tag is text — leaving no guessed children behind.
 Passive text and an empty result are success; a scanner refusal is an `Error`
 result.
 
+`inspectSourceDraft(text, kind)` returns the same recognized elements with
+`fences`, `unfinished` and `diagnostics` together. A fence fact gives its
+authored half-open range and marker offset, its executable flag and whether it
+ends at a marker, a container boundary or unfinished input. The range excludes
+a line that ends the fence by leaving its container. A refusal includes its
+authored position and leaves other facts available. Offsets and columns use
+UTF-16 code units into the original input, including when a draft ends between
+the halves of a surrogate pair. Lines and columns start at one.
+
 `"document"` reads the markdown body beneath a frontmatter header. That body
 boundary is found lexically — a byte-order mark, `---` on its own line, `----`
 which is not one, an optional header language, and the first closing line —
@@ -6673,23 +6693,12 @@ no journal entry.
 
 #### Text segment interpolation pipeline
 
-After Markdown healing, passive fenced slices are set aside using the scanner's
-fence grammar: backticks or tildes, matching closing character and sufficient
-closing length, supported indentation and inline-code exclusions. Text detached
-after a component keeps its original line context: backticks immediately after
-the tag on the same line remain an inline span. A longer
-passive fence quotes shorter fences, including executable examples. The remaining
-text undergoes two interpolation passes in sequence:
-
-```
-text segment
-  → remend (heal markdown)
-  → set aside passive fenced slices
-  → interpolate {meta.key}, {props.key} from the current frame ← first pass
-  → interpolateEvalBindings {name}, {props.name} ← second pass
-  → restore passive fenced slices unchanged
-  → output
-```
+The scanner records passive fenced slices before expansion. Text detached
+after a component keeps the scanner's original line context, so backticks
+immediately after a tag on the same line remain an inline span. A longer
+passive fence holds shorter fences as literal content. Expansion heals and
+interpolates the text outside the recorded slices, then rejoins it with the
+unchanged passive bytes after structural-prefix removal.
 
 Both passes and escape restoration leave the protected source alone, including
 its backslashes. Prose before and after a fence still interpolates. A replacement

@@ -232,3 +232,24 @@ The source ends immediately after this standalone invocation:
 
 The formatter leaves the source without a final newline. Adding one would
 change the result when the file contains `"Ada"`.
+
+## Keep a container fence with its Markdown item
+
+A quoted fence remains literal even with an executable info string.
+
+````xmd
+> ~~~bash exec
+> <File path="literal.txt" />
+> ~~~
+````
+
+An unindented line leaves a list item and its open fence. The last tag
+in this example reads the file, while the indented example stays literal.
+
+````xmd
+- Example
+
+  ~~~
+  <File path="literal.txt" />
+<File path="actual.txt" />
+````

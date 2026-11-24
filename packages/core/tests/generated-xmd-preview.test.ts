@@ -420,3 +420,24 @@ describe("Try preview", () => {
     ).toEqual({ output: "", incomplete: false });
   });
 });
+
+describe("Markdown boundary preview", () => {
+  it("projects container fence bytes and resumes output after a list exit", function* () {
+    const body =
+      "  > ~~~bash exec\n  > <Output>literal</Output>  \n  > ~~~\n\n  - item\n\n    ~~~\n    <Output>still literal</Output>\n  <Output>real</Output>\n";
+    const source = "<Output>\n" + body + "</Output>\n";
+    for (const prefix of prefixes(source)) {
+      previewGeneratedXmdRoot(prefix);
+    }
+    expect(preview(source)).toEqual({
+      output:
+        "> ~~~bash exec\n> <Output>literal</Output>  \n> ~~~\n\n- item\n\n  ~~~\n  <Output>still literal</Output>\nreal\n",
+      incomplete: false,
+    });
+  });
+
+  it("returns a refusal for a complete malformed multiline header", function* () {
+    const text = "Before <If\n  condition={true}\n>Ready</If>\n";
+    expect(refused(text)).toContain("starts after prose");
+  });
+});

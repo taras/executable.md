@@ -577,7 +577,9 @@ describe("client assets", () => {
 describe("prepared Claude preflight", () => {
   it("refuses missing, altered and stale output before graph consumption", function* () {
     const { unprepared, assertPrepared } = yield* until(import("../lib/preflight-deno.ts"));
-    const { PREPARED_INPUTS, recordedCopy } = yield* until(import("../lib/prepared.ts"));
+    const { MARKDOWN_BOUNDARY_OUTPUT, PREPARED_INPUTS, recordedCopy } = yield* until(
+      import("../lib/prepared.ts"),
+    );
     const { ensureDir, copyFile, rm } = yield* until(import("@effectionx/fs"));
     const { dirname } = yield* until(import("node:path"));
     const base = yield* scratchDirectory("claude-preflight-");
@@ -588,6 +590,9 @@ describe("prepared Claude preflight", () => {
         yield* copyFile(new URL(input, REPO_ROOT), new URL(relative, root));
       }
     }
+    const boundary = new URL(MARKDOWN_BOUNDARY_OUTPUT, root);
+    yield* ensureDir(new URL("./", boundary));
+    yield* copyFile(new URL(MARKDOWN_BOUNDARY_OUTPUT, REPO_ROOT), boundary);
     const tty = "packages/cli/generated/tty/";
     yield* ensureDir(fileURLToPath(new URL(tty, root)));
     for (const name of yield* readdir(new URL(tty, REPO_ROOT))) {

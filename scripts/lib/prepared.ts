@@ -24,10 +24,17 @@
 /** Where preparation records what it prepared from. Inside `node_modules/`, which is untracked. */
 export const PREPARED_MARKER = "node_modules/.xmd-prepared";
 
+export const MARKDOWN_BOUNDARY_SOURCE = "packages/core/vendor/markdown-boundary/";
+export const MARKDOWN_BOUNDARY_OUTPUT = "packages/core/generated/markdown-boundary.ts";
+
 /** The files whose contents decide whether a preparation is still current. */
 export const PREPARED_INPUTS = [
   "deno.lock",
   "package.json",
+  "scripts/lib/prepare-markdown-boundary.ts",
+  ...["recipe.json", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/lib.rs"].map(
+    (path) => MARKDOWN_BOUNDARY_SOURCE + path,
+  ),
   "packages/acp/vendor/adapters/claude/recipe.json",
   "packages/acp/vendor/adapters/claude/adapter.patch",
   "packages/acp/vendor/adapters/claude/sdk-transform.mjs",

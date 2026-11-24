@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./prepared.ts";
+import {
+  MARKDOWN_BOUNDARY_OUTPUT,
+  MARKDOWN_BOUNDARY_SOURCE,
+  PREPARED_INPUTS,
+  PREPARED_MARKER,
+  recordedCopy,
+} from "./prepared.ts";
 
 function read(root: URL, path: string): string | undefined {
   try {
@@ -58,6 +64,23 @@ function unpreparedTty(root: URL): string | undefined {
   return undefined;
 }
 
+export function unpreparedMarkdownBoundary(root: URL): string | undefined {
+  const output = read(root, MARKDOWN_BOUNDARY_OUTPUT);
+  if (output === undefined) {
+    return `${MARKDOWN_BOUNDARY_OUTPUT} is missing`;
+  }
+  try {
+    const recipe: unknown = JSON.parse(read(root, MARKDOWN_BOUNDARY_SOURCE + "recipe.json") ?? "");
+    const hash: unknown = Reflect.get(Object(recipe), "moduleSha256");
+    if (typeof hash === "string" && sha256(output) === hash) {
+      return undefined;
+    }
+  } catch {
+    return "the Markdown boundary preparation recipe is invalid";
+  }
+  return `${MARKDOWN_BOUNDARY_OUTPUT} does not match the prepared recipe`;
+}
+
 export function unprepared(root: URL): string | undefined {
   for (const input of PREPARED_INPUTS) {
     const recorded = read(root, recordedCopy(input));
@@ -89,7 +112,7 @@ export function unprepared(root: URL): string | undefined {
   } catch {
     return "the Claude preparation recipe is invalid";
   }
-  return unpreparedTty(root);
+  return unpreparedMarkdownBoundary(root) ?? unpreparedTty(root);
 }
 
 export function assertPrepared(root: URL): void {

@@ -50,7 +50,7 @@ import type { Result } from "effection";
 import { readsBinding } from "./generated-interpolation.ts";
 import { outputPropsViolation, validateBodyStructure } from "./body-structure.ts";
 import { scanSegments, splitTextFences } from "./scanner.ts";
-import type { UnfinishedConstruct } from "./scanner.ts";
+import type { ScanDiagnostic, UnfinishedConstruct } from "./scanner.ts";
 import type { ComponentElement, Segment } from "./types.ts";
 
 /** What a source prefix safely says, and whether it has finished saying it. */
@@ -76,13 +76,29 @@ export class GeneratedXmdPreviewError extends Error {
  */
 export function previewGeneratedXmdRoot(source: string): Result<GeneratedXmdRootPreview> {
   const unfinished: UnfinishedConstruct[] = [];
-  scanSegments(source, undefined, undefined, undefined, unfinished);
+  const diagnostics: ScanDiagnostic[] = [];
+  scanSegments(source, undefined, undefined, undefined, unfinished, 0, 0, diagnostics);
+  if (diagnostics.length > 0) {
+    return Err(new GeneratedXmdPreviewError(diagnostics[0].message));
+  }
   const pending = earliest(unfinished);
   // Everything the scan committed whole. Re-read from the exact prefix that
   // ends where wholeness does, so nothing half-delivered takes part in the
   // structure rule below.
   const settled = pending === undefined ? source : source.slice(0, pending.start);
-  const segments = scanSegments(settled);
+  const segments = scanSegments(
+    settled,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    0,
+    0,
+    diagnostics,
+  );
+  if (diagnostics.length > 0) {
+    return Err(new GeneratedXmdPreviewError(diagnostics[0].message));
+  }
 
   const violation = validateBodyStructure(segments, undefined);
   if (violation !== undefined) {
@@ -166,6 +182,7 @@ function unfinishedRegion(
     pending.contentStart + settledTail(source.slice(pending.contentStart)).length,
   );
   const unfinished: UnfinishedConstruct[] = [];
+  const diagnostics: ScanDiagnostic[] = [];
   const segments = scanSegments(
     content,
     undefined,
@@ -174,7 +191,11 @@ function unfinishedRegion(
     unfinished,
     pending.contentStart,
     pending.contentDepth,
+    diagnostics,
   );
+  if (diagnostics.length > 0) {
+    return { output: "", violation: diagnostics[0].message };
+  }
   const first = earliest(unfinished);
   const tail = unfinishedRegion(content, first);
   return {
@@ -190,10 +211,11 @@ function unfinishedRegion(
               undefined,
               pending.contentStart,
               pending.contentDepth,
+              diagnostics,
             ),
         true,
       ) + (tail?.output ?? ""),
-    violation: tail?.violation,
+    violation: diagnostics[0]?.message ?? tail?.violation,
   };
 }
 

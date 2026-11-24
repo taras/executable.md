@@ -1230,19 +1230,21 @@ function* expandListSegments(
       case "text": {
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
         // Runs synchronously — no yield, no journal entry
-        const healed = healSegment(segment.content);
         const textEvalEnv = yield* env;
         const textProps =
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
             : parentProps;
         const textInputs = yield* inputValues();
-        const final = splitTextFences(segment, healed)
+        const final = splitTextFences(segment)
           .map(({ content, passive }) => {
             if (passive) {
               return content;
             }
-            const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
+            const protectedEscapes = healSegment(content).replaceAll(
+              "\\{",
+              ESCAPED_BRACE_PLACEHOLDER,
+            );
             const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
             const bound = textEvalEnv
               ? interpolateEvalBindings(interpolated, textEvalEnv.values, textInputs)

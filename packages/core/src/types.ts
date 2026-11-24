@@ -26,6 +26,8 @@ export type Segment =
 export interface TextSegment {
   type: "text";
   content: string;
+  /** Passive fence ranges in content, after removing structural prefixes. */
+  passiveFences?: { start: number; end: number }[];
 }
 
 export interface ComponentElement {
