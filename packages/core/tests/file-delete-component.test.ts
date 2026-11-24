@@ -918,6 +918,25 @@ describe("File.Patch", () => {
     expect(yield* readTextFile(other)).toBe(before);
   });
 
+  it("refuses bounded reader arguments before applying a patch", function* () {
+    const fixture = yield* useFixture();
+    const target = join(fixture.workspace, "target.txt");
+    const before = "first\nold\nlast\n";
+    yield* writeTextFile(target, before);
+    const source = patchDocument("target.txt", SMALL_PATCH).replace(
+      '<File.Patch path="target.txt">',
+      '<File.Patch path="target.txt" lines="2">',
+    );
+    let message = "";
+    try {
+      yield* run(fixture, source);
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("lines");
+    expect(yield* readTextFile(target)).toBe(before);
+  });
+
   it("describes its paired form through Syntax", function* () {
     const fixture = yield* useFixture();
     const output = yield* run(fixture, '<Syntax names={["File.Patch"]} />');
@@ -925,5 +944,8 @@ describe("File.Patch", () => {
     expect(output).toContain("Exactly one passive fenced unified diff");
     expect(output).toContain("Apply a unified diff to a file.");
     expect(output).toContain("A refusal throws by default.");
+    expect(output).toContain("| `path` | `string` | yes |");
+    expect(output).not.toContain("| `lines` |");
+    expect(output).not.toContain("| `request` |");
   });
 });

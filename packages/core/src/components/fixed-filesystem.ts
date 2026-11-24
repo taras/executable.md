@@ -2,7 +2,7 @@ import { fileReadArguments } from "../file-window.ts";
 import { cwd } from "@executablemd/runtime";
 import { runSelectedForm } from "../invocation-identity.ts";
 import { authoredOperation } from "../filesystem-placement.ts";
-import { form as filePatchForm, patchBody } from "./FilePatch.ts";
+import { form as filePatchForm, patchBody, props as filePatchProps } from "./FilePatch.ts";
 import { readBody } from "./File.ts";
 import { dirBody } from "./Dir.ts";
 /**
@@ -170,7 +170,7 @@ const DEFINITIONS: readonly FunctionComponentDefinition[] = Object.freeze([
   fixed(
     "File.Patch",
     filePatchForm,
-    parseJsonObject(fileProps),
+    parseJsonObject(filePatchProps),
     {
       description:
         "Apply a unified diff to a file. Provide one fenced diff. A refusal throws by default.",

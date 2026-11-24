@@ -40,6 +40,13 @@ export function* patchBody(
   return "";
 }
 
+export const props = {
+  type: "object",
+  properties: { path: { type: "string" } },
+  required: ["path"],
+  additionalProperties: false,
+};
+
 export const form: FormDeclaration = {
   forms: "paired",
   fn: () => {

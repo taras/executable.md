@@ -36,7 +36,7 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | --- | --- | --- | --- | --- |
 | <code>Dir</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
 | <code>Evaluate</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>text?: string; allow?: array</code> | <code>text: string</code> |
-| <code>File</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>File</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path?: string; lines?: string; offset?: integer; limit?: integer; request?: object</code> | <code>text: string</code> |
 | <code>File.Delete</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
 | <code>File.Patch</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
 | <code>Syntax</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>names?: array</code> | <code>text: string</code> |
@@ -74,6 +74,7 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Slice</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>offset?: integer; length?: integer</code> | <code>text: string</code> |
 | <code>TempDir</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>Test</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; timeout?: string</code> | <code>text: string</code> |
+| <code>Workspace.Search</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>query: string; after?: object</code> | <code>text: string</code> |
 | <code>Yaml</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
 
 ### @executablemd/testing
