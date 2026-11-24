@@ -8944,6 +8944,7 @@ function drawerContent(
         });
       }
     } else {
+      const entries = new Map(view.model.entries.map((entry) => [entry.order, entry]));
       for (const [index, round] of rounds.entries()) {
         const { input, output } = round;
         const older = rounds[index + 1]?.input;
@@ -8990,10 +8991,12 @@ function drawerContent(
             }),
             { here: view.focused },
           );
+        const entry = entries.get(input.entry);
+        const status = entry === undefined ? "" : workState(entry, view.model, view.live).word;
         const heading = line(
           `drawer:round:${input.point.marker}`,
-          `${input.entry}:`,
-          styleOf("history"),
+          `${input.entry}: ${status}`,
+          styleOf("output"),
         );
         const read = readDescription(heading.description);
         content.push({
