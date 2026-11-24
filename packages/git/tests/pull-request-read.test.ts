@@ -1954,7 +1954,8 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(JSON.stringify(retained)).not.toContain("cursor");
   });
 
-  it("PRR33: every check item states the head the envelope names", function* () {
+  const checkHeads = "PRR33: every check item states the head the envelope names";
+  it(checkHeads, function* () {
     const checks = {
       [PULL]: { body: JSON.stringify(pullRequestPayload()) },
       [RUNS]: {
@@ -1997,12 +1998,10 @@ describe("Tier PRR — pull-request evidence", () => {
     // The control first: one envelope, two item kinds, every head the head the
     // envelope names. If this did not pass, the two refusals below would prove
     // nothing about heads.
-    const accepted = yield* retainedRead(
-      new InMemoryStream(),
-      document,
-      gitHubSource(server(checks).access),
-    );
-    expect(String(accepted)).toContain("2 checks");
+    yield* captureTestJournal({ owner: OWNER, name: checkHeads }, "<eval>", function* (stream) {
+      const accepted = yield* retainedRead(stream, document, gitHubSource(server(checks).access));
+      expect(String(accepted)).toContain("2 checks");
+    });
 
     // Then each item kind in turn, moved to another commit.
     for (const kind of ["check-run", "commit-status"] as const) {

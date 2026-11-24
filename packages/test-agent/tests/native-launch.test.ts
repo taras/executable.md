@@ -61,7 +61,7 @@ interface RunOptions {
   hostLauncher?: (request: NativeLaunchRequest) => void;
 }
 
-const owner = "packages/test-agent/tests/native-launch.test.ts";
+const OWNER = "packages/test-agent/tests/native-launch.test.ts";
 
 function* runDoc(
   doc: string,
@@ -71,12 +71,12 @@ function* runDoc(
   yield* ensureDir(dir);
   const launches: NativeLaunchRequest[] = [];
   const sessions: NativeSessionReport[] = [];
-  const stream = options.stream ?? (yield* useJournalStream(path.join(dir, "doc.md")));
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     yield* writeTextFile(path.join(dir, "scenario.md"), SCENARIO);
     yield* writeTextFile(path.join(dir, "role.md"), "Follow the approved plan.\n");
     yield* writeTextFile(path.join(dir, "doc.md"), doc);
+    const stream = options.stream ?? (yield* useJournalStream(path.join(dir, "doc.md")));
 
     // The scope closes before the fixtures are removed, so workers and
     // controllers finish teardown while their scenario files still exist.
@@ -195,7 +195,7 @@ describe(
   },
   () => {
     beforeAll(() => useTempFileCompiler());
-    beforeEach(journalBeforeEach(owner));
+    beforeEach(journalBeforeEach(OWNER));
 
     it("TL1: the rendered body installs as the agent's session instruction layer", function* () {
       const run = yield* runDoc(testDoc(LAUNCH_BODY));
