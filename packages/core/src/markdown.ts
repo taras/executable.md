@@ -65,6 +65,60 @@ const instance = new WebAssembly.Instance(
 const library = trackerExports(instance);
 const input = trackerInput(instance);
 
+type Range = { readonly start: number; readonly end: number };
+
+export function indentationEdits(
+  source: string,
+  blocks: readonly Range[],
+  headers: readonly Range[],
+): Uint32Array {
+  if (blocks.length === 0) {
+    return new Uint32Array();
+  }
+  const {
+    formatter_buffer_new: allocate,
+    formatter_buffer_data: data,
+    formatter_buffer_length: length,
+    formatter_buffer_free: free,
+    formatter_plan: plan,
+  } = instance.exports;
+  if (
+    typeof allocate !== "function" ||
+    typeof data !== "function" ||
+    typeof length !== "function" ||
+    typeof free !== "function" ||
+    typeof plan !== "function"
+  ) {
+    throw new Error("Invalid indentation formatter WASM exports");
+  }
+  const count = 1 + 2 * (blocks.length + headers.length);
+  const text = library.tracker_input(source.length);
+  try {
+    const ranges = allocate(count);
+    try {
+      const units = new Uint16Array(library.memory.buffer, text, source.length);
+      for (let at = 0; at < source.length; at++) {
+        units[at] = source.charCodeAt(at);
+      }
+      const words = new Uint32Array(library.memory.buffer, data(ranges), count);
+      words[0] = blocks.length;
+      let at = 1;
+      for (const list of [blocks, headers]) {
+        for (const { start, end } of list) {
+          words[at++] = start;
+          words[at++] = end;
+        }
+      }
+      plan(text, source.length, ranges);
+      return new Uint32Array(library.memory.buffer, data(ranges), length(ranges)).slice();
+    } finally {
+      free(ranges);
+    }
+  } finally {
+    library.tracker_input_free(text, source.length);
+  }
+}
+
 const NO_HEADER = 0xffffffff;
 function wasmTracker() {
   const state = library.tracker_new();

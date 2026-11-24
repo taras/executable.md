@@ -246,6 +246,7 @@ export function scanSegments(
   depth = 0,
   diagnostics?: ScanDiagnostic[],
   fences?: SourceFence[],
+  blocks?: SourceRange[],
 ): Segment[] {
   const found: ScanDiagnostic[] = [];
   const lineStarts = computeLineStarts(text);
@@ -256,6 +257,7 @@ export function scanSegments(
     unfinished,
     diagnostics: found,
     fences,
+    blocks,
     failedBodies: new Set(),
     proseTail: trailingInlineProse(text, lineStarts),
     unfinishedKeys: new Set(),
@@ -287,6 +289,7 @@ interface Walk {
   readonly unfinished?: UnfinishedConstruct[];
   readonly diagnostics?: ScanDiagnostic[];
   readonly fences?: SourceFence[];
+  readonly blocks?: SourceRange[];
   readonly failedBodies?: Set<string>;
   readonly proseTail?: number;
   readonly unfinishedKeys?: Set<string>;
@@ -904,8 +907,10 @@ function parseComponentTag(
   }
   const children: Segment[] = [];
   const nestedFences: SourceFence[] | undefined = walk.fences === undefined ? undefined : [];
+  const nestedBlocks: SourceRange[] | undefined = walk.blocks === undefined ? undefined : [];
+  const closer = `</${name}>`;
   const childEnd = scanBody(
-    { ...walk, elements: nested, fences: nestedFences },
+    { ...walk, elements: nested, fences: nestedFences, blocks: nestedBlocks },
     block
       ? {
           pos: opening.end,
@@ -914,7 +919,7 @@ function parseComponentTag(
           delimiterIndent: text.slice(text.lastIndexOf("\n", start - 1) + 1, start),
         }
       : { pos: openingEnd, depth, lineContent },
-    `</${name}>`,
+    closer,
     children,
   );
   if (childEnd === -1) {
@@ -938,10 +943,21 @@ function parseComponentTag(
       Object.freeze({
         name,
         opening: Object.freeze({ start, end: openingEnd }),
-        closing: Object.freeze({ start: childEnd - `</${name}>`.length, end: childEnd }),
+        closing: Object.freeze({ start: childEnd - closer.length, end: childEnd }),
       }),
     );
     elements.push(...nested);
+  }
+  if (walk.blocks !== undefined && nestedBlocks !== undefined) {
+    if (block) {
+      const closerStart = childEnd - closer.length;
+      const line = text.lastIndexOf("\n", closerStart - 1) + 1;
+      const end = beginsLine(text, line, closerStart)
+        ? line
+        : Math.min(text.length, endOfLine(text, childEnd) + 1);
+      walk.blocks.push({ start: opening.end, end });
+    }
+    walk.blocks.push(...nestedBlocks);
   }
   if (nestedFences !== undefined) {
     walk.fences?.push(...nestedFences);
