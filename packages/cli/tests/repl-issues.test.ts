@@ -14,8 +14,9 @@
  * looks at.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, writeTextFile } from "@effectionx/fs";
@@ -755,6 +756,7 @@ const QUESTION =
   '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>';
 
 describe("how a REPL entry gets its issues", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E1: composes public middleware once, under the key the request itself names", () =>
     captureReplEntry(
       {
@@ -844,7 +846,7 @@ describe("how a REPL entry gets its issues", () => {
       QUESTION,
     ].join("\n");
 
-    const first = execution("execution-1");
+    const first = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const left = yield* submit(fixture, two, first, {
       host: entryHost(fixture, seen),
       leave: true,
@@ -873,7 +875,7 @@ describe("how a REPL entry gets its issues", () => {
 
     // Another execution's first entry, with identical text: its own owner, its
     // own sites, its own issues.
-    const other = execution("execution-2");
+    const other = { id: "execution-2", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     yield* submit(fixture, two, other, { host: entryHost(fixture, seen), leave: true });
     expect(fixture.server.issues.length).toBe(4);
     const everything = bodies(fixture.server);
@@ -886,7 +888,7 @@ describe("how a REPL entry gets its issues", () => {
   it("E2: a successor entry of one execution is not the entry before it", function* (): Operation<void> {
     const fixture = yield* useFixture();
     const seen = counted();
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     yield* scoped(function* (): Operation<void> {
       yield* useNodeReplHost(run.id);
@@ -918,19 +920,29 @@ describe("how a REPL entry gets its issues", () => {
 
   it("E2: no replaceable answer moves the owner, the site or the key", function* (): Operation<void> {
     const fixture = yield* useFixture();
-    const plain = yield* submit(fixture, FILES_ONE, execution("execution-1"), {
-      host: entryHost(fixture, counted()),
-    });
+    const plain = yield* submit(
+      fixture,
+      FILES_ONE,
+      { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) },
+      {
+        host: entryHost(fixture, counted()),
+      },
+    );
     expect(plain.outcome?.ok).toBe(true);
 
     // The same entry of a second execution, with a middleware that rewrites
     // the issue it is handed. What it sends changes and what names the work
     // does not: the site is the same site, and only the owner differs, because
     // the execution does.
-    const second = yield* submit(fixture, FILES_ONE, execution("execution-2"), {
-      host: entryHost(fixture, counted()),
-      installations: [observingChain({ calls: [] }, "Rewritten")],
-    });
+    const second = yield* submit(
+      fixture,
+      FILES_ONE,
+      { id: "execution-2", stream: yield* useJournalStream(INLINE_SOURCE_PATH) },
+      {
+        host: entryHost(fixture, counted()),
+        installations: [observingChain({ calls: [] }, "Rewritten")],
+      },
+    );
     expect(second.outcome?.ok).toBe(true);
 
     const site = (events: readonly DurableEvent[]): string | undefined =>
@@ -1069,7 +1081,7 @@ describe("how a REPL entry gets its issues", () => {
     const fixture = yield* useFixture();
     const seen = counted();
     const source = [FILES_ONE, QUESTION].join("\n");
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
 
     const left = yield* submit(fixture, source, run, {
       host: entryHost(fixture, seen),
@@ -1204,7 +1216,7 @@ describe("how a REPL entry gets its issues", () => {
 
   it("E5: a settled history installs no issue host and reaches nothing", function* (): Operation<void> {
     const fixture = yield* useFixture();
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const ran = yield* submit(fixture, FILES_ONE, run, { host: entryHost(fixture, counted()) });
     expect(ran.outcome?.ok).toBe(true);
     const before = paths(fixture.server).length;
@@ -1295,20 +1307,31 @@ describe("how a REPL entry gets its issues", () => {
 
     // Neither form: the entry's own implementation refuses this, which is what
     // makes the next run's success evidence that a different component ran.
-    const refused = yield* submit(fixture, '<Issue as="local" />', execution("execution-1"), {
-      host: entryHost(fixture, counted()),
-      includes: [local],
-    });
+    const localSource = '<Issue as="local" />';
+    const refused = yield* submit(
+      fixture,
+      localSource,
+      { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) },
+      {
+        host: entryHost(fixture, counted()),
+        includes: [local],
+      },
+    );
     expect(refused.outcome?.ok).toBe(false);
     expect(String(refused.outcome?.ok === false ? refused.outcome.error.message : "")).toContain(
       "either reads an issue",
     );
 
     yield* writeTextFile(join(local, "Issue.md"), "a repository component ran\n");
-    const overridden = yield* submit(fixture, '<Issue as="local" />', execution("execution-2"), {
-      host: entryHost(fixture, counted()),
-      includes: [local],
-    });
+    const overridden = yield* submit(
+      fixture,
+      localSource,
+      { id: "execution-2", stream: yield* useJournalStream(INLINE_SOURCE_PATH) },
+      {
+        host: entryHost(fixture, counted()),
+        includes: [local],
+      },
+    );
 
     // A repository file outranks a registered default, and this one is a
     // default — so the entry's implementation is not reached, files nothing and
@@ -1320,7 +1343,7 @@ describe("how a REPL entry gets its issues", () => {
 
   it("E5: a frozen position installs no issue host and reaches nothing", function* (): Operation<void> {
     const fixture = yield* useFixture();
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const passive = counted();
 
     const marker = yield* scoped(function* (): Operation<string> {
@@ -1380,7 +1403,7 @@ describe("how a REPL entry gets its issues", () => {
       QUESTION,
     ].join("\n");
 
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const left = yield* submit(fixture, source, run, {
       host: entryHost(fixture, seen),
       installations: [answeringChain(chain, ANSWERED)],
@@ -1441,7 +1464,7 @@ describe("how a REPL entry gets its issues", () => {
       QUESTION,
     ].join("\n");
 
-    const run = execution("execution-1");
+    const run = { id: "execution-1", stream: yield* useJournalStream(INLINE_SOURCE_PATH) };
     const left = yield* submit(fixture, source, run, {
       host: entryHost(fixture, seen),
       leave: true,
@@ -1605,7 +1628,10 @@ describe("how a REPL entry gets its issues", () => {
 
     // No entry host: `<Issue>` is still declared by the Plugin for this
     // command, and reaching it is the ordinary missing-provider refusal.
-    const without = yield* submit(fixture, FILES_ONE, execution("execution-1"));
+    const without = yield* submit(fixture, FILES_ONE, {
+      id: "execution-1",
+      stream: yield* useJournalStream(INLINE_SOURCE_PATH),
+    });
     expect(without.outcome?.ok).toBe(false);
     expect(String(without.outcome?.ok === false ? without.outcome.error.message : "")).toContain(
       "no Issue provider is installed",
@@ -1615,9 +1641,14 @@ describe("how a REPL entry gets its issues", () => {
 
     // With one, the entry's own implementation answers instead — one retained
     // record, and one issue at the tracker.
-    const with_ = yield* submit(fixture, FILES_ONE, execution("execution-2"), {
-      host: entryHost(fixture, seen),
-    });
+    const with_ = yield* submit(
+      fixture,
+      FILES_ONE,
+      { id: "execution-2", stream: yield* useJournalStream(INLINE_SOURCE_PATH) },
+      {
+        host: entryHost(fixture, seen),
+      },
+    );
     expect(with_.outcome?.ok).toBe(true);
     expect(issueRecords(with_.events).length).toBe(1);
     expect(urls(with_.events)).toEqual([`${TRACKER}/issues/1`]);
