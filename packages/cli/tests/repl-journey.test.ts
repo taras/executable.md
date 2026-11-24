@@ -879,7 +879,7 @@ describe("REPL original retained readings and navigation", () => {
     const { page, path, before } = yield* missingEntryRefusal();
     expect(page.screen().shows("admitted")).toBe(true);
     expect(page.screen().shows("[exit]")).toBe(true);
-    expect(page.screen().shows("[history]")).toBe(false);
+    expect(page.screen().shows("[History]")).toBe(false);
     expect(page.screen().shows("✎ draft")).toBe(false);
     expect((yield* leaveRefusal(page)).ok).toBe(false);
     expect(yield* readTextFile(path)).toBe(before);
@@ -1717,7 +1717,7 @@ describe("REPL original first-use paths and question ownership", () => {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
         expect(page.screen().rows[0]).toContain("Ready for Entry 1");
-        expect(page.screen().rows.at(-1)).toContain("HISTORY");
+        expect(page.screen().rows.at(-1)).toContain("[History]");
         yield* runSource(page, SHORT_QUESTION);
         yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
         if (size.columns === 72) {
@@ -1780,7 +1780,7 @@ describe("REPL original first-use paths and question ownership", () => {
     yield* sessions(page);
     const answer = page.screen().locate("[answer]");
     const row = page.screen().rows[answer.row] ?? "";
-    for (const label of ["[history]", "[exit]", "[pause]", "[answer]"]) {
+    for (const label of ["[History]", "[exit]", "[pause]", "[answer]"]) {
       expect(row).toContain(label);
     }
     expect(answer.column + "[answer]".length).toBeLessThanOrEqual(NARROW.columns);
@@ -2090,7 +2090,7 @@ function* allPositions(
 function historyBand(one: ScreenReading): string {
   return (
     one.rows
-      .find((row) => row.includes("HISTORY"))
+      .find((row) => row.includes("[History]"))
       ?.replace(/>/g, " ")
       .trimEnd() ?? ""
   );
@@ -2371,7 +2371,7 @@ describe("REPL original visible guidance and controlled typing", () => {
         const page = yield* useReplPage({ size });
         yield* intoDraft(page);
         expect(page.screen().rows[0]).toContain("Ready for Entry 1");
-        expect(page.screen().rows.at(-1)).toContain("HISTORY");
+        expect(page.screen().rows.at(-1)).toContain("[History]");
         expect(page.screen().shows("Esc closes")).toBe(false);
         yield* focusRegion(page, "8");
         yield* intoDraft(page, ["ArrowRight"]);
@@ -2379,7 +2379,7 @@ describe("REPL original visible guidance and controlled typing", () => {
         expect(page.screen().shows("Ready for Entry 1")).toBe(true);
         expect(directions(page.screen())).toBe("");
         yield* page.key("ArrowLeft");
-        yield* page.until("History focused", (one) => one.shows("> [history]"));
+        yield* page.until("History focused", (one) => one.shows("> [History]"));
         yield* page.key("Enter");
         yield* page.until(
           "History's closing instruction",
@@ -2446,7 +2446,7 @@ describe("REPL original visible guidance and controlled typing", () => {
     expect(refused.locate("has not finished").row).toBeLessThan(
       refused.locate("Round 2 · draft").row,
     );
-    expect(refused.locate("HISTORY").row).toBe(refused.locate("✎ draft").row + 1);
+    expect(refused.locate("[History]").row).toBe(refused.locate("✎ draft").row + 1);
     expect(page.screen().found(text, DRAFT_VALUE)).toBe(1);
     expect((yield* retainedModel(page)).entries).toHaveLength(1);
     const fed = page.repl.terminal.fed;

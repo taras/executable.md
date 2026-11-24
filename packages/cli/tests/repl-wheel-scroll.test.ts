@@ -67,7 +67,7 @@ function* nextTurn(page: ReplPage, turn: number): Operation<void> {
 // Message -> History -> Transcript; its fixed entry is the selector.
 function* transcriptThrough(page: ReplPage, last: number): Operation<void> {
   yield* page.key("Tab");
-  yield* page.until("History focused", (one) => one.shows("> [history]"));
+  yield* page.until("History focused", (one) => one.shows("> [History]"));
   yield* page.key("Tab");
   yield* page.until("Transcript selector focused", (one) => one.shows("> All sessions"));
   yield* page.key("Alt+ArrowDown");
@@ -202,7 +202,7 @@ describe("wheel real consumers", () => {
     yield* key(page, "Backtab");
     yield* page.type("X");
     yield* page.until("Agent retained caret", (one) => one.shows("Agent: scribXe"));
-    yield* page.press("[history]");
+    yield* page.press("[History]");
     yield* page.until(
       "nested History",
       (one) => one.shows("History") && !one.shows("Agent: scribXe"),

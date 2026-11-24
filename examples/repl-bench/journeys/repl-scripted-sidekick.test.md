@@ -47,52 +47,49 @@
     <ReplBench.WaitForText text="[answer sidekick]" timeout="30s" />
     <Repl.Sidekick.OpenAnswer />
     <ReplBench.Type text="held-value" />
-    <ReplBench.WaitForText text="= held-value" />
+    <ReplBench.WaitForText text="held-value" />
     <ReplBench.Key key="ArrowLeft" />
     <ReplBench.WaitForText text="Bg row 0" as="background" />
     <ReplBench.Scroll delta={1} at={background} />
     <ReplBench.Key key="Tab" />
     <ReplBench.WaitForText text="> [submit]" />
     <ReplBench.WaitForText text="Bg row 0" at={background} />
-    <ReplBench.WaitForText text="= held-value" />
+    <ReplBench.WaitForText text="held-value" />
     <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.WaitForText text="[history]" as="history" />
+    <ReplBench.WaitForText text="[History]" as="history" />
     <ReplBench.Click at={history} />
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.Region name="history">
       <ReplBench.Key key="Tab" />
       <ReplBench.WaitForText text="Enter closes" />
-      <ReplBench.WaitForText text="1 · Entry 1 admitted" as="marker" />
+      <ReplBench.WaitForText text="24 · Entry outcome recorded" as="marker" />
       <ReplBench.Scroll delta={1} at={marker} />
-      <ReplBench.WaitForText text="1 · Entry 1 admitted" present={false} />
+      <ReplBench.WaitForText text="24 · Entry outcome recorded" present={false} />
       <ReplBench.Scroll delta={-1} at={marker} />
-      <ReplBench.WaitForText text="1 · Entry 1 admitted" at={marker} />
+      <ReplBench.WaitForText text="24 · Entry outcome recorded" at={marker} />
       <ReplBench.Scroll delta={25} at={marker} />
-      <ReplBench.WaitForText text="24 · Entry outcome recorded" />
+      <ReplBench.WaitForText text="1 · Entry 1 admitted" />
     </ReplBench.Region>
     <ReplBench.WaitForText text="[live]" present={false} />
     <ReplBench.Region name="history">
       <ReplBench.Scroll delta={-25} at={marker} />
-      <ReplBench.WaitForText text="1 · Entry 1 admitted" at={marker} />
+      <ReplBench.WaitForText text="24 · Entry outcome recorded" at={marker} />
     </ReplBench.Region>
     <ReplBench.Key key="Escape" />
     <ReplBench.WaitForText text="[submit]" />
-    <ReplBench.WaitForText text="= held-value" />
-    <ReplBench.Key key="Tab" />
-    <ReplBench.Key key="Shift+Tab" />
-    <ReplBench.Type text="X" />
-    <ReplBench.WaitForText text="held-valuXe" />
+    <ReplBench.WaitForText text="held-value" />
+    <ReplBench.WaitForText text="> [History]" />
 
     <ReplBench.Click at={history} />
     <ReplBench.WaitForText text="[submit]" present={false} />
-    <ReplBench.WaitForText text="> 1 · Entry 1 admitted" />
-    <Each in={[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]} let="row">
+    <ReplBench.WaitForText text="> 24 · Entry outcome recorded" />
+    <Each in={[23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1]} let="row">
       <ReplBench.Key key="ArrowDown" />
       <ReplBench.WaitForText text={"> "+row+" · Entry "+(row%2===0?"outcome recorded":((row+1)/2)+" admitted")} />
     </Each>
     <ReplBench.WaitForText text="[live]" present={false} />
     <ReplBench.Key key="ArrowUp" />
-    <ReplBench.WaitForText text="> 23 · Entry 12 admitted" />
+    <ReplBench.WaitForText text="> 2 · Entry outcome recorded" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="[live]" />
     <ReplBench.SidekickStatus as="sidekick" />

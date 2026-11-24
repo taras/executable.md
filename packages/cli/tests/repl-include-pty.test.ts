@@ -134,7 +134,7 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
     const bar = screen.findIndex((row) => row.includes("✎ draft") && row.includes("+ New Round"));
     if (
       bar >= 0 &&
-      screen[bar + 1]?.includes("HISTORY") === true &&
+      screen[bar + 1]?.includes("[History]") === true &&
       screen.some((row) => row.includes("> Round")) &&
       screen.some((row) => /│ *Executable Markdown *│/.test(row)) &&
       screen[0]?.includes("Ready for Entry") === true &&

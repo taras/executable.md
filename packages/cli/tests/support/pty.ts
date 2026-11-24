@@ -529,7 +529,7 @@ function* settledEntry(
   while (true) {
     const screen = yield* pty.shows();
     const railed = screen.some((line) => {
-      const at = line.indexOf("HISTORY");
+      const at = line.indexOf("[History]");
       return at === -1 ? false : found.test(line.slice(at + 7).split("\u2500\u2500")[0] ?? "");
     });
     if (railed) {

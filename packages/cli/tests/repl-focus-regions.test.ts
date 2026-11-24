@@ -111,10 +111,10 @@ describe("REPL focus regions: the normal screen", () => {
     expect(page.screen().shows("[refresh]")).toBe(false);
     yield* page.key("Enter");
     yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
-    for (let at = 0; at < 5 && !page.screen().shows("> [history]"); at++) {
+    for (let at = 0; at < 5 && !page.screen().shows("> [History]"); at++) {
       yield* key(page, "Tab");
     }
-    expect(page.screen().shows("> [history]")).toBe(true);
+    expect(page.screen().shows("> [History]")).toBe(true);
     yield* key(page, "ArrowRight");
     expect(page.repl.terminal.ending).toBe(undefined);
     yield* key(page, "ArrowLeft");

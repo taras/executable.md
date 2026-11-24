@@ -1823,7 +1823,8 @@ outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
 the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
-History is one compact row at every size: its name, one mark for each entry in
+History is one compact row at every size: one leading `[History]` button,
+one mark for each entry in
 admission order, the head's own state, and the controls that are available now.
 It is a map of the whole recorded order, which is the one thing on this screen
 not read at the selected prefix. The positions after the selected one are where
@@ -1860,7 +1861,10 @@ prefix that still looks plausible.
 The History map yields space to the footer controls as entries accumulate.
 Its allocation never exceeds the terminal width left after those controls,
 including when measuring an overflowing map reports a wider row. The History
-launcher remains visible and operable at supported widths.
+launcher remains visible and operable at supported widths. It is the only
+History launcher and Tab stop in the footer; click and Enter open its drawer,
+and dismissing the drawer restores focus to it. No trailing History link is
+shown.
 
 The contextual controls sit at the right of the History row, side by side, each
 as wide as its own label so a pointer on one reaches that one. Order is priority:

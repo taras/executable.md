@@ -69,7 +69,7 @@
       <Terminal.Key key="Home" />
 
       <Repl.Focus.History />
-      <Terminal.WaitForText text="> [history]" bold={true} />
+      <Terminal.WaitForText text="> [History]" bold={true} />
       <Terminal.Key key="Enter" />
       <Terminal.WaitForText text="[close]" />
       <Terminal.Key key="Ctrl+G" />
@@ -109,7 +109,7 @@
       <Repl.Focus.Todo />
       <Terminal.WaitForText text="> TODO" />
       <Repl.Focus.History />
-      <Terminal.WaitForText text="> [history]" />
+      <Terminal.WaitForText text="> [History]" />
       <Repl.Focus.Message />
       <Terminal.WaitForText text="> › message the sidekick" />
       <Terminal.Resize columns={72} rows={20} />

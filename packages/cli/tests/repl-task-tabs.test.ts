@@ -194,14 +194,12 @@ for (const size of [
       ).toBe(true);
       expect(composerHolds(page.screen(), "kept message")).toBe(true);
       capture(page, "queue-background-task-change");
-      yield* page.press("[history]");
+      yield* page.press("[History]");
       yield* page.until("History over held queue", (one) => one.shows("[close]"));
       yield* page.key("Escape");
       yield* page.until(
-        "queue action returns from History",
-        (one) =>
-          !one.shows("[close]") &&
-          one.rows.some((row) => row.includes("waiting-one") && row.includes("> X")),
+        "History launcher receives focus over the held queue",
+        (one) => !one.shows("[close]") && one.shows("> [History]"),
       );
       expect(composerHolds(page.screen(), "kept message")).toBe(true);
       expect(page.repl.fake.prompts).toHaveLength(1);

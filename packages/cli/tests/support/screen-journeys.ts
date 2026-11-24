@@ -265,7 +265,7 @@ export function entrySettles(
  * an outcome.
  */
 export function railMark(reading: ScreenReading, order: number): string | undefined {
-  const band = reading.rows.find((row) => row.includes("HISTORY")) ?? "";
+  const band = reading.rows.find((row) => row.includes("[History]")) ?? "";
   const rail = band.split("\u2500\u2500")[0] ?? "";
   // The cancelled mark is a hyphen, which is a range inside a class anywhere but
   // the end of one: it goes last, beside the mark a refused entry wears.
@@ -281,7 +281,7 @@ export function drawerOpen(reading: ScreenReading): boolean {
 
 /** Open the History drawer and wait for the positions it offers. */
 export function* openHistory(page: ReplPage): Operation<void> {
-  yield* page.press("[history]");
+  yield* page.press("[History]");
   yield* page.until(
     "the History drawer owning its keys",
     (one) => drawerOpen(one) && one.shows("History") && !one.shows("Enter opens"),
