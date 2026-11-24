@@ -201,7 +201,7 @@ describe("REPL includes through the production source terminal", () => {
       expect(modelOf(retained).terminal?.output).toContain("First greeting rendered.");
       yield* submit(
         pty,
-        '<Syntax />\n<Syntax names={["Greeting", "Syntax", "Evaluate", "File", "File.Delete", "Dir"]} />',
+        '<Syntax />\n<Syntax names={["Greeting", "Syntax", "Evaluate", "File", "File.Delete", "File.Patch", "Dir"]} />',
       );
       retained = yield* completed(pty, history, 2);
       const syntax = modelOf(retained).terminal?.output ?? "";
@@ -211,7 +211,8 @@ describe("REPL includes through the production source terminal", () => {
       expect(syntax).not.toContain("<Local>");
       expect(syntax).not.toContain("<RootLocal>");
       expect(syntax).not.toContain("POISON");
-      expect(syntax.match(/\(protected component\)/g)).toHaveLength(10);
+      expect(syntax).toContain("Exactly one passive fenced unified diff");
+      expect(syntax.match(/\(protected component\)/g)).toHaveLength(12);
       yield* refused(pty, history, "Local");
       yield* refused(pty, history, "RootLocal");
       location = yield* leave(pty);
