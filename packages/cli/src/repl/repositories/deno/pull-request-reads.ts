@@ -35,13 +35,21 @@
  */
 
 import { createApi } from "@effectionx/context-api";
-import { scoped } from "effection";
-import type { Operation } from "effection";
-import { getExpansion } from "@executablemd/core";
+import { Err, Ok, scoped } from "effection";
+import type { Operation, Result } from "effection";
+import { DocumentOutput, getExpansion } from "@executablemd/core";
 import type { JournalAdmission } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
-import type { BindOperations } from "@executablemd/git";
+import type { BindOperations, PullRequestReadOperations } from "@executablemd/git";
+import { PULL_REQUEST_CHECKS_WATCH } from "@executablemd/git/api";
+import type {
+  CheckWatchInvocation,
+  CheckWatchResult,
+  PullRequestChecksWatchApi,
+} from "@executablemd/git/api";
+import { parseCheckWatchResult } from "@executablemd/git";
+import type { CheckWatchReads } from "@executablemd/git";
 import { PULL_REQUEST_API } from "@executablemd/git/api";
 import type {
   PullRequestApi,
@@ -68,6 +76,17 @@ import type { PullRequestResult } from "@executablemd/git";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "@executablemd/git";
 import type { DenoPullRequestOperations } from "@executablemd/git/deno";
 import { PULL_REQUEST_READ, retainPullRequestRead } from "@executablemd/git/deno";
+import {
+  checksWatchConfiguration,
+  checksWatchRequest,
+  parseChecksWatchDeadline,
+  parseChecksWatchHead,
+  parseChecksWatchRequest,
+  PULL_REQUEST_CHECKS_WATCH_DEADLINE,
+  PULL_REQUEST_CHECKS_WATCH_EFFECTS,
+  PULL_REQUEST_CHECKS_WATCH_HEAD,
+  retainPullRequestChecksWatch,
+} from "@executablemd/git/deno";
 import { gitOperationFingerprint } from "@executablemd/git/deno";
 
 /** Why a retained read history cannot be continued. */
@@ -130,6 +149,13 @@ function* admitReplPullRequestReads(
   retained: readonly DurableEvent[],
 ): Operation<void> {
   for (const event of retained) {
+    if (
+      event.type === "yield" &&
+      PULL_REQUEST_CHECKS_WATCH_EFFECTS.includes(event.description.type)
+    ) {
+      admitRetainedWatch(owner, event);
+      continue;
+    }
     if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
       continue;
     }
@@ -169,6 +195,60 @@ function* admitReplPullRequestReads(
           "asked for produces, so what it says the Git host answered is unknown.",
       );
     }
+  }
+}
+
+/**
+ * Hold one retained watch checkpoint to the question it was made under.
+ *
+ * The same four refusals an evidence read has: the record states its complete
+ * question, names this entry's owner, is journaled under the name that question
+ * produces, and — when it succeeded — holds the checkpoint its type retains.
+ */
+function admitRetainedWatch(owner: string, event: Extract<DurableEvent, { type: "yield" }>): void {
+  const question = parseChecksWatchRequest(event.description.input);
+  if (question === undefined) {
+    throw new ReplPullRequestReadHistoryError(
+      "malformed-record",
+      "a retained pull-request checks watch in this entry's history does not state the " +
+        "complete question it was made under.",
+    );
+  }
+  if (question.runId !== owner) {
+    throw new ReplPullRequestReadHistoryError(
+      "foreign-owner",
+      "a retained pull-request checks watch in this entry's history was made under another " +
+        "owner.",
+    );
+  }
+  const configuration = checksWatchConfiguration(question);
+  if (
+    event.description.configuration !== configuration ||
+    event.description.name !== `${question.expansionId}:${configuration}`
+  ) {
+    throw new ReplPullRequestReadHistoryError(
+      "request-fingerprint",
+      "a retained pull-request checks watch is journaled under a name its own question does " +
+        "not produce.",
+    );
+  }
+  if (event.result.status !== "ok") {
+    return;
+  }
+  const value = event.result.value;
+  const type = event.description.type;
+  const valid =
+    type === PULL_REQUEST_CHECKS_WATCH_DEADLINE
+      ? parseChecksWatchDeadline(value) !== undefined
+      : type === PULL_REQUEST_CHECKS_WATCH_HEAD
+        ? parseChecksWatchHead(value) !== undefined
+        : parseCheckWatchResult(value) !== undefined;
+  if (!valid) {
+    throw new ReplPullRequestReadHistoryError(
+      "malformed-evidence",
+      "a retained pull-request checks watch holds a value that is not the checkpoint its " +
+        "record type retains.",
+    );
   }
 }
 
@@ -234,9 +314,124 @@ function parseRetainedQuestion(value: unknown): RetainedReadQuestion | undefined
 export function replPullRequestReadPolicy(
   owner: string,
   pullRequests: () => DenoPullRequestOperations,
-): BindOperations<PullRequestOperationsApi["read"]> {
-  return (site: string) => (invocation: PullRequestReadInvocation) =>
-    read(owner, site, pullRequests, invocation);
+): BindOperations<PullRequestReadOperations> {
+  return (site: string) => ({
+    read: (invocation: PullRequestReadInvocation) => read(owner, site, pullRequests, invocation),
+    watch: (invocation: CheckWatchInvocation) => watch(owner, site, pullRequests, invocation),
+  });
+}
+
+/**
+ * One checks watch, through the semantic watch chain and this invocation's own
+ * retention.
+ *
+ * The same layering a read has: a document's watch middleware composes around
+ * an invocation-local terminal, and only that terminal reaches the transport.
+ */
+function watch(
+  owner: string,
+  site: string,
+  pullRequests: () => DenoPullRequestOperations,
+  invocation: CheckWatchInvocation,
+): Operation<CheckWatchResult> {
+  return scoped(function* (): Operation<CheckWatchResult> {
+    const local = createApi<PullRequestChecksWatchApi>(PULL_REQUEST_CHECKS_WATCH, {
+      watch: (request: CheckWatchInvocation) => watched(owner, site, pullRequests, request),
+    });
+    return yield* local.operations.watch(invocation);
+  });
+}
+
+/**
+ * The watch the semantic chain delegated, retained under this entry's owner and
+ * this invocation's site.
+ *
+ * Each cycle is an ordinary read through this invocation's transport chain, so
+ * matching and target parsing are the snapshot's and are decided live on every
+ * cycle. What differs is what happens once a cycle is admitted: it is performed
+ * afresh rather than retained, because the watch retains its checkpoints and its
+ * result rather than each poll.
+ */
+function* watched(
+  owner: string,
+  site: string,
+  pullRequests: () => DenoPullRequestOperations,
+  invocation: CheckWatchInvocation,
+): Operation<CheckWatchResult> {
+  const domain = pullRequests();
+  const expansion = yield* getExpansion();
+  const reads: CheckWatchReads = {
+    read: (kind) => cycleRead(domain, invocation, kind),
+  };
+  return yield* retainPullRequestChecksWatch(
+    checksWatchRequest(invocation.url, invocation.provider, invocation.timeoutSeconds, owner, site),
+    expansion.position,
+    reads,
+    (line) => DocumentOutput.operations.output(`${line}\n`),
+  );
+}
+
+/**
+ * What an admitted cycle raised, kept apart from a refusal made before admission.
+ *
+ * A failure after admission is a read the watch may retry; one before it is a
+ * question this host will not ask, which waiting does not change.
+ */
+class WatchReadFailure extends Error {
+  override name = "WatchReadFailure";
+
+  readonly failure: Error;
+
+  constructor(failure: Error) {
+    super(failure.message);
+    this.failure = failure;
+  }
+}
+
+/** One live cycle read, in a scope of its own so its session closes with it. */
+function cycleRead(
+  domain: DenoPullRequestOperations,
+  invocation: CheckWatchInvocation,
+  kind: "checks" | "details",
+): Operation<Result<PullRequestReadResult>> {
+  return scoped(function* (): Operation<Result<PullRequestReadResult>> {
+    const local = createApi<PullRequestApi>(PULL_REQUEST_API, {
+      read: (url: string, options: PullRequestReadOptions) =>
+        domain.read(url, options, liveAttempt, declinedRead),
+      upsert: refusingUpsert(),
+    });
+    let answered: PullRequestReadResult;
+    try {
+      answered = yield* local.operations.read(invocation.url, {
+        kind,
+        ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
+      });
+    } catch (error) {
+      if (error instanceof WatchReadFailure) {
+        return Err(error.failure);
+      }
+      throw error;
+    }
+    const complete = parseCompletePullRequestReadResult(answered, kind);
+    if (complete === undefined) {
+      return Err(
+        new Error("a watch cycle was answered with something other than the read it asked for."),
+      );
+    }
+    return Ok(complete);
+  });
+}
+
+/** Perform an admitted cycle afresh, marking what it raised as a read failure. */
+function* liveAttempt(
+  _admitted: unknown,
+  perform: () => Operation<PullRequestReadResult>,
+): Operation<PullRequestReadResult> {
+  try {
+    return yield* perform();
+  } catch (error) {
+    throw new WatchReadFailure(error instanceof Error ? error : new Error(String(error)));
+  }
 }
 
 /**

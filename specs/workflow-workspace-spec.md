@@ -2077,7 +2077,8 @@ pull request already holds:
 ```
 
 Each takes one required `url`, an optional `provider`, requires `as`, renders
-nothing and binds one JSON array. The URL is the identity: a pull request is a
+nothing and binds one JSON array. `<PullRequest.Checks watch>` waits instead
+(§7.7.1). The URL is the identity: a pull request is a
 public object with a canonical address, so a document that can name one can ask
 what it holds — there is no `<Repository>` to be inside of, no working directory
 to be at, and no repository or number prop, because the URL says both and the
@@ -2229,6 +2230,104 @@ review or comment that does not say which pull request it belongs to, a check or
 status that does not say which commit it describes, and a pull request that does
 not name its own number and repository are all refused. A well-formed answer to
 another question is still the wrong answer.
+
+#### 7.7.1 Watching checks
+
+`<PullRequest.Checks>` also waits for a pull request's checks to settle:
+
+```md
+<PullRequest.Checks url={pullRequest.url} watch timeoutSeconds={600} as="checkResult" />
+```
+
+Without `watch` the element is the snapshot read above and binds the same
+array, `[]` included. With `watch` it requires a positive integer
+`timeoutSeconds`, renders nothing and binds one result:
+
+```ts
+type CheckWatchResult = {
+  outcome: "success" | "failure" | "incomplete";
+  reason?: "timeout" | "head-changed" | "read-error";
+  headSha: string | null;
+  checks: CheckRecord[];
+};
+```
+
+`success` and `failure` are settled results and carry no `reason`; `incomplete`
+always carries one. `headSha` is the head the watch pinned, or `null` when no
+collection named one before the budget ended. `checks` is the last complete
+collection accepted for that head, in provider order, each record exactly the
+snapshot's record. `timeoutSeconds` without `watch`, `watch` without a positive
+integer `timeoutSeconds`, and a missing `as` refuse before a provider, credential
+or request is involved. The bound result is read whole before it binds, the way
+a snapshot is.
+
+**Completion.** The watch observes every check run and commit status reported
+for the pinned head, and waits until every one of them has settled — including
+after one has already failed. Successful, skipped and neutral results pass. A
+check run's failure, cancellation, timeout or action-required conclusion and a
+commit status's failure or error fail. Every other state is still running, and
+so is a completed check run with no conclusion. A collection that reports no
+checks keeps the watch waiting: nothing reported is not everything passed. Once
+every reported check has settled, any failed one makes the outcome `failure`;
+otherwise it is `success`.
+
+**Pinning.** Each cycle is the ordinary `checks` read, which observes the pull
+request's head and reads every result at that SHA, followed by a `details` read
+of the same pull request. The first successful collection pins its head. A
+collection is accepted only when the `details` read still names the pinned
+head; a different head on either read ends the watch as `head-changed`, with
+the pinned SHA and the collection accepted before it, even when the collection
+just read would have settled the watch. A watch never follows a moved head;
+starting another watch is the caller's decision.
+
+**Budget and failures.** The deadline is taken before the first read, and one
+race against it bounds every request, page, retry delay and poll sleep. A cycle
+polls immediately, then every ten seconds after an accepted unsettled
+collection and five seconds after a read that could not complete. A read that
+could not complete — unavailable, protocol-invalid, or a page walk that did not
+finish — keeps the last accepted collection and is retried; a partial
+collection is never accepted. When the budget ends, the result is `incomplete`
+with `read-error` if the latest read failed and no later one succeeded, and
+`timeout` otherwise. A refusal made before a cycle contacts anything — a URL no
+installed provider handles, a target outside a host's ceiling — is the
+element's failure, not a retry.
+
+**Progress.** Each accepted collection whose summary differs from the last one
+shown writes one live line through `DocumentOutput`: `Checks at <short head>:
+<passed> passed, <failed> failed, <pending> pending`. A read that could not
+complete writes `Checks at <short head>: retrying after a read error`, or
+`Checks: retrying after a read error` before a head is pinned. A line identical
+to the last one shown is not written again. Progress is live output only; it is not part of the element's rendered
+output or its binding.
+
+**Which hosts watch.** The watch is asked of the `PullRequestChecksWatch` Api
+under `executablemd.git.composition.pull-request-checks-watch`, separate from
+`PullRequestOperations` so a profile that does not support it refuses before
+any read; its default refuses with `unsupported`. Only the
+[REPL entry host](repl-spec.md#watching-a-pull-requests-checks) installs it. A
+workflow or ordinary run refuses `watch`. Time is read through
+`PullRequestWatchClock` under `executablemd.git.composition.pull-request-watch-clock`,
+wall-clock by default, so a host or suite can supply its own.
+
+**Retention.** A watch retains three effects, each named
+`{site}:{fingerprint}` over the question `["watch", url, provider,
+timeoutSeconds]` and carrying the complete request — the operation, URL,
+provider, budget, owner and site — as input:
+
+| Type | Retained value |
+| --- | --- |
+| `pull_request_checks_watch_deadline` | `{ deadline }`, milliseconds since the epoch |
+| `pull_request_checks_watch_head` | `{ headSha, failing }` once the first collection names a head or the budget ends |
+| `pull_request_checks_watch_result` | the result above |
+
+Polling happens only inside the bodies of the second and third effects, which
+run in a child attempt whose outcome is published after that attempt's sessions
+have closed. Intermediate collections are never retained. A continued watch
+replays the effects it already has: it keeps its original deadline and pinned
+head, and polls again only for what is not yet retained. A completed watch
+restores its result without a read, a sleep or a line of progress. Cancellation
+publishes nothing for the effect in progress, so an interrupted watch binds
+nothing.
 
 
 ### 7.8 Local repository reads
@@ -4291,6 +4390,7 @@ unchanged.
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Workflow and ordinary runs check operator configuration before contacting GitHub |
+| `<PullRequest.Checks watch>` (§7.7.1) | built by #1459; REPL entries on Deno and in the compiled binary only. Polls the ordinary `checks` and `details` reads against one deadline, retains its deadline, pinned head and result, and refuses `watch` in workflow and ordinary runs |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |

@@ -312,8 +312,10 @@ export type PullRequestReadReason =
   | "invalid-url"
   | "invalid-provider"
   | "invalid-query"
+  | "invalid-watch"
   | "stale-continuation"
   | "unexpected-content"
+  | "unsupported"
   | "unavailable"
   | "protocol";
 

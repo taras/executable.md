@@ -809,6 +809,18 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/967",
   },
   {
+    path: "packages/cli/tests/repl-pull-request-checks-watch.test.ts",
+    reason:
+      "the subject is a REPL entry's checks watch through the production per-entry capability, which only Deno and the compiled binary select, against a GitHub model over a loopback listener: its module graph reaches @executablemd/git/deno and with it Workflow's storage adapter and node:sqlite. That workflow and ordinary runs refuse a watch before any request is proven by packages/git/tests/pull-request-read.test.ts and packages/git/tests/run-composition-remote.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/repl-sidekick-ci-guide.test.ts",
+    reason:
+      "runs the Sidekick CI guide's response through a mounted REPL whose entries use the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and with it Workflow's storage adapter and node:sqlite. The guide chapter itself is registered and read on every runtime by packages/cli/tests/repl-sidekick-controls.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/retained-repository-history.test.ts",
     reason:
       "continues seven histories the merged implementation wrote through the production per-entry capability, so its module graph reaches @executablemd/git/deno — the native repository host, the GitHub issue adapter and Workflow's storage adapter with node:sqlite. The construction those histories are continued through is provider-neutral and is proven on every runtime by packages/git/tests/composition-component-binding.test.ts; the records themselves are proven everywhere by packages/cli/tests/retained-repository-push-records.test.ts and packages/git/tests/issue-owned.test.ts",
