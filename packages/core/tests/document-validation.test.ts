@@ -349,10 +349,24 @@ describe("Tier DV: resolution and schemas", () => {
     expect(diagnostic!.issues).toEqual([
       {
         instancePath: "",
-        schemaPath: "#/required",
+        schemaPath: "#/anyOf/0/required",
         keyword: "required",
         params: { missingProperty: "path" },
         message: "must have required property 'path'",
+      },
+      {
+        instancePath: "",
+        schemaPath: "#/anyOf/1/required",
+        keyword: "required",
+        params: { missingProperty: "request" },
+        message: "must have required property 'request'",
+      },
+      {
+        instancePath: "",
+        schemaPath: "#/anyOf",
+        keyword: "anyOf",
+        params: {},
+        message: "must match a schema in anyOf",
       },
     ]);
     expect(diagnostic!.position?.line).toBe(1);
