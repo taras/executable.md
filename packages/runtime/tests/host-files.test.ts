@@ -22,6 +22,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
+  lift,
+  Ok,
   race,
   resource,
   scoped,
@@ -870,6 +872,39 @@ describe("Tier HF — host Files provider", () => {
 
     expect(value(read)).toBe("underneath");
     expect(observed).toEqual(["notes.md"]);
+  });
+
+  it("transforms authorized text and refuses Git metadata aliases before reading", function* () {
+    const fixture = yield* useFixture();
+    const git = join(fixture.workspace, ".git");
+    yield* until(mkdir(git));
+    yield* writeTextFile(join(git, "synthetic.txt"), "synthetic metadata");
+    yield* until(symlink(join(git, "synthetic.txt"), join(fixture.workspace, "alias.txt")));
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first\nsynthetic tail");
+    yield* useHostFiles();
+    expect(yield* Files.supportsTextTransform()).toBe(true);
+    const read = { cwd: fixture.workspace, path: "notes.md" };
+    const transform = lift((text: string) => Ok(text.split("\n")[0]));
+    expect(value(yield* Files.operations.readTextFile({ ...read, transform }))).toBe("first");
+    expect(value(yield* Files.operations.readTextFile(read))).toBe("first\nsynthetic tail");
+
+    yield* API.Fs.around({
+      readTextFile() {
+        throw new Error("Denied metadata must not reach the physical reader");
+      },
+    });
+    for (const path of [".git/synthetic.txt", "alias.txt"]) {
+      const result = yield* Files.operations.readTextFile({
+        ...read,
+        path,
+        excludeGitMetadata: true,
+        transform,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(parseFilesFailure(result.error)?.reason).toBe("permission-denied");
+      }
+    }
   });
 
   // HF15b: installation forwards every operation, not only the ones a caller

@@ -14,7 +14,7 @@ export const props = {
 
 export default function* (input: Record<string, Json>): Operation<Json> {
   if (typeof input.query !== "string") {
-    throw new Error("Give a Workspace.Search query.");
+    throw new Error("Give a Search query.");
   }
   let after: FileCursor | undefined;
   if (input.after !== undefined) {
@@ -26,7 +26,7 @@ export default function* (input: Record<string, Json>): Operation<Json> {
       !Number.isSafeInteger(cursor.offset) ||
       cursor.offset < 0
     ) {
-      throw new Error("Use the continuation returned by Workspace.Search.");
+      throw new Error("Use the continuation returned by Search.");
     }
     after = { path: cursor.path, offset: cursor.offset };
   }

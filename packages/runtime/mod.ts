@@ -12,7 +12,7 @@
  *   `remove`)
  * - `API.Files` — document filesystem access as whole semantic operations,
  *   with no host default. `useHostFiles()` installs the host provider. Its
- *   `readTextFile` supports a typed observation on the request, which projects
+ *   `readTextFile` accepts an optional transform on the request, which projects
  *   the authorized text before it leaves the provider.
  * - `API.Fetch` — HTTP requests (`fetch`)
  * - `API.Env` — the host: variables, platform info, the command that invokes
@@ -120,7 +120,6 @@ export type {
   FileCopyInput,
   FilePathInput,
   FileReadInput,
-  FileObservation,
   FilesDeniableOperation,
   FilesErrorData,
   FilesFailureData,

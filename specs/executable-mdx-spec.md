@@ -9967,28 +9967,29 @@ one-based line selection. Alternatively, `offset={1200} limit={640}` selects
 a zero-based Unicode code-point window. A bounded read returns at most 4096
 code points. Its provider applies current authority and projects disclosed
 text before returning a bounded value. Bounded File and file search use the
-ordinary `readTextFile` operation with a typed `observation` on the request.
+ordinary `readTextFile` operation with a callable `transform` on the request.
 The provider checks placement and access before reading. It applies the
-observation to the text from that read and returns only its projection.
-A provider without observation support refuses before I/O. File search
+transform to the text from that read and returns only its projection.
+A provider without transform support refuses before I/O. File search
 checks support before enumeration, including in an empty directory.
 
-The enclosing bounded File or Workspace Search effect owns the retained
+The enclosing bounded File or Search effect owns the retained
 outcome. The projected provider read creates no whole-file journal record.
 An acknowledged bounded outcome restores under ordinary continuation rules.
-If continuation reaches an unfinished observation, it performs the read
+If continuation reaches an unfinished effect, it performs the read
 under current authority.
 
-`<Workspace.Search query="error message" as="page" />` finds a case-sensitive
+`<Search query="error message" as="page" />` finds a case-sensitive
 literal in project files. A page returns up to 20 matches and continuation
 arguments. File references name `File` and carry the matching path, bounded
 window and content revision. Pass the complete reference to
 `<File request={page.matches[0].ref} as="context" />`. The bounded
 result states `path`, `text` and whether the current content has changed.
-Workspace Search uses project authority. In a Git worktree its candidate set
+`Search` uses project authority. In a Git worktree its candidate set
 includes tracked files and nonignored untracked files under the search
 directory, using Git’s standard ignore rules. Outside a worktree, it uses
-the provider’s project listing. Enumeration grants no read access, and
+the provider’s project listing. Its durable effect keeps the
+`workspace-search` type and `project-files` name. Enumeration grants no read access, and
 direct File reads use their own access checks regardless of discovery.
 Authored file search uses the same [matching and disclosure order as
 Sidekick](repl-spec.md#workspace-search). Sidekick reads REPL history through its

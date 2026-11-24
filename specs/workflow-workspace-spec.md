@@ -3297,7 +3297,7 @@ durable effect.
 ### 10.1 Workspace-local effects
 
 The workflow provider records ordinary file reads as workspace effects.
-It refuses `readTextFile` requests carrying a bounded observation before
+It refuses `readTextFile` requests carrying a transform before
 reading or recording a workspace file effect. Project search checks that
 capability before enumeration, even in an empty workspace.
 

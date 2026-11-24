@@ -459,18 +459,16 @@ describe("Tier IR — inline root documents", () => {
       },
     });
     const search =
-      '<Workspace.Search query="' +
-      phrase +
-      '" as="page" />\n<Output><Json value={page} /></Output>';
+      '<Search query="' + phrase + '" as="page" />\n<Output><Json value={page} /></Output>';
     const searchStream = new InMemoryStream();
     const printed = asText(
       yield* collect(yield* execute({ ...inlineSource(search), stream: searchStream })),
     );
-    expect(
-      searchStream
-        .snapshot()
-        .filter((event) => event.type === "yield" && event.description.type === "workspace-search"),
-    ).toHaveLength(1);
+    const effects = searchStream
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "workspace-search");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ description: { name: "project-files" } });
     expect(JSON.stringify(searchStream.snapshot())).not.toContain("do not retain this tail");
     const jsonStart = printed.indexOf("{");
     const jsonEnd = printed.lastIndexOf("}");
@@ -578,7 +576,7 @@ describe("Tier IR — inline root documents", () => {
 
   it("refuses an unavailable observation provider even with an empty listing", function* () {
     yield* useWorkspace({});
-    const source = '<Workspace.Search query="no match" />';
+    const source = '<Search query="no match" />';
     const run = function* () {
       return asText(
         yield* collect(
@@ -605,7 +603,7 @@ describe("Tier IR — inline root documents", () => {
           stream: new InMemoryStream(),
         }),
       ),
-    ).toContain("supports bounded text observation");
+    ).toContain("supports transformed text reads");
   });
 
   it("refuses to substitute an outer file for a reference found inside Dir", function* () {
@@ -617,7 +615,7 @@ describe("Tier IR — inline root documents", () => {
         yield* execute({
           ...inlineSource(`
 <Dir path="sub">
-<Workspace.Search query="inner marker" as="page" />
+<Search query="inner marker" as="page" />
 <File request={page.matches[0].ref} as="opened" />
 <Json value={{opened,ref:page.matches[0].ref}} />
 </Dir>`),
@@ -678,7 +676,7 @@ describe("Tier IR — inline root documents", () => {
         });
         const options = {
           ...inlineSource(
-            '<Workspace.Search query="fallback witness" as="page" />\n<Output><Json value={page} /></Output>',
+            '<Search query="fallback witness" as="page" />\n<Output><Json value={page} /></Output>',
           ),
           stream: new InMemoryStream(),
         };
@@ -741,7 +739,7 @@ describe("Tier IR — inline root documents", () => {
           yield* execute({
             ...inlineSource(`
 <Dir path="sub">
-<Workspace.Search query="project-marker" as="page" />
+<Search query="project-marker" as="page" />
 <File path="ignored-untracked.txt" as="direct" />
 <Output><Json value={{page,direct}} /></Output>
 </Dir>`),

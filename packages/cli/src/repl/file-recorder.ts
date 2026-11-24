@@ -161,7 +161,7 @@ function recordingBody(
       const body = this;
       return {
         *readTextFile([input], next) {
-          if (input.observation === undefined) {
+          if (input.transform === undefined) {
             return yield* body.read(input, () => next(input));
           }
           yield* routing.guard();

@@ -1,4 +1,4 @@
-import workspaceSearch, { props as workspaceSearchProps } from "./WorkspaceSearch.ts";
+import search, { props as searchProps } from "./Search.ts";
 /**
  * The components core supplies (spec §5.3).
  *
@@ -234,12 +234,12 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     },
   ),
   core(
-    "Workspace.Search",
-    workspaceSearch,
-    parseJsonObject(workspaceSearchProps),
+    "Search",
+    search,
+    parseJsonObject(searchProps),
     {
       description:
-        'Find literal text in project files with `<Workspace.Search query="error message" as="page" />`.',
+        'Find literal text in project files with `<Search query="error message" as="page" />`.',
       as: "Capture the bounded matches and continuation.",
       context: null,
     },

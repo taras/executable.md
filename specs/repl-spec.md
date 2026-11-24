@@ -3919,18 +3919,18 @@ In a Git worktree, file candidates are tracked files plus nonignored
 untracked files below the launch project, with paths relative to that
 project. Git applies standard ignore rules with the filesystem monitor
 disabled. A confirmed non-worktree uses the project Glob. A Git discovery
-or listing failure refuses file search. A provider without bounded text
-observation refuses file search even for an empty candidate set. Every
+or listing failure refuses file search. A provider without transformed
+reads refuses file search even for an empty candidate set. Every
 candidate still passes the provider’s text-read
 access checks. Direct file reads use their own access checks independently
 of enumeration. Search skips Git metadata, unreadable files and text
 containing NUL. Both search and context
 exclude Git metadata by authored path and resolved destination, including through
-internal symlinks. Search and bounded file readers pass an observation in
+internal symlinks. Search and bounded file readers pass a transform in
 their `readTextFile` request. The provider authorizes and reads the file before
-applying that observation. It returns only the approved projection to the
+applying that transform. It returns only the approved projection to the
 enclosing control or authored effect, which owns retention. Search matches
-inside that observation. A file with no eligible match skips disclosure detection.
+inside that transform. A file with no eligible match skips disclosure detection.
 The same complete text must pass the caller’s disclosure policy before a
 match can contribute a result or establish a continuation. This can make a
 query with a withheld match take longer than an absent query even when their

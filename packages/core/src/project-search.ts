@@ -79,10 +79,10 @@ export function* searchProjectFiles(
   if (!validSearchQuery(query)) {
     return Err(new Error("Search needs a single-line literal of 1 to 160 characters."));
   }
-  if (!(yield* Files.supportsTextObservation())) {
+  if (!(yield* Files.supportsTextTransform())) {
     return Err(
       new Error(
-        "Project file search is unavailable. Use a file provider that supports bounded text observation.",
+        "Project file search is unavailable. Use a file provider that supports transformed text reads.",
       ),
     );
   }

@@ -813,7 +813,7 @@ describe("WF workflow document filesystem", () => {
 
   it("refuses bounded File and empty project search on the workflow provider", function* () {
     for (const [source, refusal] of [
-      ['<Workspace.Search query="absent" />', "supports bounded text observation"],
+      ['<Search query="absent" />', "supports transformed text reads"],
       ['<File path="absent.txt" lines="1" />', "bounded file read is unavailable"],
     ]) {
       const root = yield* useStorageRoot();

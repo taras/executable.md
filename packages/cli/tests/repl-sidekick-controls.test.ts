@@ -3203,7 +3203,7 @@ function respond(request) {
       yield* session.submit(
         [
           '<File path="bounded.txt" lines="1" as="window" />',
-          '<Workspace.Search query="retained synthetic 1483" as="page" />',
+          '<Search query="retained synthetic 1483" as="page" />',
           "<Output><Json value={{window, page}} /></Output>",
         ].join("\n"),
       ),
@@ -3426,7 +3426,7 @@ function respond(request) {
         yield* replyThrough('<REPL.Search query="shared[needle]" scope="files" />', root, asked),
       );
       expect(asked.settled[0]?.ok).toBe(false);
-      expect(JSON.stringify(response)).toContain("supports bounded text observation");
+      expect(JSON.stringify(response)).toContain("supports transformed text reads");
     });
     const hits = (yield* search(shared)).matches;
     expect(hits).toMatchObject([
@@ -3565,7 +3565,7 @@ function respond(request) {
         },
       });
       const program = `
-<Workspace.Search query={${JSON.stringify(shared)}} as="page" />
+<Search query={${JSON.stringify(shared)}} as="page" />
 <File request={page.matches[0].ref} as="opened" />
 <Output><Json value={{page,opened}} /></Output>`;
       return yield* collect(

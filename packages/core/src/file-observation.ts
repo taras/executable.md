@@ -1,7 +1,6 @@
 import { Err, lift, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { Files, filesFailure } from "@executablemd/runtime";
-import type { FileObservation } from "@executablemd/runtime";
 import { readFileText } from "./files.ts";
 import { retainsOptionalText } from "./secrets/policy.ts";
 import { fileRevision, FILE_WINDOW_LIMIT, readFileWindow } from "./file-window.ts";
@@ -21,30 +20,30 @@ export function* observeFile<T extends Json>(
     cwd,
     path,
   };
-  const observation: FileObservation = {
-    excludeGitMetadata,
-    *project(text: string): Operation<Result<string>> {
-      const match = "match" in projection ? yield* projection.match(text) : undefined;
-      const missed = "match" in projection && match === undefined;
-      if (!missed && !(yield* retainsOptionalText(text))) {
-        return Err(
-          filesFailure({ operation: "read", phase: "access", reason: "permission-denied" }),
-        );
-      }
-      const value =
-        "read" in projection
-          ? yield* projection.read(text)
-          : match === undefined
-            ? projection.miss
-            : match();
-      const serialized = JSON.stringify(value);
-      approved = { value, serialized };
-      return Ok(serialized);
-    },
-  };
   const observed = yield* readFileText(
     input,
-    Files.operations.readTextFile({ ...input, observation }),
+    Files.operations.readTextFile({
+      ...input,
+      excludeGitMetadata,
+      *transform(text): Operation<Result<string>> {
+        const match = "match" in projection ? yield* projection.match(text) : undefined;
+        const missed = "match" in projection && match === undefined;
+        if (!missed && !(yield* retainsOptionalText(text))) {
+          return Err(
+            filesFailure({ operation: "read", phase: "access", reason: "permission-denied" }),
+          );
+        }
+        const value =
+          "read" in projection
+            ? yield* projection.read(text)
+            : match === undefined
+              ? projection.miss
+              : match();
+        const serialized = JSON.stringify(value);
+        approved = { value, serialized };
+        return Ok(serialized);
+      },
+    }),
   );
   if (!observed.ok) {
     return observed;

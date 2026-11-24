@@ -77,19 +77,19 @@ export interface FileRecorderHandle {
   assemble<K extends keyof FilesHandler>(method: K): FilesHandler[K];
 }
 export interface FilesApi extends Api<FilesHandler> {
-  /** Check the effective read provider without listing files or touching a target. */
-  supportsTextObservation(): Operation<boolean>;
-  installTextProvider(layers: Layers): Operation<void>;
+  /** Check for transformed reads without listing files or touching a target. */
+  supportsTextTransform(): Operation<boolean>;
+  installTextTransformProvider(layers: Layers): Operation<void>;
   register(boundary: Layers): Operation<FileRecorderHandle>;
 }
 
 export function createFilesApi(
   terminal: FilesHandler,
-  unsupportedObservation: () => Result<string>,
+  unsupportedTransform: () => Result<string>,
 ): FilesApi {
   const recorders = new WeakSet<Layers>();
   const providers = new WeakSet<Layers>();
-  function supportsObservation(layers: Layers[]): boolean {
+  function supportsTransform(layers: Layers[]): boolean {
     // An opted-in host provider terminates the read. Only recorder layers may precede it.
     const reader = layers.find(
       (layer) => layer.readTextFile !== undefined && !recorders.has(layer),
@@ -144,8 +144,8 @@ export function createFilesApi(
         terminal.readTextFile,
         (layer) => layer.readTextFile,
         function* (layers, [input], invoke) {
-          if (input.observation !== undefined && !supportsObservation(layers)) {
-            return unsupportedObservation();
+          if (input.transform !== undefined && !supportsTransform(layers)) {
+            return unsupportedTransform();
           }
           return yield* invoke();
         },
@@ -161,10 +161,10 @@ export function createFilesApi(
   return {
     operations: operations(),
     around,
-    *supportsTextObservation() {
-      return supportsObservation(collect(yield* useScope()));
+    *supportsTextTransform() {
+      return supportsTransform(collect(yield* useScope()));
     },
-    *installTextProvider(layers) {
+    *installTextTransformProvider(layers) {
       const provider = Object.freeze({ ...layers });
       providers.add(provider);
       yield* around(provider, { at: "min" });

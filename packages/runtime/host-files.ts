@@ -100,7 +100,7 @@ import { Stdio } from "@effectionx/process";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
-import { installTextProvider } from "./files.ts";
+import { installTextTransformProvider } from "./files.ts";
 import { routeHostCopy } from "./files-host.ts";
 import { Permissions } from "./permissions.ts";
 import type {
@@ -488,16 +488,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   }
 
   function* readTextFile(input: FileReadInput): Operation<Result<string>> {
-    const { observation } = input;
+    const { transform } = input;
     const lexical = inadmissible(input);
     if (lexical !== undefined) {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
-    if (
-      (options.excludeGitMetadata || observation?.excludeGitMetadata) &&
-      isGitMetadata(input.path)
-    ) {
+    if ((options.excludeGitMetadata || input.excludeGitMetadata) && isGitMetadata(input.path)) {
       return nonWriteFailure("read", "lexical", "permission-denied");
     }
     if (!(yield* Permissions.operations.files("read"))) {
@@ -514,7 +511,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     if (
-      (options.excludeGitMetadata || observation?.excludeGitMetadata) &&
+      (options.excludeGitMetadata || input.excludeGitMetadata) &&
       (isGitMetadata(target.path) ||
         (options.access !== undefined && within(options.access.private, target.path)))
     ) {
@@ -544,7 +541,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     } catch (error) {
       return nonWriteFailure("read", "access", reasonOf(error));
     }
-    return observation === undefined ? Ok(text) : yield* observation.project(text);
+    return transform === undefined ? Ok(text) : yield* transform(text);
   }
 
   /**
@@ -1203,7 +1200,7 @@ function traverse(
  */
 export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
   const handler = hostFilesHandler(options);
-  return installTextProvider({
+  return installTextTransformProvider({
     *checkFilePath([input]) {
       return yield* handler.checkFilePath(input);
     },

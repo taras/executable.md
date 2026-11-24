@@ -245,21 +245,16 @@ export interface FileWriteSuccess {
   readonly publication: "host-committed" | "transaction-staged";
 }
 
-/** A bounded projection performed inside an authorized provider read. */
-export interface FileObservation {
-  readonly excludeGitMetadata: boolean;
-  /** Use the text from this read and return only the bounded outcome to middleware. */
-  project(text: string): Operation<Result<string>>;
-}
-
 export interface FilePathInput {
   readonly cwd: string;
   readonly path: string;
 }
 
 export interface FileReadInput extends FilePathInput {
-  /** Requires an observation-capable provider. Omit for an ordinary whole-text read. */
-  readonly observation?: FileObservation;
+  /** Transform the file’s text before returning it to the caller. Omit to return the full text. */
+  readonly transform?: (text: string) => Operation<Result<string>>;
+  /** Exclude Git metadata during provider path authorization. */
+  readonly excludeGitMetadata?: boolean;
 }
 
 export interface FileCopyInput {
@@ -287,7 +282,7 @@ export interface FilesHandler {
    * `cwd` alone. No filesystem access, and nothing usable comes back.
    */
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
-  /** Read text after placement and access checks, then apply any requested observation. */
+  /** Read text after placement and access checks, then apply any requested transform. */
   readTextFile(input: FileReadInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
   /** Copy a regular file to a vacant destination with an existing parent. */
@@ -926,10 +921,10 @@ const composedFiles: FilesApi = createFilesApi(unavailableFiles, () =>
   Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" })),
 );
 
-export const Files: Api<FilesHandler> & Pick<FilesApi, "supportsTextObservation"> = {
+export const Files: Api<FilesHandler> & Pick<FilesApi, "supportsTextTransform"> = {
   operations: composedFiles.operations,
   around: composedFiles.around,
-  supportsTextObservation: composedFiles.supportsTextObservation,
+  supportsTextTransform: composedFiles.supportsTextTransform,
 };
-export const installTextProvider = composedFiles.installTextProvider;
+export const installTextTransformProvider = composedFiles.installTextTransformProvider;
 export const registerFileRecorder = composedFiles.register;

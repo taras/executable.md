@@ -69,12 +69,12 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Prompt</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>text?: string; agent?: string; session?: string; timeout?: string; throwOnError?: boolean</code> | <code>text: string</code> |
 | <code>Query</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: schema; yq: string</code> | <code>text: string</code> |
 | <code>SafeParse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
+| <code>Search</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>query: string; after?: object</code> | <code>text: string</code> |
 | <code>Session</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; model?: string; effort?: string</code> | <code>text: string</code> |
 | <code>Session.Launch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>agent?: string; session?: string</code> | <code>text: string</code> |
 | <code>Slice</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>offset?: integer; length?: integer</code> | <code>text: string</code> |
 | <code>TempDir</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>Test</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; timeout?: string</code> | <code>text: string</code> |
-| <code>Workspace.Search</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>query: string; after?: object</code> | <code>text: string</code> |
 | <code>Yaml</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
 
 ### @executablemd/testing
