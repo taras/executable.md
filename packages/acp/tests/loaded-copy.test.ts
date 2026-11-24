@@ -21,8 +21,9 @@
  * provider's own copy every one of those values is foreign — exactly as a
  * canonical request is to a provider loaded with another copy.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -588,6 +589,8 @@ function useForeignPublicConsumer(): Operation<
 }
 
 describe("Session information", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach("packages/acp/tests/loaded-copy.test.ts"));
+
   it("SI: a separate Core's public configured first started event observes native confirmation", function* () {
     const run = yield* useForeignPublicConsumer();
     const current = yield* world(true);
@@ -629,7 +632,7 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
         },
       },
     });
-    const journal = new InMemoryStream();
+    const journal = yield* useJournalStream(doc);
     yield* scoped(function* () {
       yield* run(factory, doc, journal, function* (stage, session, configuration) {
         if (stage === "resolved") {

@@ -1,5 +1,6 @@
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import {
   scoped,
   allSettled,
@@ -57,6 +58,8 @@ import Capture, {
   props as captureProps,
 } from "../../../examples/adversarial-implementation/components/Ticket/Capture.ts";
 
+const OWNER = "packages/acp/tests/released-runtime.test.ts";
+
 function* runtimeWorld() {
   const current = yield* world();
   const runtime = createAcpRuntime({
@@ -78,6 +81,7 @@ function* runtimeWorld() {
 }
 
 describe("Session information", { sanitizeOps: false, sanitizeResources: false }, () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("SI: standard public configured sessions retain loading identity through close and load", function* () {
     const current = yield* world(true);
     yield* writeTextFile(current.agent, STANDARD_AGENT_SOURCE);
@@ -184,7 +188,7 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
           `<Agent name="scribe"><Session name="review" model="selected" effort="xhigh"><Prompt text="${text}" /></Session></Agent>`,
         );
         yield* useNormalizedOutput();
-        const journal = new InMemoryStream();
+        const journal = yield* useJournalStream(doc);
         const execution = yield* executeInstalled({ path: doc, stream: journal }, [
           { components: agentIdentityComponents() },
         ]);
@@ -249,6 +253,8 @@ describe(
   "Unconfirmed Session information",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach(OWNER));
+
     it("a real strong first attempt without acceptance exposes no identity or started event", function* () {
       const current = yield* world(true);
       let retained = 0;
@@ -314,7 +320,8 @@ describe(
         doc,
         '<Agent name="scribe"><Session name="uncertain" model="selected"><Prompt text="no-accept" /></Session></Agent>',
       );
-      const execution = yield* executeInstalled({ path: doc, stream: new InMemoryStream() }, [
+      const journal = yield* useJournalStream(doc);
+      const execution = yield* executeInstalled({ path: doc, stream: journal }, [
         { components: agentIdentityComponents() },
       ]);
       const output = yield* execution.output;
@@ -346,6 +353,8 @@ describe(
   "released ACPX production consumers",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach(OWNER));
+
     it("workflow role deny lists and environment survive a cold session reopen", function* () {
       const current = yield* world();
       const controls = {
@@ -513,7 +522,7 @@ describe(
       );
       expect(yield* retainedSession(current.store, "provider")).toBe(undefined);
       yield* useNormalizedOutput();
-      const journal = new InMemoryStream();
+      const journal = yield* useJournalStream(doc);
       const execution = yield* executeInstalled({ path: doc, stream: journal }, [
         { components: agentIdentityComponents() },
       ]);
@@ -1158,6 +1167,8 @@ describe(
   "resume retention: standard retained-session refusal",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    beforeEach(journalBeforeEach(OWNER));
+
     for (const [failure, stage, detail] of [
       ["fail-load", "runtime-turn", "Release the active writer before reconnecting."],
       ["fail-load", "runtime-turn", undefined],
@@ -1281,7 +1292,7 @@ describe(
                 : `<Agent name="scribe"><Session name="review"><Prompt text="${text}" /></Session></Agent>`,
             );
             yield* useNormalizedOutput();
-            const journal = new InMemoryStream();
+            const journal = yield* useJournalStream(doc);
             const execution = yield* executeInstalled({ path: doc, stream: journal }, [
               { components: agentIdentityComponents() },
             ]);
