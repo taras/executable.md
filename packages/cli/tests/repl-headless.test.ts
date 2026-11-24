@@ -1,4 +1,8 @@
-import { captureTestJournal, journalBeforeEach } from "@executablemd/test-support/failure-journal";
+import {
+  captureTestJournal,
+  journalBeforeEach,
+  useJournalStream,
+} from "@executablemd/test-support/failure-journal";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
@@ -827,7 +831,7 @@ function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
     path,
     '<Agent name="xmd"><Session><XMD.Session as="child" /><Json value={child} /></Session></Agent>',
   );
-  const execution = yield* executeInstalled({ path, stream: new InMemoryStream() }, [
+  const execution = yield* executeInstalled({ path, stream: yield* useJournalStream(path) }, [
     children.installation,
     {
       components: agentIdentityComponents(),
