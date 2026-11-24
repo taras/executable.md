@@ -1,3 +1,4 @@
+import type { SearchContext, SearchPage, SearchRequest } from "./workspace-search.ts";
 import type { EntryPlacement } from "../entry-placement.ts";
 import type { ReplTesting, ReplTestReport } from "./testing.ts";
 /**
@@ -29,8 +30,8 @@ import type { ReplTesting, ReplTestReport } from "./testing.ts";
  * ## Reads, writes, and which returns become feedback
  *
  * The read class observes and returns: bindings, the entry vocabulary, the six
- * guide chapters, the environment, and the four bounded reads of one entry's
- * saved evidence. The write class is
+ * guide chapters, the environment, entry inspection and Workspace Search.
+ * The write class is
  * what changes something a person can see or asks them something: filling the
  * shared draft, submitting it, and canonical `<Elicit>`. Keeping them in
  * separate classes is what lets the captured ceiling say, exactly, that a reply
@@ -128,6 +129,8 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  * unavailable may well ask for something else next.
  */
 export interface SidekickRequests {
+  search(request: SearchRequest): Operation<Result<SearchPage>>;
+  searchContext(ref: Json): Operation<Result<SearchContext>>;
   readonly test?: ReplTesting;
   inspectImage?(path: string): Operation<Result<string>>;
   importAsset(source: string, destination: string): Operation<Result<string>>;
@@ -286,6 +289,8 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.InspectImage",
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
+  "REPL.Search",
+  "REPL.SearchContext",
   ELICIT_CONTROL,
   ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
 ]);
@@ -581,7 +586,62 @@ export function sidekickObservations(
       }),
     );
   }
-  observations.push(...entryInspections(requests, journal));
+  observations.push(
+    ...entryInspections(requests, journal),
+    reading("REPL.Search", "Search project files and retained entries", {
+      kind: "function",
+      name: "REPL.Search",
+      description:
+        'Find literal text with `<REPL.Search query="error message" />`. Follow a match with REPL.SearchContext.',
+      props: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 1, maxLength: 160 },
+          scope: { type: "string", enum: ["files", "history", "both"] },
+          after: { type: "object" },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      *fn(props: Record<string, Json>): Operation<SearchPage | string> {
+        const { query, scope, after } = props;
+        if (
+          typeof query !== "string" ||
+          (scope !== undefined && scope !== "files" && scope !== "history" && scope !== "both")
+        ) {
+          throw new Error("Invalid Workspace Search arguments.");
+        }
+        return yield* inspected(
+          journal,
+          { component: "REPL.Search", arguments: { ...props } },
+          () => requests.search({ query, scope, after }),
+        );
+      },
+    }),
+    reading("REPL.SearchContext", "Open context around a search match", {
+      kind: "function",
+      name: "REPL.SearchContext",
+      description:
+        'Open a bounded window with `<REPL.SearchContext ref={{"source":{"path":"note.txt"},"offset":16}} />`.',
+      props: {
+        type: "object",
+        properties: { ref: { type: "object" } },
+        required: ["ref"],
+        additionalProperties: false,
+      },
+      *fn(props: Record<string, Json>): Operation<SearchContext | string> {
+        const { ref } = props;
+        if (ref === undefined) {
+          throw new Error("Workspace Search needs a context reference.");
+        }
+        return yield* inspected(
+          journal,
+          { component: "REPL.SearchContext", arguments: { ...props } },
+          () => requests.searchContext(ref),
+        );
+      },
+    }),
+  );
   for (const chapter of GUIDE_CHAPTERS) {
     const name = `Guide.${chapter}`;
     observations.push(

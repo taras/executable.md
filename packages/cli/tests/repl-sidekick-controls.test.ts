@@ -32,6 +32,7 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
  * covered here.
  */
 
+import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
@@ -40,6 +41,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { appendFile, open, readFile } from "node:fs/promises";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { Stdio } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,7 +67,14 @@ import type { SyntaxSymbols, FunctionComponentDefinition } from "@executablemd/c
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
-import { API, cwd, platform, Permissions, useHostFiles } from "@executablemd/runtime";
+import {
+  API,
+  captureHostFilesAccess,
+  cwd,
+  platform,
+  Permissions,
+  useHostFiles,
+} from "@executablemd/runtime";
 
 import { DESIGNATED, GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
 import { openReplSession } from "../src/repl/session.ts";
@@ -221,6 +230,9 @@ function requests(
   }
   return {
     importAsset: (_source, destination) => answer("importAsset", destination),
+    search: () => answer("search", { matches: [], next: null }),
+    searchContext: () =>
+      answer("searchContext", { source: { kind: "file", path: "test" }, offset: 0, text: "" }),
     bindings: () => answer<Json>("bindings", { names: ["Ada", "Grace"] }),
     entrySyntax: (names) =>
       answer(
@@ -713,6 +725,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "REPL.Search",
+        "REPL.SearchContext",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -813,6 +827,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "REPL.Search",
+        "REPL.SearchContext",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -3158,6 +3174,206 @@ function respond(request) {
       failure: model.entries[0].terminal?.message,
       prompts: { completed: 8, failed: 1, cancelled: 0 },
     });
+  });
+
+  it("1428: Sidekick searches the live project and retained evidence, then opens context without replay", function* () {
+    const project = yield* useTempDirectory("workspace-search-");
+    const privateRoot = join(project, "private");
+    const file = join(project, "note.txt");
+    const shared = "shared[needle]";
+    const repeated = "page[needle]";
+    const late = "🦊".repeat(200_000) + (repeated + "\n").repeat(23);
+    yield* ensureDir(privateRoot);
+    yield* writeTextFile(join(privateRoot, "hidden.txt"), "private[needle]");
+    const withheld = "withheld-from-search";
+    yield* writeTextFile(
+      join(project, "withheld.txt"),
+      withheld + "\n" + " ".repeat(512) + "partial[needle]",
+    );
+    yield* useSecretScannerFactory(() => ({
+      *scan(text) {
+        return text.includes(withheld)
+          ? [
+              {
+                ruleId: "controlled",
+                messageId: "withheld",
+                location: { line: 1, column: 1 },
+                fingerprint: "controlled",
+              },
+            ]
+          : [];
+      },
+    }));
+    yield* writeTextFile(file, "before " + shared);
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    let calls = 0;
+    yield* API.Process.around({
+      *exec() {
+        calls += 1;
+        const text = yield* readTextFile(file);
+        const encoder = new TextEncoder();
+        yield* Stdio.operations.stdout(encoder.encode(text + "\n" + late));
+        yield* Stdio.operations.stderr(encoder.encode("stderr[needle]"));
+        return { exitCode: 0, stdout: undefined, stderr: undefined };
+      },
+    });
+    const stream = new InMemoryStream();
+    const session = answered(yield* openReplSession({ execution: { id: "search", stream } }));
+    const submission = answered(
+      yield* session.submit(
+        'source[needle]\n\n```sh exec as="held"\nread-project-note\n```\n\nrendered[needle]\n\n{held.stdout}',
+      ),
+    );
+    answered(yield* submission.join());
+    yield* writeTextFile(file, "updated " + shared + "\n" + late);
+    const root: RootReading = {
+      ...rootReads(session, { ...READING_PROFILE, access }),
+      fill: cold(session.model).fill,
+    };
+    const pageSchema = z.object({
+      matches: z.array(
+        z.object({ source: z.json(), line: z.number(), excerpt: z.string(), ref: z.json() }),
+      ),
+      next: z.object({ query: z.string(), scope: z.string(), after: z.json() }).nullable(),
+    });
+    function* search(query: string, scope = "both", after?: Json) {
+      const asked = fresh();
+      answered(
+        yield* replyThrough(
+          `<REPL.Search query={${JSON.stringify(query)}} scope="${scope}"${after === undefined ? "" : ` after={${JSON.stringify(after)}}`} />`,
+          root,
+          asked,
+        ),
+      );
+      return pageSchema.parse(observed(asked, 0));
+    }
+    function* context(ref: Json) {
+      const asked = fresh();
+      answered(
+        yield* replyThrough(`<REPL.SearchContext ref={${JSON.stringify(ref)}} />`, root, asked),
+      );
+      return asked.settled[0];
+    }
+    const hits = (yield* search(shared)).matches;
+    expect(hits).toMatchObject([
+      {
+        source: { kind: "file", path: "note.txt" },
+        line: 1,
+        excerpt: expect.stringContaining("updated"),
+      },
+      {
+        source: { kind: "history", entry: 1, field: "output" },
+        excerpt: expect.stringContaining("before"),
+      },
+      {
+        source: { kind: "history", entry: 1, field: "stdout" },
+        line: 1,
+        excerpt: expect.stringContaining("before"),
+      },
+    ]);
+    expect((yield* context(hits[0].ref)).observed).toMatchObject({
+      source: hits[0].source,
+      text: expect.stringContaining("updated"),
+    });
+    expect((yield* context(hits[2].ref)).observed).toMatchObject({
+      source: hits[2].source,
+      text: expect.stringContaining("before"),
+    });
+    expect((yield* search(shared, "files")).matches).toEqual([hits[0]]);
+    expect((yield* search(shared, "history")).matches).toEqual(hits.slice(1));
+    expect((yield* search("private[needle]")).matches).toEqual([]);
+    expect((yield* search("partial[needle]")).matches).toEqual([]);
+    expect((yield* context({ source: { path: "withheld.txt" }, offset: 520 })).ok).toBe(false);
+    expect((yield* context({ source: { path: "private/hidden.txt" }, offset: 0 })).ok).toBe(false);
+    for (const [phrase, field] of [
+      ["source[needle]", "source"],
+      ["rendered[needle]", "output"],
+      ["stderr[needle]", "stderr"],
+    ]) {
+      const match = (yield* search(phrase, "history")).matches.find(
+        (item) => isJsonObject(item.source) && item.source.field === field,
+      );
+      if (match === undefined) {
+        throw new Error(`No ${field} match`);
+      }
+      expect((yield* context(match.ref)).observed).toMatchObject({
+        source: match.source,
+        text: expect.stringContaining(phrase),
+      });
+    }
+    for (const scope of ["files", "history"]) {
+      let page = yield* search(repeated, scope);
+      expect(page.matches).toHaveLength(20);
+      const matches = [...page.matches];
+      while (page.next !== null) {
+        const next = page.next;
+        page = yield* search(next.query, next.scope, next.after);
+        matches.push(...page.matches);
+      }
+      expect(matches.every((one) => [...one.excerpt].length <= 320)).toBe(true);
+      const fields = scope === "files" ? ["file"] : ["output", "stdout"];
+      expect(matches).toHaveLength(23 * fields.length);
+      for (const field of fields) {
+        const occurrences = matches.filter(
+          ({ source }) => isJsonObject(source) && (source.field ?? source.kind) === field,
+        );
+        expect(occurrences).toHaveLength(23);
+        expect(occurrences[22].line).toBe(occurrences[0].line + 22);
+        const opened = z
+          .object({ text: z.string() })
+          .parse((yield* context(occurrences[22].ref)).observed);
+        expect(opened.text).toContain(repeated);
+        expect([...opened.text].length).toBeLessThanOrEqual(640);
+      }
+    }
+    expect(calls).toBe(1);
+  });
+
+  it("1428: searches a disclosed saved failure and refuses unreadable history", function* () {
+    const model = projectedOf(yield* savedEvents());
+    const root = cold(model);
+    const query = model.entries[0].terminal?.message?.split("\n")[0]?.slice(0, 80);
+    if (!query) {
+      throw new Error("Expected a searchable terminal failure");
+    }
+    const search = `<REPL.Search scope="history" query={${JSON.stringify(query)}} />`;
+    const asked = fresh();
+    answered(yield* replyThrough(search, root, asked));
+    const matches = z
+      .object({ matches: z.array(z.object({ source: z.json(), ref: z.json() })) })
+      .parse(observed(asked, 0)).matches;
+    const failure = matches.find(
+      (one) => isJsonObject(one.source) && one.source.field === "failure",
+    );
+    if (failure === undefined) {
+      throw new Error("Missing retained terminal failure");
+    }
+    const opened = fresh();
+    answered(
+      yield* replyThrough(
+        `<REPL.SearchContext ref={${JSON.stringify(failure.ref)}} />`,
+        root,
+        opened,
+      ),
+    );
+    expect(observed(opened, 0)).toMatchObject({
+      source: failure.source,
+      text: expect.stringContaining(query),
+    });
+    const denied = {
+      ...root,
+      acknowledged: () => Err<ReplModel>(new Error("History disclosure refused.")),
+    };
+    for (const source of [search, `<REPL.SearchContext ref={${JSON.stringify(failure.ref)}} />`]) {
+      const refusal = fresh();
+      answered(yield* replyThrough(source, denied, refusal));
+      expect(refusal.settled).toEqual([{ order: 0, ok: false }]);
+    }
   });
 
   function diagnosticEvent(value: Json, status = "ok"): DurableEvent {

@@ -3907,6 +3907,45 @@ is a different thing from an entry that ran and failed. An output read is the
 window the read itself renders, fenced long enough to hold its text, with its
 adjacent instructions pinned to that entry.
 
+### Workspace Search
+
+Use `<REPL.Search query="error message" />` in a Sidekick response to find
+text before you know its path or entry number. The query is a case-sensitive
+literal of 1 to 160 Unicode code points on one line. `scope` is `"both"` by
+default. Use `"files"` for the launch project or `"history"` for this REPL's
+acknowledged entries.
+
+Files use the project Glob and text-read access checks. Search skips Git
+metadata, unreadable files and text containing NUL. The response clears the
+complete file text for disclosure before matching or opening context. A failed
+project listing refuses a request that includes files. History uses the same
+readable retained projection as entry inspection. It searches admitted source,
+retained rendered output, retained command stdout and stderr, and saved
+entry and Prompt failure messages. An unreadable history refuses the history
+search. Unretained and withheld evidence supplies no searchable text.
+
+The page is `{matches,next}`, with up to 20 non-overlapping occurrences.
+Files come in path order, followed by entries in admission order and their
+retained fields and records. Within each text, matches follow its original
+order. Each match provides `source`, a one-based `line`, a zero-based Unicode
+code point `offset`, an `excerpt` of at most 320 code points and a `ref`.
+A file source names the current project path. A history source names an
+absolute entry number, field and, where applicable, record marker.
+
+`next` is null at the end. Otherwise reuse its `query`, `scope` and `after`
+on the next Search. The continuation advances within the last source and
+recomputes against readable project files and retained evidence on each call.
+File edits can move an occurrence across the saved offset. Search retains no
+index or collection of future matches.
+
+Pass the match’s `ref` object to `REPL.SearchContext` to read up to 640 code
+points around the location. The page gives the source, window offset and text.
+Opening a file reference reads the current file through the same access
+policy. Opening a history reference reads the saved field. Both controls
+return their pages as Sidekick feedback and neither replays any operation.
+
+### Reading one entry
+
 A reply reads one entry's saved evidence through four reads of its own, and
 each of them answers with a page rather than with prose:
 
