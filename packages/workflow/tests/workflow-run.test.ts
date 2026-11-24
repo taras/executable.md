@@ -23,6 +23,7 @@ import {
   DocumentOutput,
   execute,
   Execution,
+  formatSource,
   getExpansion,
   inlineSource,
   registerComponents,
@@ -124,6 +125,40 @@ function recordedRun(stream: InMemoryStream): Json | undefined {
 }
 
 describe("Tier WR — workflow runs", () => {
+  it("a formatted root produces the same rendering and run effects", function* () {
+    const source = "<If condition={true}>\n<Probe />\n</If>\n";
+    const formatted = formatSource(source);
+    expect(formatted).toEqual({ ok: true, value: "<If condition={true}>\n  <Probe />\n</If>\n" });
+    if (!formatted.ok) {
+      throw formatted.error;
+    }
+    const seen: WorkflowRun[] = [];
+    yield* useProbe(seen);
+    const before = yield* collect(
+      yield* executeInstalled(
+        {
+          ...inlineSource(source),
+          stream: new InMemoryStream(),
+        },
+        [runInstallation(BUNDLE, { runId: "formatter-witness" })],
+      ),
+    );
+    const after = yield* collect(
+      yield* executeInstalled(
+        {
+          ...inlineSource(formatted.value),
+          stream: new InMemoryStream(),
+        },
+        [runInstallation(BUNDLE, { runId: "formatter-witness" })],
+      ),
+    );
+    expect(after).toEqual(before);
+    expect(seen).toEqual([
+      { runId: "formatter-witness", bundleHash: BUNDLE },
+      { runId: "formatter-witness", bundleHash: BUNDLE },
+    ]);
+  });
+
   it("WR1: is unreadable before the execution, readable inside it, unreadable after", () =>
     captureTestJournal(
       {

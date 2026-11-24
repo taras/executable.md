@@ -94,7 +94,7 @@ if (isReplSubmit(process.argv.slice(2))) {
         yield* useDenoRepl();
         return yield* runReplSubmit(
           process.argv.slice(2),
-          () => readInputStream(process.stdin),
+          (options) => readInputStream(process.stdin, options),
           interrupted.operation,
           (record) =>
             action<void>((resolve, reject) => {
@@ -166,7 +166,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       args,
       useDenoService,
       UPGRADE,
-      () => readInputStream(process.stdin),
+      (options) => readInputStream(process.stdin, options),
       importPluginModule,
       () => useDenoWorkflowHost(HELPER, USAGE),
       { ...useMachineSessions(), usage: USAGE },

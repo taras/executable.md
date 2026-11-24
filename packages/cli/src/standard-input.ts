@@ -27,7 +27,7 @@ export const STANDARD_INPUT_FAILURE =
   "xmd run could not read a complete document from standard input";
 
 /** Read the complete root document from wherever this host keeps standard input. */
-export type StandardInputReader = () => Operation<Result<string>>;
+export type StandardInputReader = (options?: TextDecoderOptions) => Operation<Result<string>>;
 
 /**
  * The part of a Node-style readable this adapter uses.
@@ -57,18 +57,36 @@ export interface InputStream {
  * A stream that closes without ending delivered part of a document and no end
  * of file, which is a failure rather than a short program.
  */
-export function* readInputStream(stream: InputStream): Operation<Result<string>> {
+export function* readInputStream(
+  stream: InputStream,
+  options?: TextDecoderOptions,
+): Operation<Result<string>> {
   const settled = withResolvers<Result<string>>();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", options);
   const chunks: string[] = [];
   let ended = false;
+  let invalidUtf8 = false;
 
   const onData = (chunk: Uint8Array) => {
-    chunks.push(decoder.decode(chunk, { stream: true }));
+    if (!invalidUtf8) {
+      try {
+        chunks.push(decoder.decode(chunk, { stream: true }));
+      } catch {
+        invalidUtf8 = true;
+      }
+    }
   };
   const onEnd = () => {
     ended = true;
-    settled.resolve(Ok(`${chunks.join("")}${decoder.decode()}`));
+    if (invalidUtf8) {
+      settled.resolve(Err(new Error("expected UTF-8 text")));
+      return;
+    }
+    try {
+      settled.resolve(Ok(`${chunks.join("")}${decoder.decode()}`));
+    } catch {
+      settled.resolve(Err(new Error("expected UTF-8 text")));
+    }
   };
   const onClose = () => {
     if (!ended) {

@@ -6,6 +6,9 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { join } from "node:path";
 import { runCli } from "@executablemd/test-support/launch";
 
 // These runs read fixtures from the repository, so they keep this process's
@@ -21,6 +24,21 @@ describe("xmd CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("**AssertEquals** passed");
     expect(result.stdout).toContain("Regular content stays.");
+  });
+
+  it("a formatted Markdown test produces the same report", function* () {
+    const source = yield* readTextFile("packages/testing/tests/fixtures/passing.md");
+    const cwd = yield* useTempDirectory("xmd-fmt-test-");
+    const file = join(cwd, "suite.md");
+    yield* writeTextFile(file, source);
+    const before = yield* runCli(["test", "suite.md"], { cwd }).expect();
+    yield* runCli(["fmt", "suite.md"], { cwd }).expect();
+    expect(yield* readTextFile(file)).toBe(
+      source.replace("\n<Let ", "\n  <Let ").replace("\n<AssertEquals ", "\n  <AssertEquals "),
+    );
+    const after = yield* runCli(["test", "suite.md"], { cwd }).expect();
+    expect(after.stdout).toBe(before.stdout);
+    expect(after.stderr).toBe(before.stderr);
   });
 
   // The colocated story for a core-owned component. No --include: a

@@ -82,6 +82,7 @@ import {
   version as cliVersion,
   type AnyRoute,
 } from "@bomb.sh/router";
+import { runFmt } from "./fmt.ts";
 import { renderCommandHelp } from "./cli-help.ts";
 import { z } from "zod";
 import {
@@ -786,6 +787,7 @@ const xmd = command(
   testAgentConfig,
   workflowConfig,
 );
+const fmtHelp = command(cliName("fmt"), cliDescription("format XMD source"));
 const commandRoutes = xmd.phases.flatMap((phase) => phase.routes);
 const COMMAND_NAMES = commandRoutes.map((route) => route.name);
 const shorthand = command(cliName("xmd"), cliVersion(XMD_VERSION), runGrammar, checkpoint());
@@ -3221,7 +3223,7 @@ function renderHelp(phase: PropsPhase, workflowEnabled: boolean): string {
   const offered = workflowEnabled
     ? commandRoutes
     : commandRoutes.filter((route) => route.name !== "workflow");
-  const parsed = renderCommandHelp(offered, command);
+  const parsed = renderCommandHelp([...offered, fmtHelp], command);
   const base = `${parsed}\n\n${PLUGIN_HELP}`;
   const epilogue =
     command === "run"
@@ -4106,6 +4108,18 @@ export function* runXmd(
   // restore.
   replHost?: ReplHostAssembly,
 ): Operation<void> {
+  if (args[0] === "fmt") {
+    const code = yield* runFmt(
+      args.slice(1),
+      readStandardInput,
+      (text) => deliverWhole(text, process.stdout),
+      (message) => console.error(message),
+    );
+    if (code !== 0) {
+      yield* exit(code);
+    }
+    return;
+  }
   if (args[0] === "session") {
     const code = yield* runSessionOwnership(args.slice(1), sessions?.ownershipAdministration);
     if (code !== 0) {
@@ -4131,6 +4145,11 @@ export function* runXmd(
   // selects is read from the argv the caller wrote, and the tokens that
   // selected it are removed from everything downstream.
   const selection = selectPlugins(args);
+  if (selection.rest[0] === "fmt") {
+    console.error("xmd fmt: options before the command are unsupported");
+    yield* exit(2);
+    return;
+  }
   if (selection.error !== undefined) {
     console.error(selection.error);
     yield* exit(1);
