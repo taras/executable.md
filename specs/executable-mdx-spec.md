@@ -306,7 +306,7 @@ interface ComponentElement {
   expressions: Record<string, string>;   // Eval expression props — raw text, resolved at expansion time
   children: Segment[];                   // Segments between opening and closing tags
   selfClosing: boolean;
-  lineEnd?: true;                        // Stands on its own line and owns that line's newline (§2.2)
+  lineEnd?: "\n" | "\r\n" | true;        // Consumed standalone line ending (§2.2). Legacy true means LF.
   lineIndent?: string;                   // Indentation after the prefix before a standalone non-block element (§2.2)
 }
 
