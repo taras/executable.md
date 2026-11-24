@@ -3225,7 +3225,10 @@ function respond(request) {
     });
     let calls = 0;
     yield* API.Process.around({
-      *exec() {
+      *exec([options], next) {
+        if (options.command[0] === "git") {
+          return yield* next(options);
+        }
         calls += 1;
         const text = yield* readTextFile(file);
         const encoder = new TextEncoder();
@@ -3271,8 +3274,8 @@ function respond(request) {
     }
     function* context(ref: Json) {
       const asked = fresh();
-      const { reader, args } = z.object({ reader: z.string(), args: z.json() }).parse(ref);
-      answered(yield* replyThrough(`<${reader} request={${JSON.stringify(args)}} />`, root, asked));
+      const { reader } = z.object({ reader: z.string() }).parse(ref);
+      answered(yield* replyThrough(`<${reader} request={${JSON.stringify(ref)}} />`, root, asked));
       return asked.settled[0];
     }
     const hits = (yield* search(shared)).matches;
@@ -3368,7 +3371,7 @@ function respond(request) {
       changed: null,
       text: "updated " + shared + "\n",
     });
-    const { reader, args } = z
+    const ref = z
       .object({ reader: z.literal("REPL.File.Read"), args: z.json() })
       .parse(hits[0].ref);
     for (const changed of [false, true]) {
@@ -3377,7 +3380,7 @@ function respond(request) {
       }
       const opened = fresh();
       answered(
-        yield* replyThrough(`<${reader} request={${JSON.stringify(args)}} />`, root, opened),
+        yield* replyThrough(`<${ref.reader} request={${JSON.stringify(ref)}} />`, root, opened),
       );
       expect(observed(opened, 0)).toMatchObject({
         source: hits[0].source,
@@ -3398,7 +3401,7 @@ function respond(request) {
       });
       const program = `
 <Workspace.Search query={${JSON.stringify(shared)}} as="page" />
-<File request={page.matches[0].ref.args} as="opened" />
+<File request={page.matches[0].ref} as="opened" />
 <Output><Json value={{page,opened}} /></Output>`;
       return yield* collect(
         yield* execute({
@@ -3550,10 +3553,7 @@ function respond(request) {
       throw new Error("Missing retained terminal failure");
     }
     const opened = fresh();
-    const { args } = z
-      .object({ reader: z.literal("REPL.Entry.Journal"), args: z.json() })
-      .parse(failure.ref);
-    const context = `<REPL.Entry.Journal request={${JSON.stringify(args)}} />`;
+    const context = `<REPL.Entry.Journal request={${JSON.stringify(failure.ref)}} />`;
     answered(yield* replyThrough(context, root, opened));
     expect(observed(opened, 0)).toMatchObject({
       source: failure.source,

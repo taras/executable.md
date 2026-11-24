@@ -29,9 +29,9 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { API, Permissions, useHostFiles } from "@executablemd/runtime";
+import { API, exec, Permissions, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -407,10 +407,11 @@ describe("Tier IR — inline root documents", () => {
     const jsonStart = printed.indexOf("{");
     const jsonEnd = printed.lastIndexOf("}");
     const page = JSON.parse(printed.slice(jsonStart, jsonEnd + 1));
-    const { reader, args } = page.matches[0].ref;
+    const ref = page.matches[0].ref;
+    const { reader } = ref;
     expect(reader).toBe("File");
     expect(page.matches).toHaveLength(1);
-    const source = `<${reader} request={${JSON.stringify(args)}} as="opened" />\n<Output><Json value={opened} /></Output>`;
+    const source = `<${reader} request={${JSON.stringify(ref)}} as="opened" />\n<Output><Json value={opened} /></Output>`;
     const stream = new InMemoryStream();
     const first = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
     expect(first).toContain('"changed": false');
@@ -466,6 +467,50 @@ describe("Tier IR — inline root documents", () => {
     );
     expect(replayed).toBe(first);
     expect(reads).toBe(before);
+  });
+
+  it("uses Git ignore rules below the working directory and keeps direct File reads", function* () {
+    const root = yield* useWorkspace({
+      ".gitignore": "ignored*.txt\n",
+      "outside.txt": "project-marker",
+    });
+    yield* ensureDir(join(root, "sub"));
+    yield* writeTextFile(join(root, "sub", "tracked.txt"), "project-marker");
+    yield* writeTextFile(join(root, "sub", "ignored-untracked.txt"), "project-marker");
+    yield* writeTextFile(join(root, "sub", "ignored-but-tracked.txt"), "project-marker");
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", "-f", "--", "sub/tracked.txt", "sub/ignored-but-tracked.txt"],
+    ]) {
+      const result = yield* exec({ command: ["git", ...args], cwd: root });
+      expect(result.exitCode).toBe(0);
+    }
+    function* search() {
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(`
+<Dir path="sub">
+<Workspace.Search query="project-marker" as="page" />
+<File path="ignored-untracked.txt" as="direct" />
+<Output><Json value={{page,direct}} /></Output>
+</Dir>`),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+      return JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
+    }
+    const first = yield* search();
+    expect(
+      first.page.matches.map((match: { source: { path: string } }) => match.source.path),
+    ).toEqual(["ignored-but-tracked.txt", "tracked.txt"]);
+    expect(first.direct).toBe("project-marker");
+    yield* writeTextFile(join(root, "sub", "added-after-search.txt"), "project-marker");
+    const repeat = yield* search();
+    expect(
+      repeat.page.matches.map((match: { source: { path: string } }) => match.source.path),
+    ).toEqual(["added-after-search.txt", "ignored-but-tracked.txt", "tracked.txt"]);
   });
 
   const rootProps = "IR11: props are validated and defaulted for a supplied root";

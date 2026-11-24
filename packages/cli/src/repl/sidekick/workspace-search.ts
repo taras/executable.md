@@ -4,6 +4,7 @@ import type { Json } from "@executablemd/core";
 import {
   SEARCH_PAGE_SIZE,
   fileReadArguments,
+  readerArguments,
   searchProjectFiles,
   observeFileWindow,
   retainsOptionalText,
@@ -216,7 +217,13 @@ export function* readHistoryWindow(
   request: Json,
   history: ReadHistory,
 ): Operation<Result<HistoryWindow>> {
-  const parsed = historyRequest.safeParse(request);
+  let args: Json;
+  try {
+    args = readerArguments(request, reader);
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error("Invalid REPL history reference."));
+  }
+  const parsed = historyRequest.safeParse(args);
   if (!parsed.success) {
     return Err(new Error("Use the arguments supplied with this history reference."));
   }
@@ -226,7 +233,10 @@ export function* readHistoryWindow(
   }
   const { entry, field, marker, offset, limit } = parsed.data;
   const item = [
-    ...historySources({ ...model.value, entries: model.value.entries.slice(entry - 1, entry) }),
+    ...historySources({
+      ...model.value,
+      entries: model.value.entries.filter((item) => item.order === entry),
+    }),
   ].find(
     (one) =>
       one.label.entry === entry &&
@@ -252,7 +262,7 @@ export function* readProjectFile(
 ): Operation<Result<ProjectFilePage>> {
   let selection;
   try {
-    selection = fileReadArguments({ request });
+    selection = fileReadArguments({ request }, "REPL.File.Read");
   } catch (error) {
     return Err(error instanceof Error ? error : new Error("Invalid project file read."));
   }

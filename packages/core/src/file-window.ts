@@ -53,14 +53,28 @@ export function fileReadSelection(value: JsonObject): FileReadSelection {
   throw new Error('Give a one-based line such as "42" or an inclusive range such as "38:46".');
 }
 
-export function fileReadArguments(props: JsonObject): FileReadSelection {
+export function readerArguments(value: Json, reader: string): Json {
+  if (!isJsonObject(value) || !Object.hasOwn(value, "reader")) {
+    return value;
+  }
+  if (value.reader !== reader || Object.keys(value).length !== 2 || !isJsonObject(value.args)) {
+    throw new Error("Use the reference with its named reader.");
+  }
+  return value.args;
+}
+
+export function fileReadArguments(props: JsonObject, reader = "File"): FileReadSelection {
   if (props.request === undefined) {
     return fileReadSelection(props);
   }
   if (!isJsonObject(props.request) || Object.keys(props).length !== 1) {
     throw new Error("Pass a file read request by itself.");
   }
-  return fileReadSelection(props.request);
+  const args = readerArguments(props.request, reader);
+  if (!isJsonObject(args)) {
+    throw new Error("Pass a file read request object.");
+  }
+  return fileReadSelection(args);
 }
 
 function lineRange(value: string): [number, number] | undefined {

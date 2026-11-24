@@ -3915,8 +3915,13 @@ literal of 1 to 160 Unicode code points on one line. `scope` is `"both"` by
 default. Use `"files"` for the launch project or `"history"` for this REPL's
 acknowledged entries.
 
-Files use the project Glob and text-read access checks. Search skips Git
-metadata, unreadable files and text containing NUL. Both search and context
+In a Git worktree, file candidates are tracked files plus nonignored
+untracked files below the launch project, with paths relative to that
+project. Git applies standard ignore rules. Elsewhere, the project Glob
+supplies candidates. Every candidate still passes the provider’s text-read
+access checks. Direct file reads use their own access checks independently
+of enumeration. Search skips Git metadata, unreadable files and text
+containing NUL. Both search and context
 exclude Git metadata by authored path and resolved destination, including through
 internal symlinks. The response clears the complete file text for disclosure
 before matching or opening context. A failed project listing refuses a request
@@ -3940,8 +3945,8 @@ recomputes against readable project files and retained evidence on each call.
 File edits can move an occurrence across the saved offset. Search retains no
 index or collection of future matches.
 
-A match's `ref` gives a reader name and its `args` object. Pass that
-object as the named reader's `request` in a follow-up response. File matches
+A match's `ref` gives a reader name and its arguments. Pass the complete
+reference as the named reader's `request` in a follow-up response. File matches
 use `REPL.File.Read`. Retained references use the corresponding
 `REPL.Entry.Source`, `REPL.Entry.Output`, `REPL.Entry.Prompt` or
 `REPL.Entry.Journal`. Each revalidates the selector and disclosure before

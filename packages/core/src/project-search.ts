@@ -72,6 +72,7 @@ export function* searchProjectFiles(
   const directory = options?.directory ?? (yield* searchDirectory());
   const listed = yield* globFiles({
     cwd: directory,
+    projectSearch: true,
     include: ["**/*"],
     exclude: [".git", "**/.git/**"],
   });

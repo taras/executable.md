@@ -269,6 +269,7 @@ export interface FileWriteInput extends FilePathInput {
 }
 
 export interface GlobInput {
+  readonly projectSearch?: true;
   readonly cwd: string;
   readonly include: string[];
   readonly exclude: string[];

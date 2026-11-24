@@ -596,11 +596,11 @@ export function sidekickObservations(
   }
   observations.push(
     ...entryInspections(requests, journal),
-    reading("REPL.Search", "Search project files and retained entries", {
+    reading("REPL.Search", "Search project files and REPL history", {
       kind: "function",
       name: "REPL.Search",
       description:
-        'Find literal text with `<REPL.Search query="error message" />`. Pass a match’s args as request to its named reader.',
+        'Find literal text with `<REPL.Search query="error message" />`. Pass the returned reference as request to its named reader.',
       props: {
         type: "object",
         properties: {

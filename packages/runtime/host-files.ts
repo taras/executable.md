@@ -87,7 +87,7 @@
  * temporary the document never chose.
  */
 
-import { ensure, Err, Ok, resource, scoped, until } from "effection";
+import { ensure, Err, lift, Ok, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -95,6 +95,7 @@ import { mkdtempSync } from "node:fs";
 import { constants, copyFile as nativeCopyFile, readFile, realpath, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { Stdio } from "@effectionx/process";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
@@ -513,7 +514,8 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
 
     if (
       (options.excludeGitMetadata || input.observation?.excludeGitMetadata) &&
-      isGitMetadata(target.path)
+      (isGitMetadata(target.path) ||
+        (options.access !== undefined && within(options.access.private, target.path)))
     ) {
       return nonWriteFailure("read", "resolution", "permission-denied");
     }
@@ -898,6 +900,69 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
     return Ok(undefined);
   }
 
+  function* git(cwd: string, args: string[]): Operation<{ exitCode: number; stdout: string }> {
+    return yield* scoped(function* () {
+      const decoder = new TextDecoder();
+      let stdout = "";
+      yield* Stdio.around({
+        stdout: lift(([bytes]) => {
+          stdout += decoder.decode(bytes, { stream: true });
+        }),
+        stderr: lift(() => undefined),
+      });
+      const result = yield* API.Process.operations.exec({
+        command: ["git", ...args],
+        cwd,
+        retain: false,
+      });
+      return { exitCode: result.exitCode, stdout: stdout + decoder.decode() };
+    });
+  }
+
+  function* gitCandidates(cwd: string): Operation<Result<string[]> | undefined> {
+    let worktree;
+    try {
+      worktree = yield* git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+    } catch {
+      return undefined;
+    }
+    if (worktree.exitCode !== 0 || worktree.stdout.trim() !== "true") {
+      return undefined;
+    }
+    try {
+      const listed = yield* git(cwd, [
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        ".",
+      ]);
+      if (listed.exitCode !== 0) {
+        return nonWriteFailure("glob", "traversal", "operation-failed");
+      }
+      return Ok(
+        [
+          ...new Set(
+            listed.stdout.split("\0").filter((path) => {
+              const target = resolve(cwd, path);
+              return (
+                path.length > 0 &&
+                !isAbsolute(path) &&
+                within(cwd, target) &&
+                !isGitMetadata(path) &&
+                (options.access === undefined || !within(options.access.private, target))
+              );
+            }),
+          ),
+        ].sort(byCodePoint),
+      );
+    } catch {
+      return nonWriteFailure("glob", "traversal", "operation-failed");
+    }
+  }
+
   /**
    * The regular files under `cwd` that `include` selects and `exclude` does not.
    *
@@ -946,6 +1011,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): DocumentFilesH
       }
     } catch (error) {
       return nonWriteFailure("glob", "target", reasonOf(error));
+    }
+
+    if (input.projectSearch) {
+      const git = yield* gitCandidates(input.cwd);
+      if (git !== undefined) {
+        return git;
+      }
     }
 
     try {

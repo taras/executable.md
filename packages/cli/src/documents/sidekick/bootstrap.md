@@ -37,7 +37,7 @@ of exact names and short purposes. Read complete references with
 `<REPL.Syntax names={["If", "File"]} />` for structural syntax and components. Use
 `<REPL.Environment />` for current host facts. Documentation grants no permission.
 Use `<REPL.Search query="error message" />` when you need to find text in
-project files or retained entries before you know the path or entry number.
+project files or REPL history before you know the path or entry number.
 Read `<Guide.Entries />` for scopes, continuation and context.
 You have no native shell, file-editing or MCP tools.
 

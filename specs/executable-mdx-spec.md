@@ -9972,11 +9972,15 @@ refuses. An acknowledged observation restores under ordinary continuation rules.
 `<Workspace.Search query="error message" as="page" />` finds a case-sensitive
 literal in project files. A page returns up to 20 matches and continuation
 arguments. File references name `File` and carry the matching path, bounded
-window and content revision in `args`. Pass the object to
-`<File request={page.matches[0].ref.args} as="context" />`. The bounded
+window and content revision. Pass the complete reference to
+`<File request={page.matches[0].ref} as="context" />`. The bounded
 result states `path`, `text` and whether the current content has changed.
-Workspace Search uses project authority. REPL history uses separate host
-authorization.
+Workspace Search uses project authority. In a Git worktree its candidate set
+includes tracked files and nonignored untracked files under the search
+directory, using Git’s standard ignore rules. Outside a worktree, it uses
+the provider’s project listing. Enumeration grants no read access, and
+direct File reads use their own access checks regardless of discovery.
+Sidekick reads REPL history through its own scoped authority.
 
 ### 6.13.3 Copying a file: `<File.Copy>`
 

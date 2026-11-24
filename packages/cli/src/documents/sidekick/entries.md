@@ -47,15 +47,15 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   than at its output, because an entry that failed may have printed nothing.
   Read `<Guide.Recovery />` for what to do with what it answers.
 
-## Find text in project files or retained entries
+## Find text in project files or REPL history
 
 Use `<REPL.Search query="error message" />` in a Sidekick response. Search
 matches literal, case-sensitive text. Add `scope="files"` or `scope="history"`
 to restrict where it looks. Read the page in feedback. When `next` is present,
 copy its `query`, `scope` and `after` into your next Search.
 
-Read the reader name from `ref.reader` and paste the complete `ref.args`
-object as that reader's `request` prop in your next response. File matches use
+Use the reader named by `ref.reader` and paste the entire `ref` object as
+that reader's `request` prop in your next response. File matches use
 `REPL.File.Read`; use it directly when the path is already known.
 
 ```xmd
