@@ -335,9 +335,12 @@ To read another page, repeat the search with an explicit `page` and the same
 Set `paginate={true}` to follow GitHub's next-page links. `page` selects the
 starting page and `perPage` applies to each request. The binding is an
 ordered array of GitHub response objects, even when only one page is available.
+GitHub's authenticated search limit is 30 requests per minute. A rate-limited
+page fails the whole read. `perPage={100}` covers the accessible window in at
+most ten requests. [GitHub REST search rate limits](https://docs.github.com/en/rest/search/search#rate-limit)
 
 ```mdx
-<GitHub.Search query="is:pr is:open label:bug" sort="created" paginate={true} as="pages" />
+<GitHub.Search query="is:pr is:open label:bug" sort="created" perPage={100} paginate={true} as="pages" />
 <Query value={pages} yq="[.[].items[].html_url]" as="pullRequestUrls" />
 ```
 

@@ -2377,7 +2377,9 @@ a one-element array when the starting page is the only page fetched.
 
 Both forms preserve item order and all provider JSON fields, including
 `total_count`, `incomplete_results`, nullable fields and unfamiliar members.
-Transport headers and credentials stay with the adapter. Authentication and
+Transport headers and credentials stay with the adapter.
+GitHub applies its search rate limits to every request. A rate-limited page
+fails the entire read without a retry or a wait for the budget to reset. Authentication and
 transport failures, malformed responses, and items from a different
 repository or of a different kind fail the entire read. A valid incomplete
 page binds its original incompleteness indicator. Cancellation stops the
