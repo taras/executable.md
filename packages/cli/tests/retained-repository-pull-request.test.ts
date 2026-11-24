@@ -26,7 +26,8 @@
  * journey is B9's and is not demonstrated here.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   each,
@@ -142,6 +143,7 @@ const PullRequestOperations = createApi<PullRequestOperationsApi>(PULL_REQUEST_O
 
 /** The owner the CLI derives for an entry, as this suite states one. */
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-pull-request","1"]';
+const JOURNAL_OWNER = "packages/cli/tests/retained-repository-pull-request.test.ts";
 
 /** A second entry's owner, for the history that is not this entry's. */
 const FOREIGN_OWNER = '["executablemd.repl.issue-owner",1,"execution-pull-request","2"]';
@@ -896,7 +898,7 @@ function left(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       run(fixture, source, stream, counted, {
@@ -943,7 +945,7 @@ function cut(
   options: RunOptions = {},
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const reached = withResolvers<void>();
     fixture.gate.hold = function* (request: GitHubHttpRequest): Operation<void> {
       if (at(request)) {
@@ -1251,13 +1253,14 @@ function entry(
 }
 
 describe("one entry's pull request", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q1: opens it once, and answers a completed one with no Git and no call", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     fixture.evidence.conversation = [comment(21, "thanks")];
     fixture.evidence.runs = [checkRun(31, "build")];
     const first = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const source = entry({ lines: [...upsert(), ...READS] });
 
     const ran = yield* run(fixture, source, stream, first);
@@ -1312,7 +1315,7 @@ describe("one entry's pull request", () => {
     const pull = stored({ number: 1, title: TITLE, body: BODY, headRef: BRANCH });
     fixture.store.pullRequests.push(pull);
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const source = [
       `<PullRequest url="${LOCATOR}/pull/1" yq=".body" as="description" />`,
       `<PullRequest url="${LOCATOR}/pull/1" as="pr" />`,
@@ -1385,7 +1388,7 @@ describe("one entry's pull request", () => {
     const ran = yield* run(
       fixture,
       `<PullRequest url="${LOCATOR}/pull/1" yq=".title" as="pr" />\n\nTitle {pr.value}`,
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       counted,
       { cwd: fixture.root, root: undefined, refuseNative: true, configured: false },
     );
@@ -1403,7 +1406,7 @@ describe("one entry's pull request", () => {
   it("Q2: a superseding publication of the same branch decides the head", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     // Two publications of one destination in one entry, then the pull request.
     // The second is what the branch at the host holds, so it is the one the
     // pull request may be opened over.
@@ -1436,7 +1439,7 @@ describe("one entry's pull request", () => {
   it("Q3: another checkout's publication of the same commit authorizes nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     // One entry, two Repositories of the same remote. The first publishes the
     // branch; the second fetches and stands on the very same commit, and asks
     // for the pull request there.
@@ -1482,7 +1485,7 @@ describe("one entry's pull request", () => {
   it("Q5: a synthetic publication answer authorizes nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     let answered = 0;
     const ran = yield* run(fixture, entry({ lines: [...upsert()] }), stream, counted, {
       *between(): Operation<void> {
@@ -1595,11 +1598,12 @@ describe("one entry's pull request", () => {
 });
 
 describe("what a bound pull-request body does first", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q26: a Push child and an admitted read both acknowledge before the parent's request", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     // The publication and the evidence read are children of the pull request
     // itself. All of the content finishes before the parent resolves, which is
     // what makes a `<Git.Push />` written inside the body the publication the
@@ -1649,7 +1653,7 @@ describe("what a bound pull-request body does first", () => {
   it("Q27: a failed child read leaves the parent without a publication request", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     fixture.evidence.refuses = 403;
     const source = [
       `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
@@ -1690,7 +1694,7 @@ describe("what a bound pull-request body does first", () => {
   it("Q28: a repository-local component of either name answers instead, and retains nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     // Repository-local Markdown of both names, which the resolver chooses
     // ahead of any registered default — including the one an entry declares in
     // its own scope. Declaring policy under a shared body reserves neither
@@ -1740,6 +1744,7 @@ describe("what a bound pull-request body does first", () => {
 });
 
 describe("resuming a pull request", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q8: an interrupted create resumes the request it saved, not today's head", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
@@ -1921,6 +1926,7 @@ describe("resuming a pull request", () => {
 });
 
 describe("what a reopened entry restores", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q11: a completed upsert and three snapshots restore with refusing leaves", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
@@ -1981,7 +1987,12 @@ describe("what a reopened entry restores", () => {
     const fixture = yield* useFixture();
     const counted = counters();
     const source = entry({ lines: [...upsert()] });
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+    );
     expect(ran.refusal).toBe(undefined);
 
     const resumed = counters();
@@ -2048,6 +2059,7 @@ const FIRST_URL = `${LOCATOR}/pull/1`;
 const SECOND_URL = `${LOCATOR}/pull/2`;
 
 describe("evidence reads inside one entry", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q14: a semantic and a transport handler both compose over a restored snapshot", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
@@ -2059,7 +2071,13 @@ describe("evidence reads inside one entry", () => {
       "",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+      { root: undefined },
+    );
     expect(ran.refusal).toBe(undefined);
     expect(ran.output).toContain("reviews 1");
     const retained = reads(ran.events);
@@ -2131,7 +2149,7 @@ describe("evidence reads inside one entry", () => {
 
     // One outer handler, counting what reaches it.
     let seen = 0;
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const ran = yield* run(fixture, source, stream, counted, {
       root: undefined,
       *between(): Operation<void> {
@@ -2175,7 +2193,7 @@ describe("evidence reads inside one entry", () => {
     // An ordinary lifecycle handler that answers the read itself. This is the
     // supported surface, and what it answers with has answered the document.
     let asked = 0;
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const ran = yield* run(fixture, source, stream, counted, {
       root: undefined,
       *between(): Operation<void> {
@@ -2219,7 +2237,13 @@ describe("evidence reads inside one entry", () => {
       root: undefined,
       allowed: ["https://github.com/owner/elsewhere"],
     };
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, options);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+      options,
+    );
     expect(ran.refusal).toBe(undefined);
     const sent = fixture.store.requests.length;
 
@@ -2267,7 +2291,7 @@ describe("evidence reads inside one entry", () => {
     // written in and the order is arranged rather than hoped for.
     const appended: string[] = [];
     const retained = withResolvers<void>();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     stream.onAppend = (event: DurableEvent) => {
       if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
         return;
@@ -2335,28 +2359,34 @@ describe("evidence reads inside one entry", () => {
 
     let started = 0;
     let refused: string | undefined;
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, {
-      root: undefined,
-      *between(): Operation<void> {
-        yield* PullRequestAPI.around({
-          *read([url, options], next): Operation<PullRequestReadResult> {
-            // A read this handler starts for itself, from inside the dispatch
-            // of an occurrence that asked for something else. There is no
-            // ambient callback to find: the occurrence's own terminal belongs
-            // to the descriptor it dispatched through, and this is not it.
-            if (options.kind === "reviews" && started === 0) {
-              started += 1;
-              try {
-                yield* PullRequestAPI.operations.read(SECOND_URL, { kind: "comments" });
-              } catch (error) {
-                refused = error instanceof Error ? error.message : String(error);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+      {
+        root: undefined,
+        *between(): Operation<void> {
+          yield* PullRequestAPI.around({
+            *read([url, options], next): Operation<PullRequestReadResult> {
+              // A read this handler starts for itself, from inside the dispatch
+              // of an occurrence that asked for something else. There is no
+              // ambient callback to find: the occurrence's own terminal belongs
+              // to the descriptor it dispatched through, and this is not it.
+              if (options.kind === "reviews" && started === 0) {
+                started += 1;
+                try {
+                  yield* PullRequestAPI.operations.read(SECOND_URL, { kind: "comments" });
+                } catch (error) {
+                  refused = error instanceof Error ? error.message : String(error);
+                }
               }
-            }
-            return yield* next(url, options);
-          },
-        });
+              return yield* next(url, options);
+            },
+          });
+        },
       },
-    });
+    );
     expect(started).toBe(1);
     expect(refused).not.toBe(undefined);
     expect(String(refused)).toContain("no pull-request provider handles");
@@ -2369,6 +2399,7 @@ describe("evidence reads inside one entry", () => {
 });
 
 describe("acknowledgement and failure", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q19: a request this journal refused asks the Git host nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
@@ -2443,6 +2474,7 @@ describe("acknowledgement and failure", () => {
 });
 
 describe("the credential one pull-request attempt acquires", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q31: cancelling during acquisition joins the broker and retains the request alone", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
@@ -2452,7 +2484,7 @@ describe("the credential one pull-request attempt acquires", () => {
     // does to it is observable rather than assumed.
     const broker = yield* useBlockingLogin(fixture);
 
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const prefix = yield* scoped(function* (): Operation<readonly DurableEvent[]> {
       const task = yield* spawn(() =>
         run(fixture, entry({ lines: [...upsert(), QUESTION] }), stream, counted, {
@@ -2496,6 +2528,7 @@ describe("the credential one pull-request attempt acquires", () => {
 });
 
 describe("what an entry's assembly reaches", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q22: building the capability acquires nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
@@ -2530,7 +2563,7 @@ describe("what an entry's assembly reaches", () => {
         `reviews {reviews.length}`,
         "",
       ].join("\n"),
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.root, "entry.md")),
       counted,
       { root: undefined },
     );
@@ -2544,7 +2577,7 @@ describe("what an entry's assembly reaches", () => {
     // managed root there is no selection to publish from and none to open a
     // pull request over, and nothing is contacted about it.
     const absent = counters();
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(fixture.root, "entry.md"));
     const opened = yield* run(fixture, entry({ lines: [...upsert()] }), stream, absent, {
       root: undefined,
     });
@@ -2555,6 +2588,7 @@ describe("what an entry's assembly reaches", () => {
 });
 
 describe("a retained record this entry cannot account for", () => {
+  beforeEach(journalBeforeEach(JOURNAL_OWNER));
   it("Q24: every tampered read description refuses before anything replays", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
@@ -2566,7 +2600,13 @@ describe("a retained record this entry cannot account for", () => {
       "",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+      { root: undefined },
+    );
     expect(ran.refusal).toBe(undefined);
     const history = [...ran.events].filter(terminal);
     const retained = history.findIndex(
@@ -2649,7 +2689,13 @@ describe("a retained record this entry cannot account for", () => {
       "",
     ].join("\n");
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+      { root: undefined },
+    );
     expect(ran.refusal).toBe(undefined);
     expect(ran.output).toContain("checks 1");
     const history = [...ran.events].filter(terminal);
@@ -2693,7 +2739,12 @@ describe("a retained record this entry cannot account for", () => {
     const counted = counters();
     const source = entry({ lines: [...upsert()] });
 
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted);
+    const ran = yield* run(
+      fixture,
+      source,
+      yield* useJournalStream(join(fixture.root, "entry.md")),
+      counted,
+    );
     expect(ran.refusal).toBe(undefined);
     const history = [...ran.events].filter(terminal);
     const at = history.findIndex(

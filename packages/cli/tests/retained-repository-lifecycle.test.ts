@@ -16,7 +16,8 @@ import { Permissions } from "@executablemd/runtime";
  * once the holder has gone.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import {
   type Operation,
@@ -322,6 +323,7 @@ function localRecords(events: readonly DurableEvent[]): number {
 
 /** The question a held entry stands at, never answered. */
 const QUESTION = '<Elicit schema={{ type: "object" }} as="answer">Holding</Elicit>';
+const OWNER = "packages/cli/tests/retained-repository-lifecycle.test.ts";
 
 /** A question that is answered at once, for a continuation past one. */
 function answeringOnce(): () => Operation<unknown> {
@@ -332,11 +334,12 @@ function answeringOnce(): () => Operation<unknown> {
 }
 
 describe("the holds an entry takes on the checkout it is working in", () => {
+  beforeEach(journalBeforeEach(OWNER));
   it("E8: lets a second live entry read and change a checkout the first is changing", function* () {
     const fixture = yield* useFixture();
     const holding = counters();
     const second = counters();
-    const first = new InMemoryStream();
+    const first = yield* useJournalStream(join(fixture.checkout, "entry.md"));
 
     yield* scoped(function* (): Operation<void> {
       // One entry that has already changed the checkout and is standing at a
@@ -373,7 +376,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
           "</Dir>",
           '<File path="sentinel.md">sentinel</File>',
         ].join("\n"),
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.checkout, "entry.md")),
         second,
       );
 
@@ -408,7 +411,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
     const performed = yield* entry(
       fixture.checkout,
       ['<Dir path="made">', '<File path="inside.md">inside</File>', "</Dir>"].join("\n"),
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       counted,
     );
 
@@ -434,7 +437,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
         '<File.Delete path="one.md" />',
         "</Dir>",
       ].join("\n"),
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       counted,
     );
 
@@ -513,7 +516,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
         yield* entry(
           fixture.checkout,
           source,
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.checkout, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -531,7 +534,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
       const second = yield* entry(
         fixture.checkout,
         source,
-        new InMemoryStream(),
+        yield* useJournalStream(join(fixture.checkout, "entry.md")),
         blocked,
         answeringOnce(),
         managed,
@@ -550,7 +553,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
     const later = yield* entry(
       fixture.checkout,
       source,
-      new InMemoryStream(),
+      yield* useJournalStream(join(fixture.checkout, "entry.md")),
       after,
       answeringOnce(),
       managed,
@@ -599,7 +602,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
         yield* entry(
           origin,
           ['<Worktree name="held" branch="held">', QUESTION, "</Worktree>"].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(origin, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -914,7 +917,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
             `<Repository name="project" url=${JSON.stringify(origin)} as="project" />`,
             QUESTION,
           ].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(fixture.elsewhere, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -1001,7 +1004,7 @@ describe("the holds an entry takes on the checkout it is working in", () => {
             QUESTION,
             "</Worktree>",
           ].join("\n"),
-          new InMemoryStream(),
+          yield* useJournalStream(join(origin, "entry.md")),
           holding,
           function* (): Operation<void> {
             acquired.resolve();
@@ -1069,7 +1072,7 @@ function leftEntry(
   root: string,
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = yield* useJournalStream(join(checkout, "entry.md"));
     const reached = withResolvers<void>();
     const task = yield* spawn(() =>
       entry(
