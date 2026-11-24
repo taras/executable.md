@@ -33,30 +33,37 @@ answer.
   Repository and cwd selection grant no additional file authority. Shell and
   trusted native code have their own permissions; these XMD limits are not an
   operating-system sandbox.
-- For a small edit to an existing file, submit a read entry such as
-  `<File path="notes.md" />` and inspect its output. Submit the matching patch
-  in a second entry. Check the entry feedback for a file error. A successful
-  patch emits no text. Echoed `<File.Patch>` source means the patch did not
-  execute. When a diff touches a Markdown fence, make the outer diff fence
-  longer than the fence in the diff's context, for example four backticks
-  around a diff with three backticks in its context. Align the two fence
-  markers and align the closing tag with the opening tag. Nested patches
-  use the surrounding document's structural indentation. A missing or
-  premature delimiter is reported before the document runs. After a
-  stale-patch error, read the source again before preparing a fresh diff.
+- For a small edit to an existing file, submit `<File path="notes.md" />`
+  and inspect the result. Submit the matching patch in a second entry. Put
+  both fence markers at the structural body indent and add that same indent
+  before each diff row. Keep the row's diff marker and original spaces.
+  A missing, misindented, or premature delimiter produces a source diagnostic
+  before the entry runs. Use a longer outer fence when the diff contains a
+  fence of the same length. Success emits no text. Read the source again
+  after a stale-patch error.
 
   ````xmd
   <File.Patch path="notes.md">
-
-  ```diff
-  --- a/notes.md
-  +++ b/notes.md
-  @@ -1 +1 @@
-  -Draft
-  +Ready
-  ```
-
+    ```diff
+    @@ -1 +1 @@
+    -Draft
+    +Ready
+    ```
   </File.Patch>
+  ````
+
+  Inside `<Dir>`, put both fence markers four spaces from the left margin.
+
+  ````xmd
+  <Dir path="reports">
+    <File.Patch path="notes.md">
+      ```diff
+      @@ -1 +1 @@
+      -Draft
+      +Ready
+      ```
+    </File.Patch>
+  </Dir>
   ````
 
 - Use `<REPL.ComponentDir>…</REPL.ComponentDir>` to publish or edit session

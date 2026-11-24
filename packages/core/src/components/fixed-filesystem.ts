@@ -174,7 +174,8 @@ const DEFINITIONS: readonly FunctionComponentDefinition[] = Object.freeze([
       description:
         'Apply an exact unified diff to an existing file. Read its current source with `<File path="notes.md" />` before writing `<File.Patch path="notes.md">…</File.Patch>`. A refused patch prints a file error.',
       as: "Optional. Captures the empty string on success.",
-      context: "Exactly one passive fenced unified diff for the relative path.",
+      context:
+        "Exactly one passive fenced unified diff for the relative path. Indent both fence markers to the structural body prefix, two spaces per enclosing block.",
     },
     {},
   ),

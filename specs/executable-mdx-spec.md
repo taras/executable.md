@@ -10001,14 +10001,14 @@ fence info is `diff` or `patch`. The scanner removes the structural prefix
 context marker and leading or trailing spaces. Component and closing-tag text
 inside the fence is literal.
 
-The opening and closing fence markers use the same structural prefix, or
-both omit it. The element's opening and closing tags occupy their own lines
-and align with each other.
-Whitespace between the delimiters is allowed. The fence must end at an
-explicit marker. An exit from a Markdown container cannot close it. A
-malformed boundary reports a source diagnostic before document effects.
-Once the boundary is established, a stale or malformed diff produces a File
-refusal.
+Both fence markers must start immediately after the body's structural prefix.
+That prefix is two spaces for a top-level `<File.Patch>` and four spaces
+when it is directly inside a top-level `<Dir>`. The element tags occupy
+their own lines and align with each other. Whitespace between the
+delimiters is allowed. The fence must end at an explicit marker. An exit
+from a Markdown container cannot close it. A malformed boundary reports a
+source diagnostic before document effects. Once the boundary is
+established, a stale or malformed diff produces a File refusal.
 
 The diff has one or more ordered hunks with exact old and new ranges. Context
 and removed rows must match at those coordinates, including whether a row has
