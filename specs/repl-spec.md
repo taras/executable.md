@@ -2812,8 +2812,7 @@ leaves an admitted entry watching; a Send that submitted it waits for its
 receipt. Reopening an unfinished entry continues the watch with the
 head it pinned and the deadline it started with, so the remaining budget is
 what is left of the original one. Reopening a completed one restores its result
-without asking GitHub anything. The Sidekick reads this as `<Guide.CI />`, which
-also shows how to verify a specific workflow attempt after merge with `gh`.
+without asking GitHub anything. The Sidekick reads this as `<Guide.CI />`.
 
 ### The issue an entry filed, and the one it read
 
