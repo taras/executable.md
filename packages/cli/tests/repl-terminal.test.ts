@@ -82,7 +82,7 @@ import {
   draftText,
   drawerLines,
   entrySettles,
-  openHistory,
+  openHistoryPositions,
   pasteDraft,
   RAIL,
   railMark,
@@ -3072,7 +3072,7 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     // The drawer's own rows list what it actually admitted — not the
     // transcript, which already shows an entry's text before the drawer ever
     // opens and proves nothing about the drawer's own content.
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
     for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
       yield* page.key("ArrowDown");
       yield* sleep(10);
@@ -3082,7 +3082,7 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     );
     // Selecting an earlier position and closing the drawer keeps that
     // selection and the draft untouched.
-    yield* page.press("Entry 1 admitted", { rightOf: "[close]" });
+    yield* page.press("Entry 1 admitted", { rightOf: "[Rounds]" });
     yield* page.until("the first position retained", (one) => one.shows("[live]"));
     yield* closeDrawer(page);
     expect(page.screen().shows("[live]")).toBe(true);

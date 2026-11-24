@@ -1214,17 +1214,23 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       IDLE,
     ).state;
     yield* presenter.commit(
-      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+      viewOf(model, WIDE, {
+        state: { ...history, historyPositions: true },
+        focused: focusedKey(presenter),
+      }),
     );
     const marker = `drawer:marker:${model.checkpoints.at(-1)?.marker ?? ""}`;
     expect(focusedKey(presenter)).toBe(marker);
     const before = yield* presenter.commit(
-      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+      viewOf(model, WIDE, {
+        state: { ...history, historyPositions: true },
+        focused: focusedKey(presenter),
+      }),
     );
     const closeAt = before.boundsOf("drawer:close");
     expect(closeAt).toBeDefined();
     const refused = reduceRepl(
-      history,
+      { ...history, historyPositions: true },
       { kind: "select-scope", scopes: ["entry-1", "Nowhere-9"] },
       model,
       IDLE,
@@ -1735,7 +1741,7 @@ describe("Owned footer, History and single-field inventory", () => {
     ).state;
     const presenter = yield* usePresenter(WIDE);
     const resolved = viewFor(
-      state,
+      { ...state, historyPositions: true },
       projection.value,
       IDLE,
       WIDE,

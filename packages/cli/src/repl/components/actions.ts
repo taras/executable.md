@@ -186,6 +186,7 @@ export type ReplAction =
   /** Close the innermost open drawer. Never an answer to anything. */
   | { readonly kind: "close-drawer" }
   /** Freeze the view at one history position. */
+  | { readonly kind: "history-positions"; readonly marker?: string }
   | { readonly kind: "select-marker"; readonly marker: string }
   /** Return to the Journal head. */
   | { readonly kind: "go-live" }

@@ -283,6 +283,12 @@ function activation(input: ReplViewData): ReplAction | undefined {
     }
     return { kind: "select-scope", scopes: keys };
   }
+  if (select === "history-positions") {
+    return {
+      kind: "history-positions",
+      ...(typeof named["marker"] === "string" ? { marker: named["marker"] } : {}),
+    };
+  }
   if (select === "marker") {
     const marker = named["marker"];
     return typeof marker === "string" ? { kind: "select-marker", marker } : undefined;

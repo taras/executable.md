@@ -605,6 +605,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
       model,
       IDLE,
     ).state;
+    state = reduceRepl(state, { kind: "history-positions" }, model, IDLE).state;
     const opened = yield* commit();
     const markers = [...model.checkpoints].reverse().map((one) => `drawer:marker:${one.marker}`);
     const last = markers.at(-1);

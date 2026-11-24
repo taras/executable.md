@@ -130,7 +130,7 @@ import {
   closeDrawer,
   draftHolds,
   draftText,
-  openHistory,
+  openHistoryPositions,
   SIDEKICK_PANE,
   drawerLines,
   drawerOpen,
@@ -6175,7 +6175,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
     yield* draftText(page, "keep this draft");
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
     expect(page.screen().shows("History")).toBe(true);
     yield* page.type("ignored by the drawer");
     yield* closeDrawer(page);

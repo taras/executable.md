@@ -280,7 +280,7 @@ export function drawerOpen(reading: ScreenReading): boolean {
 }
 
 /** Open the History drawer and wait for the positions it offers. */
-export function* openHistory(page: ReplPage): Operation<void> {
+export function* openHistoryPositions(page: ReplPage): Operation<void> {
   yield* page.press("[History]");
   yield* page.until(
     "the History drawer owning its keys",
@@ -292,6 +292,8 @@ export function* openHistory(page: ReplPage): Operation<void> {
       ) &&
       !one.shows("Enter opens"),
   );
+  yield* page.press("[Positions]");
+  yield* page.until("all retained positions", (one) => one.shows("[Rounds]"));
 }
 
 /** Put the open drawer away with its own Close. */
@@ -598,7 +600,7 @@ export function* scrollDrawerTo(page: ReplPage, text: string): Operation<void> {
 /** The open drawer's own rows, from the way out it draws rightward. */
 function drawerEdge(reading: ScreenReading): number {
   return Math.min(
-    ...["[submit]", "[stop]", "[close]"]
+    ...["[submit]", "[stop]", "[Rounds]", "[Positions]", "[close]"]
       .filter((label) => reading.found(label, { onRow: "[close]" }) === 1)
       .map((label) => reading.locate(label, { onRow: "[close]" }).column),
   );

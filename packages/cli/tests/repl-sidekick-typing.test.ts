@@ -9,7 +9,7 @@ import {
   typed,
   draftText,
   draftShows,
-  openHistory,
+  openHistoryPositions,
   selectPane,
   openConfigure,
   replaceAgent,
@@ -358,7 +358,7 @@ describe("1048 — generated retained output", () => {
     yield* page.until("the middle Draft caret before History", (one) => draftShows(one, "draf!t"));
     yield* page.key("Backspace");
     yield* page.until("the Draft probe erased", (one) => draftShows(one, "draft"));
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
     yield* page.key("Escape");
     yield* page.until("History closed", (one) => !one.shows("[close]"));
     yield* page.type("!");
