@@ -4401,7 +4401,7 @@ unchanged.
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Workflow and ordinary runs check operator configuration before contacting GitHub |
-| `<PullRequest.Checks watch>` (§7.7.1) | built by #1459; REPL entries on Deno and in the compiled binary only. Polls the ordinary `checks` and `details` reads against one deadline, retains its deadline, pinned head and result, and refuses `watch` in workflow and ordinary runs |
+| `<PullRequest.Checks watch>` (§7.7.1) | built by #1459; REPL entries on Deno and in the compiled binary only. Polls the ordinary `checks` and `details` reads with an optional deadline, retains its timing mode, pinned head and result, and refuses `watch` in workflow and ordinary runs |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
