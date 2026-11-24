@@ -20,6 +20,7 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { formatSource } from "../src/format-source.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { asText } from "./helpers.ts";
 
@@ -363,5 +364,52 @@ describe("Markdown boundary execution", () => {
       expect(String(failure)).toContain(message);
       expect(yield* exists(file)).toBe(false);
     }
+  });
+});
+
+describe("Formatter preservation", () => {
+  it("distinguishes scanner refusals and incomplete executable fences from passive Markdown", function* () {
+    const refused = formatSource("Lead <Output\n>text</Output>\n");
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.message).toBe("Multiline XMD opening tag starts after prose at 1:6");
+    }
+
+    const executable = formatSource("```bash exec\nprintf 'never runs'\n");
+    expect(executable.ok).toBe(false);
+    if (!executable.ok) {
+      expect(executable.error.message).toBe("Incomplete executable fence at 1:1");
+    }
+
+    const passive = "> ~~~bash exec\n> <Output>\n";
+    expect(formatSource(passive)).toEqual({ ok: true, value: passive });
+  });
+
+  it("keeps significant file whitespace and literal and executable fence payloads", function* () {
+    const opening = '<File path="message.txt">\n';
+    const closing = "  </If>\n</File>";
+    const source =
+      opening +
+      "  <If condition={true}>\n" +
+      "    \n  Keep two spaces.\n\tKeep this tab.\n" +
+      '> ~~~sh exec\n> <File path="never-run.txt" />\n> ~~~\n' +
+      "```bash exec\ncat <<'TEXT'\n   indented\nTEXT\n```\n" +
+      closing;
+    const expected =
+      opening +
+      "  <If condition={true}>\n" +
+      "\n      Keep two spaces.\n    \tKeep this tab.\n" +
+      '    > ~~~sh exec\n    > <File path="never-run.txt" />\n    > ~~~\n' +
+      "    ```bash exec\n    cat <<'TEXT'\n       indented\n    TEXT\n    ```\n" +
+      closing;
+    const formatted = formatSource(source);
+    expect(formatted).toEqual({ ok: true, value: expected });
+    expect(formatSource(expected)).toEqual(formatted);
+    const before = yield* run(source);
+    const after = yield* run(expected);
+    expect(after.output).toBe(before.output);
+    expect(after.stdout).toBe(before.stdout);
+    expect(yield* after.read("message.txt")).toBe(yield* before.read("message.txt"));
+    expect(yield* after.read("message.txt")).toContain("  Keep two spaces.\n\tKeep this tab.");
   });
 });

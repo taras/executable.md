@@ -62,7 +62,7 @@ if (isReplSubmit(process.argv.slice(2))) {
         yield* useNodeRepl();
         return yield* runReplSubmit(
           process.argv.slice(2),
-          () => readInputStream(process.stdin),
+          (options) => readInputStream(process.stdin, options),
           interrupted.operation,
           (record) =>
             action<void>((resolve, reject) => {
@@ -125,7 +125,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       args,
       useNodeService,
       UPGRADE,
-      () => readInputStream(process.stdin),
+      (options) => readInputStream(process.stdin, options),
       importPluginModule,
       unsupportedWorkflowHost,
       unassembledMachineSessions(),

@@ -13,6 +13,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { Component } from "../src/component-api.ts";
+import { formatSource } from "../src/format-source.ts";
 import { getExpansion } from "../src/expansion.ts";
 import type { Expansion } from "../src/expansion.ts";
 import { expandSegments } from "../src/expand.ts";
@@ -260,5 +261,27 @@ describe("Tier IM — what an expanding element knows about itself", () => {
 
     const segments = yield* run("<Probe />\n", definitions, "doc.md");
     expect(renderSegments(segments)).toContain("probed");
+  });
+});
+
+describe("Formatter source positions", () => {
+  it("reports the formatted column to components that observe the call site", function* () {
+    const original = "<Wrap>\n<Probe />\n</Wrap>\n";
+    const formatted = formatSource(original);
+    expect(formatted).toEqual({ ok: true, value: "<Wrap>\n  <Probe />\n</Wrap>\n" });
+    if (!formatted.ok) {
+      throw formatted.error;
+    }
+    const definitions = {
+      Wrap: component("Wrap", function* () {
+        return yield* Component.operations.content();
+      }),
+      Probe: component("Probe", function* () {
+        return String((yield* getExpansion()).position?.column);
+      }),
+    };
+    const before = renderSegments(yield* run(original, definitions, "doc.md"));
+    const after = renderSegments(yield* run(formatted.value, definitions, "doc.md"));
+    expect([before, after]).toEqual(["1\n", "3\n"]);
   });
 });

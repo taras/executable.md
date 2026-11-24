@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Component, content, hasContent } from "../src/component-api.ts";
+import { formatSource } from "../src/format-source.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { collect } from "../src/collect.ts";
@@ -406,6 +407,22 @@ describe("Tier GX — the trusted-host seam", () => {
 
     expect(attempt.failure).toBe(undefined);
     expect(attempt.output).toContain("probed");
+  });
+
+  it("admits formatted generated source with the same output and effect", function* () {
+    const source = "<If condition={true}>\n<Probe />\n</If>\n";
+    const formatted = formatSource(source);
+    expect(formatted).toEqual({ ok: true, value: "<If condition={true}>\n  <Probe />\n</If>\n" });
+    if (!formatted.ok) {
+      throw formatted.error;
+    }
+    expect(formatSource(formatted.value)).toEqual(formatted);
+    for (const fragment of [source, formatted.value]) {
+      const attempt = yield* evaluate(request(fragment, [probe()]));
+      expect(attempt.failure).toBeUndefined();
+      expect(attempt.output).toBe("probed\n");
+      expect(admittedFragments(attempt.events)).toHaveLength(1);
+    }
   });
 
   it("GX2: records one admission naming the source and the selected identities", function* () {

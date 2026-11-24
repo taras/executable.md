@@ -45,6 +45,7 @@ conformance follows from the text - without reading the implementation.
 - Workflow behavior: workflow-workspace-spec.md (single home). REPL behavior
   including composition: repl-spec.md (single home). Agent conversations:
   acp-client-spec.md; native handoff: native-agent-session-launch-spec.md.
+- Formatter command and source preservation: [formatter-spec.md](formatter-spec.md).
 - Each rule has exactly one home; other documents link to it. When two
   documents disagree, the owning home wins - fix the stale copy in the same
   change.

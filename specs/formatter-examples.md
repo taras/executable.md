@@ -1,7 +1,6 @@
 # XMD formatter examples
 
-These examples record the proposed XMD whitespace behavior for
-[issue #1025](https://github.com/taras/executable.md/issues/1025). Structural
+These examples illustrate the [formatter contract](formatter-spec.md). Structural
 indentation is part of ordinary XMD syntax. The formatter uses two spaces per
 level. In the expected strings below, `\n` denotes a newline.
 

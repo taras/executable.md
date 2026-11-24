@@ -10,7 +10,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { runCli, runShell } from "@executablemd/test-support/launch";
+import { cliShellCommand, runCli, runShell } from "@executablemd/test-support/launch";
 import { when } from "@effectionx/converge";
 import { Buffer } from "node:buffer";
 import type { ChildProcess } from "node:child_process";
@@ -956,3 +956,66 @@ function killGroup(leader: number): void {
     // Already gone.
   }
 }
+
+describe("xmd fmt", { sanitizeOps: false, sanitizeResources: false }, () => {
+  const input = '\uFEFF---\r\ntitle: Sample\r\n---\r\n<File path="effect.txt">\nvalue\r\n</File>';
+  const formatted = input.replace("\nvalue", "\n  value");
+
+  it("pipes exact source bytes without executing the document", function* () {
+    yield* useFixture({ "input.md": input }, function* (cwd) {
+      const command = cliShellCommand(["fmt", "-"]);
+      const result = yield* runShell(`${command} < input.md > output.md`, { cwd }).join();
+      expect([result.code, result.stderr, result.stdout]).toEqual([0, "", ""]);
+      expect(yield* readTextFile(path.join(cwd, "output.md"))).toBe(formatted);
+      expect(yield* exists(path.join(cwd, "effect.txt"))).toBe(false);
+    });
+  });
+
+  it("checks in path order, formats eligible files, and accepts an explicit extension", function* () {
+    yield* useFixture({ "z.md": input, "explicit.txt": input }, function* (cwd) {
+      for (const dir of ["nested", ".git", "node_modules"]) {
+        yield* ensureDir(path.join(cwd, dir));
+        yield* writeTextFile(path.join(cwd, dir, "a.md"), input);
+      }
+      const check = yield* runCli(["fmt", "--check"], { cwd }).join();
+      expect([check.code, check.stdout, check.stderr]).toEqual([1, "nested/a.md\nz.md\n", ""]);
+      expect(yield* readTextFile(path.join(cwd, "z.md"))).toBe(input);
+      const write = yield* runCli(["fmt", "."], { cwd }).join();
+      expect([write.code, write.stdout, write.stderr]).toEqual([0, "", ""]);
+      expect(yield* readTextFile(path.join(cwd, "nested/a.md"))).toBe(formatted);
+      expect(yield* readTextFile(path.join(cwd, "z.md"))).toBe(formatted);
+      for (const file of [".git/a.md", "node_modules/a.md", "explicit.txt"]) {
+        expect(yield* readTextFile(path.join(cwd, file))).toBe(input);
+      }
+      const clean = yield* runCli(["fmt", "--check"], { cwd }).join();
+      expect([clean.code, clean.stdout, clean.stderr]).toEqual([0, "", ""]);
+      const explicit = yield* runCli(["fmt", "explicit.txt"], { cwd }).join();
+      expect([explicit.code, explicit.stdout, explicit.stderr]).toEqual([0, "", ""]);
+      expect(yield* readTextFile(path.join(cwd, "explicit.txt"))).toBe(formatted);
+    });
+  });
+
+  it("shows usage and refuses malformed input and unsupported arguments", function* () {
+    const malformed = "---\ntitle: Sample\n---\n<Output>\n";
+    yield* useFixture({ "bad.md": malformed }, function* (cwd) {
+      const help = yield* runCli(["fmt"], { cwd }).join();
+      expect(help.code).toBe(0);
+      expect(help.stdout).toContain("Usage: xmd fmt");
+      const invalid = yield* runCli(["fmt", "--check", "."], { cwd }).join();
+      expect([invalid.code, invalid.stdout]).toEqual([2, ""]);
+      const file = yield* runCli(["fmt", "bad.md"], { cwd }).join();
+      expect([file.code, file.stdout, file.stderr.trim()]).toEqual([
+        2,
+        "",
+        "xmd fmt: bad.md: Incomplete XMD element <Output> at 4:1",
+      ]);
+      expect(yield* readTextFile(path.join(cwd, "bad.md"))).toBe(malformed);
+      const piped = yield* runCli(["fmt", "-"], { cwd, stdin: malformed }).join();
+      expect([piped.code, piped.stdout, piped.stderr.trim()]).toEqual([
+        2,
+        "",
+        "xmd fmt: <stdin>: Incomplete XMD element <Output> at 4:1",
+      ]);
+    });
+  });
+});

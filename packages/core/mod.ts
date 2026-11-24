@@ -70,6 +70,8 @@ export {
 } from "./src/component-api.ts";
 
 export { inspectSource, inspectSourceDraft } from "./src/source-inspection.ts";
+export { formatSource } from "./src/format-source.ts";
+
 export type {
   ScanDiagnostic,
   SourceDraftInspection,
