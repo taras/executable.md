@@ -96,6 +96,8 @@ export interface GitHubAccess {
   /** The credential, read no earlier than the first request that needs one. */
   token(): Operation<string | undefined>;
   send(request: GitHubHttpRequest): Operation<GitHubHttpResponse>;
+  /** Opens an unbuffered response with redirects disabled and scope-bound cancellation. */
+  openResponse?(request: GitHubHttpRequest): Operation<Response>;
 }
 
 /** The GitHub repository this locator names, or `undefined` when it names none. */
@@ -182,6 +184,7 @@ function accessSession(access: GitHubAccess): GitHubAccess {
       }
       return held;
     },
+    openResponse: access.openResponse?.bind(access),
     send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
       return access.send(request);
     },

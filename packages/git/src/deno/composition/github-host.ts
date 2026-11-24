@@ -136,6 +136,18 @@ export function denoGitHubAccess(
       }
       return yield* login.token();
     },
+    *openResponse(request): Operation<Response> {
+      const controller = new AbortController();
+      yield* ensure(() => controller.abort());
+      return yield* until(
+        fetch(request.url, {
+          method: request.method,
+          headers: request.headers,
+          redirect: "manual",
+          signal: controller.signal,
+        }),
+      );
+    },
     *send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
       return yield* scoped(function* () {
         const controller = new AbortController();

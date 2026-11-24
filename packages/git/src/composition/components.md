@@ -309,6 +309,17 @@ neutral pass, and one failure fails — or `incomplete` with a `reason` of
 `timeout`, `head-changed` or `read-error`. Branch on `outcome` before filtering
 `checks`: an empty list of failures can mean CI is still running.
 
+Add `logs` to save logs for completed GitHub Actions jobs whose conclusion is
+`failure`.
+
+```xmd
+<PullRequest.Checks url={pullRequest.url} logs="evidence" as="result" />
+```
+
+With `logs`, a snapshot binds `{checks, logs}`. A settled REPL watch includes
+`logs` with its usual result. Download receipts and errors leave the CI
+conclusions intact. Each downloaded log uses a run, attempt, and job filename.
+
 ## GitHub.Search
 
 Search the selected GitHub repository for issues or pull requests.

@@ -25,7 +25,10 @@
  * belong to that one call, so two concurrent reads cannot reach each other's.
  */
 
+import { useGitHubCheckLogs } from "./github-check-log.ts";
 import type { Operation } from "effection";
+import { hostFilesHandler } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
 import {
   gitHubPullRequestAccess,
   gitHubPullRequestReadHandler,
@@ -90,4 +93,12 @@ export function denoPullRequestOperations(): DenoPullRequestOperations {
       return pullRequestProvider(access, origin, inputs);
     },
   };
+}
+
+export function useReplGitHubCheckLogs(project: string, access?: HostFilesAccess): Operation<void> {
+  return useGitHubCheckLogs(project, replGitHubPullRequestReadResolver(), {
+    // This effect owns the receipt. Passing the body through the entry file
+    // recorder would retain the payload and introduce a second effect.
+    write: hostFilesHandler({ access }).writeTextFile,
+  });
 }

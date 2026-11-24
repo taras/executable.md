@@ -70,6 +70,7 @@ import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { sourceDescription } from "@executablemd/core";
 import type { SourcePosition } from "@executablemd/core";
+import { parseFilesFatal } from "@executablemd/runtime";
 import { PullRequestReadError } from "../../composition/errors.ts";
 import {
   parseCompletePullRequestReadResult,
@@ -266,7 +267,8 @@ function durabilityFailure(error: Error): Error | undefined {
     seen.add(current);
     if (
       !(current instanceof PullRequestReadError) &&
-      (current instanceof DurablePersistenceError ||
+      ((current instanceof Error && parseFilesFatal(current) !== undefined) ||
+        current instanceof DurablePersistenceError ||
         current instanceof StaleInputError ||
         current instanceof DivergenceError ||
         current instanceof TerminalDivergenceError ||

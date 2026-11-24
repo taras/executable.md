@@ -30,6 +30,7 @@ import type {
 import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import { downloadFailedChecks, logsDirectory } from "../check-logs.ts";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { PullRequestReadError } from "../errors.ts";
 import {
@@ -86,6 +87,11 @@ const checksProps: PropsSchema = {
       description:
         "Wait until every check reported for the pinned head settles, instead of reading " +
         "once, and bind one watch result. Only a REPL entry watches.",
+    },
+    logs: {
+      type: "string",
+      minLength: 1,
+      description: "Project-relative directory for logs of failed GitHub Actions jobs.",
     },
     timeoutSeconds: {
       type: "integer",
@@ -244,7 +250,45 @@ const checkWatchResult: JsonObject = {
 };
 
 /** The snapshot array, or one watch result when `watch` is written. */
-export const checksReturns: ReturnsSchema = { oneOf: [checksSnapshot, checkWatchResult] };
+const logReceipts = array({
+  oneOf: [
+    closed({
+      checkId: { type: "string" },
+      status: { const: "saved" },
+      path: { type: "string" },
+      jobId: { type: "string" },
+      runId: { type: "string" },
+      runAttempt: { type: "integer", minimum: 1 },
+      headSha: { type: "string" },
+      sha256: { type: "string" },
+    }),
+    closed({
+      checkId: { type: "string" },
+      status: { const: "error" },
+      message: { type: "string" },
+    }),
+  ],
+});
+
+export const checksReturns: ReturnsSchema = {
+  oneOf: [
+    checksSnapshot,
+    checkWatchResult,
+    closed({ checks: checksSnapshot, logs: logReceipts }),
+    {
+      type: "object",
+      properties: {
+        outcome: { enum: ["success", "failure", "incomplete"] },
+        reason: { enum: ["timeout", "head-changed", "read-error"] },
+        headSha: NULLABLE_TEXT,
+        checks: checksSnapshot,
+        logs: logReceipts,
+      },
+      required: ["outcome", "headSha", "checks", "logs"],
+      additionalProperties: false,
+    },
+  ],
+};
 
 function read(
   kind: PullRequestReadKind,
@@ -254,6 +298,7 @@ function read(
     props: Record<string, Json>,
     operations: PullRequestReadOperations,
   ): Operation<Json> {
+    const directory = kind === "checks" ? logsDirectory(props.logs) : undefined;
     const timeoutSeconds = kind === "checks" ? watchTimeout(props, element) : undefined;
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
@@ -277,7 +322,17 @@ function read(
     }
 
     if (kind === "checks" && props.watch === true) {
-      return yield* watched(operations, { url, provider, timeoutSeconds }, element);
+      const watch = yield* watched(operations, { url, provider, timeoutSeconds }, element);
+      const value = checkWatchResultJson(watch);
+      return directory === undefined
+        ? value
+        : {
+            ...value,
+            logs:
+              watch.outcome === "incomplete"
+                ? []
+                : yield* downloadFailedChecks(url, provider, directory, watch.checks),
+          };
     }
 
     const result = yield* operations.read({ url, kind, provider });
@@ -303,7 +358,13 @@ function read(
         "what this element was finally answered with is not the evidence that read produces.",
       );
     }
-    return pullRequestReadResultJson(evidence);
+    const value = pullRequestReadResultJson(evidence);
+    return evidence.kind === "checks" && directory !== undefined
+      ? {
+          checks: value,
+          logs: yield* downloadFailedChecks(url, provider, directory, evidence.items),
+        }
+      : value;
   };
 }
 
@@ -340,7 +401,7 @@ function* watched(
   operations: PullRequestReadOperations,
   invocation: { url: string; provider: string | undefined; timeoutSeconds: number | undefined },
   element: string,
-): Operation<Json> {
+): Operation<NonNullable<ReturnType<typeof parseCheckWatchResult>>> {
   const result = parseCheckWatchResult(yield* operations.watch(invocation));
   if (result === undefined) {
     throw new PullRequestReadError(
@@ -349,7 +410,7 @@ function* watched(
       "what this watch was finally answered with is not the result a watch produces.",
     );
   }
-  return checkWatchResultJson(result);
+  return result;
 }
 
 /**
@@ -396,10 +457,12 @@ const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentatio
       description:
         `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` ` +
         `reads check runs and commit statuses for its head. In a REPL entry, add ` +
-        `\`watch\` to wait for checks to settle. Supply \`timeoutSeconds\` to set a deadline.`,
+        `\`watch\` to wait for checks to settle. Supply \`timeoutSeconds\` to set a deadline. ` +
+        `Supply \`logs\` to save failed GitHub Actions job logs.`,
       as:
         "Required. Each check's kind, name, head commit and outcome; with `watch`, one " +
-        "result with the outcome, reason, pinned head and those checks.",
+        "result with the outcome, reason, pinned head and those checks. " +
+        "With logs, the result includes download receipts or errors.",
       context: null,
     },
   },

@@ -56,7 +56,10 @@ export { locatorFingerprint } from "./src/deno/composition/locator.ts";
 export type { ObservationPlace } from "./src/deno/composition/observations.ts";
 export { gitOperationFingerprint } from "./src/deno/composition/operations.ts";
 export type { AdmittedReadExecution } from "./src/deno/composition/pull-request-reads.ts";
-export { denoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
+export {
+  denoPullRequestOperations,
+  useReplGitHubCheckLogs,
+} from "./src/deno/composition/pull-request-host.ts";
 export type { DenoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
 export {
   PULL_REQUEST_READ,

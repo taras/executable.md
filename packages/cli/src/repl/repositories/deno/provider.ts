@@ -57,7 +57,11 @@ import { realpath } from "node:fs/promises";
 import { ensureDir } from "@effectionx/fs";
 import { cwd, Files } from "@executablemd/runtime";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
-import { denoPullRequestOperations, useDenoRepositoryOperations } from "@executablemd/git/deno";
+import {
+  denoPullRequestOperations,
+  useDenoRepositoryOperations,
+  useReplGitHubCheckLogs,
+} from "@executablemd/git/deno";
 import type { DenoPullRequestOperations, DenoRepositoryOperations } from "@executablemd/git/deno";
 import { Repository } from "@executablemd/git/api";
 import type { RepositoryRequest, WorktreeRequest } from "@executablemd/git/api";
@@ -298,7 +302,13 @@ export function* replRepositoryInstallation(
     filesystem: filesystem.filesystem,
     components,
     admissions: [...admissions, ...(filesystem.admissions ?? [])],
-    install: () => useEntryIssueTransport({}),
+    *install() {
+      yield* useEntryIssueTransport({});
+      yield* useReplGitHubCheckLogs(
+        options.access?.project ?? options.projectCwd ?? (yield* cwd()),
+        options.access,
+      );
+    },
   };
 }
 

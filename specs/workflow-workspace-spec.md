@@ -2340,6 +2340,64 @@ restores its result without a read, a sleep or a progress line. Cancellation
 aborts outstanding work and publishes neither the effect in progress nor a
 result binding.
 
+#### 7.7.2 Saving failed GitHub Actions job logs
+
+```mdx
+<PullRequest.Checks url={pullRequest.url} logs="evidence" as="result" />
+<PullRequest.Checks url={pullRequest.url} watch logs="evidence" as="watched" />
+```
+
+With the optional `logs` directory, a snapshot binds `{checks, logs}` and a
+REPL watch adds `logs` to its usual result. An incomplete watch binds an empty
+`logs` array. Omit `logs` to get the usual snapshot or watch behavior and
+bindings.
+
+A snapshot selects completed check runs with conclusion `failure` from its
+pinned head. A settled watch uses the same selection from its final checks.
+Other conclusions, pending checks, commit statuses, and checks from other
+apps are skipped. Selection preserves check order and considers each check
+ID once. Downloads use the GitHub adapter for `https://github.com` pull
+requests, with the same read configuration as the snapshot or watch.
+
+For each candidate, the adapter verifies the pull request number, base
+repository, and pinned head. It verifies the check's identity, app, and
+failure, the completed Actions job's association, head and failure, and the
+run attempt's identity, repository, and head. A check from another app yields
+no log result. A job-log request must return a single HTTPS redirect. The
+storage request carries no GitHub credential or GitHub API headers.
+
+The directory is relative to the project root, or to the managed Workflow
+Workspace root. It uses forward-slash segments and excludes empty segments,
+`.`, `..`, drive prefixes, and control characters. Each file is named
+`run-<runId>-attempt-<runAttempt>-job-<jobId>.log`. Files permissions and
+destination resolution apply. The adapter accepts a nonempty valid UTF-8
+response of at most 16 MiB. It enforces the limit while reading even without
+`Content-Length`, and preserves the bytes, including any byte order mark and
+original line endings.
+
+A successful log receipt is
+`{checkId, status: "saved", path, jobId, runId, runAttempt, headSha, sha256}`.
+An ordinary download or publication failure yields
+`{checkId, status: "error", message}`. Check records and the watch outcome
+keep their CI conclusions. IDs are decimal strings, the attempt is a
+positive integer, and `sha256` is the lowercase SHA-256 of the saved bytes.
+
+Each selected check has its own effect, named by the authored occurrence,
+subject, and destination directory. The effect owns verification, download,
+and publication. The Workspace commits the receipt with the file. The REPL
+uses the permission-checked host writer and records the compact receipt
+without routing the payload through the entry file recorder. The effect
+journal carries identity and outcome only. Completed outcomes restore during
+partial replay without checking the live head or contacting GitHub.
+
+No file is written until the full transfer is verified. A failed or
+interrupted transfer leaves any previous file intact. A successful publication
+can replace an earlier file at the same path with a complete version. If a
+host stops after the atomic rename and before acknowledgement, a continuation
+can retry the unacknowledged effect. A host commit error can leave either
+complete version and yields an error receipt. A rejected Workspace write
+rolls back the mutation.
+
 #### GitHub repository search
 
 `<GitHub.Search query="is:pr is:open" as="page" />` is a self-closing
@@ -4459,6 +4517,7 @@ unchanged.
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | self-closing `<PullRequest />` (§7.5), `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576 and #1400; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Workflow and ordinary runs check operator configuration before contacting GitHub |
 | `<PullRequest.Checks watch>` (§7.7.1) | built by #1459; REPL entries on Deno and in the compiled binary only. Polls the ordinary `checks` and `details` reads with an optional deadline, retains its timing mode, pinned head and result, and refuses `watch` in workflow and ordinary runs |
+| `<PullRequest.Checks logs>` (§7.7.2) | Deno Git Plugin. Saves bounded UTF-8 logs for failed Actions jobs and retains compact per-check receipts |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
