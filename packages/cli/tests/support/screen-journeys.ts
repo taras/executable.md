@@ -284,7 +284,13 @@ export function* openHistory(page: ReplPage): Operation<void> {
   yield* page.press("[History]");
   yield* page.until(
     "the History drawer owning its keys",
-    (one) => drawerOpen(one) && one.shows("History") && !one.shows("Enter opens"),
+    (one) =>
+      drawerOpen(one) &&
+      one.rows.some(
+        (row) =>
+          row.includes("History") && !row.includes("[History]") && !row.includes("opens History"),
+      ) &&
+      !one.shows("Enter opens"),
   );
 }
 
