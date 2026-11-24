@@ -1,19 +1,24 @@
 import { scanSegments } from "../../core/src/scanner.ts";
 import { registerComponents } from "../../core/src/components/registration.ts";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { mountedRun, trace } from "./support/mount-run.ts";
 import { MOUNT_FILE, parseMountRecord } from "../src/repl/mount-records.ts";
 import { parseReplLocalRecord, REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
 import { parseFilesFailure, useHostFiles } from "@executablemd/runtime";
-import { collect, inlineSource } from "@executablemd/core";
+import { collect, inlineSource, INLINE_SOURCE_PATH } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import type { FilePathInput } from "@executablemd/runtime";
 
 const question = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
+const OWNER = "packages/cli/tests/retained-mount-files.test.ts";
+
 describe("retained mount files", () => {
+  beforeEach(journalBeforeEach(OWNER));
+
   it("985: Content carries mounted placement through retained read continuation", function* () {
     const wrapper = {
       *before() {
@@ -161,7 +166,13 @@ describe("retained mount files", () => {
         });
       },
     };
-    const ordinary = yield* mountedRun(source, new InMemoryStream(), [], trace(), refusal);
+    const ordinary = yield* mountedRun(
+      source,
+      yield* useJournalStream(INLINE_SOURCE_PATH),
+      [],
+      trace(),
+      refusal,
+    );
     expect(ordinary).toContain('"../outside.md" resolves outside the working directory.');
     for (const coverageRoot of [undefined, "/external"]) {
       const stream = new InMemoryStream();
@@ -250,7 +261,7 @@ describe("retained mount files", () => {
       const fresh = trace();
       yield* mountedRun(
         '<Dir path="/reference"><File path="old.md" /></Dir>',
-        new InMemoryStream(),
+        yield* useJournalStream(INLINE_SOURCE_PATH),
         mounts,
         fresh,
       );
