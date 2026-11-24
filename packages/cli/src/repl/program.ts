@@ -2641,7 +2641,6 @@ function* drive(
               Math.max(0, draftWindow.length - draftWindow.count),
             ),
           );
-          yield* draw();
         }
         return false;
       }
