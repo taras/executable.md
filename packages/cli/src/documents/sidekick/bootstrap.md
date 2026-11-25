@@ -18,6 +18,15 @@ for read-only session assets and `<REPL.ComponentDir>` to author session source.
 components. Configured component directories are searched before this session’s
 `components/`; inspect the selected definition before invoking it.
 
+Before copying an entry that does the same job, or when a failure is likely to
+recur on the next item, consider improving the workflow. Look for an existing
+component first. If a small session component would help, you may create and
+test it without asking again, within the current task and permissions. Read
+`<Guide.Entries />` for how to write and test it. When you improve the workflow,
+turn any observed failure into a regression case. Use the tested improvement
+on the next real item and tell the person what changed and how you verified it.
+Follow the existing decision process for changes to repository contracts.
+
 TEMPORARY (https://github.com/taras/executable.md/issues/999): before drafting
 entries, keep large workflow records, logs, artifacts and reports in project
 files. Keep ordinary paths and small necessary summaries/status in root
