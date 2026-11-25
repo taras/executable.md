@@ -6495,9 +6495,19 @@ export function* prepareFrame(
     }
     return Ok(undefined);
   };
-  const edited = yield* collect(presentationFor(view, context).descriptions);
-  if (!edited.ok) {
-    return edited;
+  // Outside drawers, staged fields are Message, Draft and TODO. Require their
+  // actual fits; focus alone says nothing about the other mounted editors.
+  const editorsPrepared =
+    workspace &&
+    !modalOpen(view) &&
+    editors.has("sidekick:message") &&
+    (!view.state.draftOpen || editors.has("footer:input")) &&
+    (view.state.todoEditor === undefined || editors.has("todo:editor"));
+  if (!editorsPrepared) {
+    const edited = yield* collect(presentationFor(view, context).descriptions);
+    if (!edited.ok) {
+      return edited;
+    }
   }
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

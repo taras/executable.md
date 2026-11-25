@@ -99,7 +99,7 @@ describe("1048 — prepare only admitted chat descriptions", () => {
         const admittedSessions = sessions.rows
           .slice(sessionWindow.from, sessionWindow.from + sessionWindow.count)
           .map((one) => one.key);
-        expect(sessionKeys).toEqual([...admittedSessions, ...admittedSessions]);
+        expect(sessionKeys).toEqual(admittedSessions);
         console.log(
           JSON.stringify({
             rounds,
@@ -109,10 +109,22 @@ describe("1048 — prepare only admitted chat descriptions", () => {
           }),
         );
         expect(sessions).toBe(warm.value.context.sessions);
-        expect(keys).toEqual([...admitted, ...admitted]);
+        expect(keys).toEqual(admitted);
         expect(sequence).toBe(warm.value.context.chatSequence);
         expect(window.from).toBeGreaterThan(32);
         counts.push(keys.length);
+        const configuring = yield* prepareFrame(renderer, {
+          ...view,
+          focused: "drawer:configure:agent",
+          state: {
+            ...view.state,
+            configuring: { ...view.state.configuring, open: true },
+          },
+        });
+        if (!configuring.ok) {
+          throw configuring.error;
+        }
+        expect(configuring.value.context.editors?.has("drawer:configure:agent")).toBe(true);
       });
     }
     expect(counts[1]).toBe(counts[0]);
