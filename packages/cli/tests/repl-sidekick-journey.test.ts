@@ -68,7 +68,9 @@ import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
 import { sidekickChatLines } from "../src/repl/application.ts";
 import { sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
+import { designatedResults } from "../src/repl/sidekick/feedback.ts";
 import { rootReads } from "../src/repl/sidekick/requests.ts";
+import { ReplClock } from "../src/repl/frame.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
 import type { SidekickOwner, SidekickTurn } from "../src/repl/sidekick/owner.ts";
@@ -608,7 +610,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(
       held_records.filter((record) => (record as { kind: string }).kind === "control-outcome"),
     ).toHaveLength(2);
-    // Submit stays a receipt; the joined execution output travels separately.
+    // Submit feedback carries the receipt.
     expect(held.fake.prompts).toHaveLength(2);
     const delivered = held.fake.prompts[1] ?? "";
     expect(delivered).toContain("## REPL.EntryInput");
@@ -621,13 +623,107 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     );
     // The receipt names the entry and the read to follow, and carries no body:
     // a reply that wants the output asks for it, with its own bounds.
-    expect(delivered.split("## Execution outcome")[0]).not.toContain("Hello from the reply.");
-    expect(delivered).toContain("## Execution output");
-    expect(delivered).toContain("Hello from the reply.");
+    expect(delivered).not.toContain("Hello from the reply.");
+    expect(delivered).not.toContain("## Execution output");
+    expect(delivered).toContain(
+      `Output length: ${[...(entry?.terminal?.output ?? "")].length} Unicode code points.`,
+    );
     expect(delivered).not.toContain("```js eval");
     // And one entry ran, not two: being told about a submission is not
     // submitting again.
     expect(held.session.model.entries).toHaveLength(1);
+  });
+
+  it("feeds back one requested window and consumes the receipt and window as JSON data", function* () {
+    let time = 10;
+    yield* ReplClock.around({
+      *now() {
+        const now = time;
+        time += 0.25;
+        return now;
+      },
+    });
+    const held = yield* useHarness();
+    const beginning = "BEGIN🙂e\u0301";
+    const text = beginning + "🙂".repeat(17000) + "TAIL-MARKER";
+    const limit = 16384;
+    const selected = [...text].slice(0, limit).join("");
+    held.fake.script({
+      reply: followSubmission(`<Output>${text}</Output>`).replace(
+        "<REPL.Submit />",
+        [
+          '<REPL.Submit as="receipt" />',
+          `<REPL.Entry.Output offset={0} limit={${limit}} as="window" />`,
+          "<Output><Json value={{receipt, window}} /></Output>",
+        ].join("\n"),
+      ),
+    });
+    held.fake.script({ reply: "<Output>Done.</Output>" });
+    const answer = yield* held.owner.message("run the entry and read its beginning");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    const saved = yield* records(held.execution);
+    const response = saved.find((record) => record.kind === "response");
+    expect(response?.kind).toBe("response");
+    if (response?.kind !== "response") {
+      throw new Error("Expected a saved response.");
+    }
+    const consumed = JSON.parse(response.output);
+    expect(consumed.receipt).toEqual({
+      entry: "entry-1",
+      status: "completed",
+      durationSeconds: 0.25,
+      outputLength: [...text].length,
+      read: "<REPL.Entry.Output entry={1} />",
+    });
+    expect(consumed.window).toMatchObject({
+      entry: 1,
+      status: "completed",
+      offset: 0,
+      length: consumed.receipt.outputLength,
+      limit,
+      text: selected,
+    });
+    const feedback = held.fake.prompts[1] ?? "";
+    expect(feedback).toContain("Duration: 0.250 seconds.");
+    expect(feedback).toContain(`Output length: ${consumed.window.length} Unicode code points.`);
+    expect(feedback.split(beginning)).toHaveLength(2);
+    expect(feedback).not.toContain("TAIL-MARKER");
+    expect(feedback).not.toContain("## Execution output");
+    expect(held.session.model.entries).toHaveLength(1);
+  });
+
+  it("reports zero length and reads an older status-only outcome without inventing metrics", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: followSubmission("<Output></Output>") });
+    held.fake.script({ reply: "<Output>Done.</Output>" });
+    const answer = yield* held.owner.message("run the empty output entry");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(held.fake.prompts[1]).toContain("Output length: 0 Unicode code points.");
+
+    const saved = yield* records(held.execution);
+    const submit = saved.find((record) => record.kind === "control" && record.submit !== undefined);
+    if (submit?.kind !== "control") {
+      throw new Error("Expected a saved Submit intent.");
+    }
+    const old = saved.map((record) =>
+      record.kind === "control-outcome" &&
+      record.conversation === submit.conversation &&
+      record.response === submit.response &&
+      record.order === submit.order
+        ? { ...record, observed: "completed" }
+        : record,
+    );
+    expect((yield* projected(old)).submits[0]?.admitted).toBe(true);
+    expect(
+      designatedResults(old, submit).find((result) => result.component === "REPL.Submit"),
+    ).toMatchObject({
+      kind: "answered",
+      text: "Entry entry-1 completed.\nRead what it printed with <REPL.Entry.Output entry={1} />.",
+    });
   });
 
   it("R5: a turn the provider did not finish is an incomplete attempt, not a reply", function* () {
@@ -912,8 +1008,8 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     // And emphatically not a refusal. The submission happened; the entry is
     // what failed, and a reply told otherwise would try to submit again.
     expect(delivered).not.toContain("REPL.Submit refused");
-    expect(delivered).toContain("## Execution outcome\n\nEntry entry-1 failed.");
-    expect(delivered).toContain("FAILED-ENTRY-PREFIX");
+    expect(delivered).not.toContain("## Execution output");
+    expect(delivered).not.toContain("FAILED-ENTRY-PREFIX");
     expect(answered.value.output).toContain("I will correct it.");
   });
 
@@ -3845,7 +3941,7 @@ describe("Joined output API", () => {
     expect(held.session.printing).toBe(undefined);
   });
 
-  it("supplies real round context and pinned reads only to the owning Send", function* () {
+  it("supplies a cancellation receipt and allows pinned reads only to the owning Send", function* () {
     const held = yield* useHarness();
     const text = "🟢".repeat(4100) + "INTERRUPTED-API-PREFIX";
     const source =
@@ -3878,8 +3974,11 @@ describe("Joined output API", () => {
     }
     expect((yield* held.session.stopEntry("entry-1")).ok).toBe(true);
     yield* held.fake.startedTurns(2);
-    expect(held.fake.prompts[1]).toContain("Entry entry-1 interrupted.");
-    expect(held.fake.prompts[1]).toContain("INTERRUPTED-API-PREFIX");
+    expect(held.fake.prompts[1]).toContain("Entry entry-1 cancelled.");
+    expect(held.fake.prompts[1]).toContain(
+      `Output length: ${[...text, "\n", "\n"].length} Unicode code points.`,
+    );
+    expect(held.fake.prompts[1]).not.toContain("INTERRUPTED-API-PREFIX");
     const successor = yield* held.session.submit("A newer entry.");
     if (!successor.ok) {
       throw successor.error;
@@ -3891,7 +3990,8 @@ describe("Joined output API", () => {
     const pages = saved.flatMap((record) =>
       record.kind === "control-outcome" &&
       typeof record.observed === "object" &&
-      record.observed !== null
+      record.observed !== null &&
+      "text" in record.observed
         ? [record.observed]
         : [],
     );
@@ -4031,7 +4131,7 @@ function followSubmission(source: string): string {
 
 describe("Follow: submitted rounds in the running command", () => {
   beforeEach(journalBeforeEach(OWNER));
-  it("Follow: one mounted Send carries completed, failed and Entry Stop output from exact joined entries", function* () {
+  it("Follow: one mounted Send carries receipts and explicitly reads failed and interrupted output", function* () {
     const asking = withResolvers<void>();
     yield* Elicitation.around({
       *elicit([request], next) {
@@ -4048,9 +4148,10 @@ describe("Follow: submitted rounds in the running command", () => {
       reply: followSubmission(partial + '\n\n<Fail message="distinct failure" />'),
     });
     page.repl.fake.script({
-      reply: followSubmission(
-        'INTERRUPTED-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="said">Hold this entry.</Elicit>',
-      ),
+      reply:
+        followSubmission(
+          'INTERRUPTED-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="said">Hold this entry.</Elicit>',
+        ) + "\n<REPL.Entry.Output entry={3} offset={0} />",
     });
     page.repl.fake.script({ reply: "<REPL.Entry.Output entry={2} offset={0} limit={4096} />" });
     page.repl.fake.script({
@@ -4072,28 +4173,22 @@ describe("Follow: submitted rounds in the running command", () => {
     yield* page.until("the joined Send", sidekickIdle);
     const prompts = page.repl.fake.prompts;
     expect(prompts).toHaveLength(5);
-    for (const [index, key, outcome, output] of [
-      [1, "entry-1", "completed", "SELECTED-COMPLETE"],
-      [2, "entry-2", "failed", "FAILED-TAIL"],
-      [3, "entry-3", "interrupted", "INTERRUPTED-PREFIX"],
-    ]) {
-      const prompt = prompts[Number(index)] ?? "";
-      expect(prompt).toContain(`Entry ${key} ${outcome}.`);
-      expect(prompt).toContain("## Execution outcome");
-      expect(prompt).toContain("## Execution output");
-      expect(prompt).toContain(String(output));
-    }
+    expect(prompts[1]).toContain("Entry entry-1 completed.");
+    expect(prompts[1]).not.toContain("SELECTED-COMPLETE");
     expect(prompts[1]).not.toContain("Private documentation.");
-    const failed = prompts[2] ?? "";
-    const pageText =
-      failed.split("## Execution output\n\n")[1]?.split("\n\nRead another window")[0] ?? "";
-    const failedPage = JSON.parse(pageText);
-    expect(failedPage.status).toBe("failed");
-    expect(failedPage.entry).toBe(2);
-    expect(failedPage.offset).toBeGreaterThan(0);
-    expect(failedPage.length).toBeGreaterThan(4096);
-    expect([...failedPage.text]).toHaveLength(4096);
-    expect(failed).toContain("<REPL.Entry.Output entry={2} offset={0} limit={4096} />");
+    expect(prompts[2]).toContain("Entry entry-2 failed.");
+    expect(prompts[2]).toContain("distinct failure");
+    expect(prompts[2]).not.toContain("FAILED-TAIL");
+    const interrupted = prompts[3] ?? "";
+    expect(interrupted).toContain("Entry entry-3 cancelled.");
+    expect(interrupted).toContain("<REPL.Entry.Journal entry={3} />");
+    expect(interrupted.split("INTERRUPTED-PREFIX")).toHaveLength(2);
+    const interruptedPage = JSON.parse(interrupted.split("```json\n")[1]?.split("\n```")[0] ?? "");
+    expect(interruptedPage).toMatchObject({ entry: 3, status: "cancelled", offset: 0 });
+    expect(interrupted).toContain(`Output length: ${interruptedPage.length} Unicode code points.`);
+    for (const prompt of prompts.slice(1, 4)) {
+      expect(prompt).not.toContain("## Execution output");
+    }
     const laterRead = JSON.parse(prompts[4] ?? "");
     expect(laterRead.entry).toBe(2);
     expect(laterRead.status).toBe("failed");

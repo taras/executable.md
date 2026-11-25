@@ -272,7 +272,7 @@ function requests(
         entry: "entry-1",
         status: "completed",
         failure: undefined,
-        read: { entry: "entry-1", limit: 4096 },
+        read: "<REPL.Entry.Output entry={1} />",
       };
       yield* journal.settled(order, Ok(undefined), receipt.status);
       return Ok(receipt);
@@ -959,7 +959,7 @@ describe("Tier R3 — each control asks once, and records before and after", () 
         entry: "entry-4",
         status: "failed",
         failure: "the entry raised",
-        read: { entry: "entry-4", limit: 4096 },
+        read: "<REPL.Entry.Journal entry={4} />",
       },
     });
 
@@ -982,7 +982,7 @@ describe("Tier R3 — each control asks once, and records before and after", () 
         entry: "entry-4",
         status: "completed",
         failure: undefined,
-        read: { entry: "entry-4", limit: 4096 },
+        read: "<REPL.Entry.Output entry={4} />",
       },
     });
 

@@ -150,7 +150,7 @@ import {
   sidekickCeilingInstallation,
   sidekickResponseCeiling,
 } from "./profile.ts";
-import { sidekickRequests, finishedRound } from "./requests.ts";
+import { sidekickRequests } from "./requests.ts";
 import type { RootReading } from "./requests.ts";
 import type { ControlJournal, SubmitReceipt } from "./controls.ts";
 import { useSidekickQuestions } from "./questions.ts";
@@ -3034,14 +3034,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // act on: an ordinary failure is a correction the agent can make, and
       // sending it is how the agent gets to make it.
       const results = designatedResults(yield* paired.writer.readAll(), at, refused, designated);
-      let next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
-      if (submitted !== undefined) {
-        const round = finishedRound(root, submitted);
-        if (!round.ok) {
-          return round;
-        }
-        next = [next, round.value].filter((text) => text !== undefined).join("\n\n");
-      }
+      const next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
       return Ok({
         held: {
           conversation,

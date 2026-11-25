@@ -1,3 +1,5 @@
+import { ReplClock } from "../frame.ts";
+import { submitReceipt } from "./controls.ts";
 import { samePlacement } from "../entry-placement.ts";
 import type { EntryPlacement } from "../entry-placement.ts";
 /**
@@ -136,7 +138,10 @@ export interface AdmittedEntry {
   readonly placement?: EntryPlacement;
   readonly key: string;
   readonly source: string;
-  readonly terminal?: { readonly status: "ok" | "err" | "cancelled" };
+  readonly terminal?: {
+    readonly status: "ok" | "err" | "cancelled";
+    readonly output?: string;
+  };
 }
 
 /**
@@ -347,14 +352,15 @@ export function* submitForSidekick(
   // admitted, so waiting here waits for its outcome and its teardown even
   // after something else has started.
   const outcome = yield* submission.join();
+  const finishedAt = yield* ReplClock.operations.now();
   const finishedHead = session.entries();
   if (!finishedHead.ok) {
     return finishedHead;
   }
   const terminal = finishedHead.value.find((entry) => entry.key === submission.entry)?.terminal;
-  // A fatal entry failure can join without writing a Close. Its receipt still
-  // answers Submit, but there is no settled output window to send with it.
-  if (options.observed !== undefined && (terminal !== undefined || outcome.ok)) {
+  // A fatal failure can join without writing a Close or settling its output.
+  let output = terminal?.output;
+  if (terminal !== undefined || outcome.ok) {
     const observed = yield* submission.output();
     if (!observed.ok) {
       throw observed.error;
@@ -362,15 +368,33 @@ export function* submitForSidekick(
     if (terminal === undefined) {
       throw new Error("The joined submitted entry has no retained terminal.");
     }
-    options.observed(observed.value);
+    if (terminal.status === "cancelled") {
+      output = observed.value.output;
+    }
+    options.observed?.(observed.value);
   }
-  const receipt: SubmitReceipt = {
-    entry: submission.entry,
+  let outputLength: number | undefined;
+  if (output !== undefined) {
+    outputLength = 0;
+    for (let offset = 0; offset < output.length; ) {
+      const point = output.codePointAt(offset) ?? 0;
+      offset += point > 0xffff ? 2 : 1;
+      outputLength++;
+    }
+  }
+  const observation = {
     status: terminal?.status === "cancelled" ? "cancelled" : outcome.ok ? "completed" : "failed",
-    failure: outcome.ok ? undefined : outcome.error.message,
-    read: { entry: submission.entry },
-  };
-  yield* journal.settled(order, outcome.ok ? Ok(undefined) : Err(outcome.error), receipt.status);
+    ...(submission.startedAt === undefined
+      ? {}
+      : { durationSeconds: finishedAt - submission.startedAt }),
+    ...(outputLength === undefined ? {} : { outputLength }),
+  } satisfies Pick<SubmitReceipt, "status" | "durationSeconds" | "outputLength">;
+  const receipt = submitReceipt(
+    submission.entry,
+    observation,
+    outcome.ok ? undefined : outcome.error.message,
+  );
+  yield* journal.settled(order, outcome.ok ? Ok(undefined) : Err(outcome.error), observation);
   return Ok(receipt);
 }
 
@@ -504,17 +528,7 @@ export function* coldWorkspaceEntry(
   }
   let workspace: boolean | undefined;
   for (const intent of reading.value.submits) {
-    if (
-      intent.settled &&
-      !records.some(
-        (record) =>
-          record.kind === "control-outcome" &&
-          record.conversation === intent.conversation &&
-          record.response === intent.response &&
-          record.order === intent.order &&
-          typeof record.observed === "string",
-      )
-    ) {
+    if (intent.settled && !intent.admitted) {
       continue;
     }
     if (intent.entry !== final.key && intent.ordinal !== entries.length - 1) {

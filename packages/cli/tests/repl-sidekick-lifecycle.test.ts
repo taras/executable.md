@@ -540,6 +540,7 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     expect(told).toContain("Entry entry-1 failed");
     expect(told).toContain("Failed to persist durable yield event");
     expect(told).toContain("<REPL.Entry.Journal entry={1}");
+    expect(told).not.toContain("Output length:");
     expect(told).not.toContain("## Execution output");
   });
 

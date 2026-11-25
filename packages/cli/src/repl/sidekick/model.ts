@@ -1,3 +1,4 @@
+import { submitObservation } from "./controls.ts";
 import type { EntryPlacement } from "../entry-placement.ts";
 import { recoveryBlocked, recoveryFacts, uncertainRequests } from "./recovery-state.ts";
 import type { HumanStopFact, RecoveryDisposition } from "./recovery-state.ts";
@@ -1404,7 +1405,11 @@ export function projectHistory(records: readonly SidekickRecord[]): Result<Proje
           );
         }
         settled.add(key);
-        if (typeof record.observed === "string") {
+        if (
+          intent.record.submit !== undefined &&
+          (record.observed === intent.record.submit.entry ||
+            submitObservation(record.observed) !== undefined)
+        ) {
           observed.add(key);
         }
         operations.push({
