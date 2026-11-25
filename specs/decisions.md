@@ -963,9 +963,10 @@ exists; adding one is a separate decision.
 ## DEC-020: Match authorized project files before disclosure
 
 Issue #1428 adopts literal matching inside the authorized provider observation.
-The provider clears the same complete file before any hit can contribute to a
-result or continuation. A miss skips detection. Fresh reference opens still
-check access and complete-file disclosure. The
+Check the file for a match. If a match is found, check the entire file for
+secrets before returning the match or using it to decide whether there’s another
+page. A miss skips detection. Fresh reference opens still check access and
+complete-file disclosure. The
 [Workspace Search contract](repl-spec.md#workspace-search) owns this behavior.
 
 In paired Sidekick trials on the #1428 checkout with 50 synthetic REPL entries,
