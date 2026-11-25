@@ -7,8 +7,8 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 ```
 <Let as="runner" value={commandSetting.stdout || "deno run --node-modules-dir=manual --cached-only --allow-all '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run"} />
 
-<Test name="delivery publishes joined ACP review verdicts and reconciles a lost or concurrent GitHub write" timeout="180s">
-<Each in={["pass","changes_required","lost"]} let="scenario">
+<Test name="delivery publishes joined ACP review verdicts and reconciles lost acknowledgements, interruption, and concurrent GitHub writes" timeout="240s">
+<Each in={["pass","changes_required","lost","interrupted"]} let="scenario">
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Dir path={fixture.repository}>
