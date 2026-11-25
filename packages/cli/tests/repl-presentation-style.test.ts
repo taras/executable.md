@@ -1,3 +1,5 @@
+import { presentationFor } from "../src/repl/application.ts";
+import type { ReplBox } from "../src/repl/layout.ts";
 import { createChatPreparationStore } from "../src/repl/application.ts";
 import { parseTodo } from "../src/repl/todo/document.ts";
 /**
@@ -5826,6 +5828,84 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
 describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => {
   beforeEach(journalBeforeEach(OWNER));
   beforeAll(() => useTempFileCompiler());
+
+  it("reuses frame History marks and visible runs while widths and later frames stay independent", function* () {
+    const model = yield* runningReading();
+    const base = stagedView(model, WIDE);
+    const mapOf = (box: ReplBox): ReplBox | undefined =>
+      box.id === "box:history:map" ? box : box.children.map(mapOf).find((one) => one !== undefined);
+    const renderer = yield* useReplRenderer(WIDE);
+    const variants: ReplView[] = [
+      base,
+      { ...base, state: { ...base.state, draftOpen: true } },
+      { ...base, size: MEDIUM },
+      { ...base, live: { ...base.live, running: false } },
+      {
+        ...base,
+        state: {
+          ...base.state,
+          route: { ...base.state.route, at: base.navigation.checkpoints[0]?.marker },
+        },
+      },
+    ];
+    let previous: readonly unknown[] | undefined;
+    for (const candidate of variants) {
+      let navigationReads = 0;
+      const view = {
+        ...candidate,
+        navigation: {
+          ...candidate.navigation,
+          get checkpoints() {
+            navigationReads += 1;
+            return candidate.navigation.checkpoints;
+          },
+        },
+      };
+      const prepared = yield* prepareFrame(renderer, view);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+      const { context } = prepared.value;
+      const runs = context.historyRuns;
+      if (runs === undefined) {
+        throw new Error("History preparation is missing");
+      }
+      expect(runs()).not.toBe(previous);
+      previous = runs();
+      const reads = navigationReads;
+      runs(9999);
+      runs(9998);
+      expect(navigationReads).toBe(reads);
+      for (const width of [undefined, 1, 12, 1000, 12]) {
+        const bounded = {
+          ...context,
+          wideHistoryMap: width,
+          historySplit: { map: width ?? 1000, actions: 0 },
+        };
+        const first = mapOf(presentationFor(view, bounded).manifest.root);
+        const repeated = mapOf(presentationFor(view, bounded).manifest.root);
+        const fresh = mapOf(
+          presentationFor(view, { ...bounded, historyRuns: undefined }).manifest.root,
+        );
+        expect(first).toBeDefined();
+        expect(first?.runs).toBe(repeated?.runs);
+        expect(first).toEqual(fresh);
+      }
+      expect(runs(1)).toBe(runs(1));
+      if (view.state.draftOpen) {
+        expect(
+          runs(1)
+            .map((one) => one.text)
+            .join(""),
+        ).toContain("…");
+        expect(
+          runs(1000)
+            .map((one) => one.text)
+            .join(""),
+        ).not.toContain("…");
+      }
+    }
+  });
 
   it("A2: every size places whole controls inside the frame and keeps its routes", function* () {
     const model = yield* runningReading();

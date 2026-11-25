@@ -10527,6 +10527,7 @@ export interface ReplMeasuredWidths {
  * scroll clamps against is what the screen is showing.
  */
 export interface ReplPresentationContext {
+  readonly historyRuns?: (width?: number) => readonly ReplTokenRun[];
   readonly editors?: ReadonlyMap<string, ReplEditor>;
   readonly draftFrom?: number;
   /**
@@ -14099,7 +14100,7 @@ function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
  * Every exact position, an entry's and every minor one, is reached through the
  * History drawer, which is what the action beside this map opens.
  */
-function compactHistoryRuns(view: ReplView, width?: number): readonly ReplTokenRun[] {
+function prepareHistoryMarks(view: ReplView): (width?: number) => readonly ReplTokenRun[] {
   const title: ReplTokenRun = { text: "", token: "history-title" };
   const marks: ReplTokenRun[][] = [];
   const editing = roundEditorVisible(view);
@@ -14147,30 +14148,49 @@ function compactHistoryRuns(view: ReplView, width?: number): readonly ReplTokenR
   if (editing) {
     marks.push([{ text: `  ${nextRound(view)} ✎`, token: "waiting" }]);
   }
-  const runs = [title];
   const markWidths = marks.map((mark) => runText(mark).length);
-  let first = 0;
-  if (width !== undefined && (running || editing)) {
-    const room = width - title.text.length;
-    let used = markWidths.reduce((sum, cells) => sum + cells, 0);
-    if (used > room) {
-      const omitted: ReplTokenRun = { text: "  …", token: "history" };
-      while (first < marks.length - 1 && used + omitted.text.length > room) {
-        used -= markWidths[first++];
+  return (width) => {
+    const runs = [title];
+    let first = 0;
+    if (width !== undefined && (running || editing)) {
+      const room = width - title.text.length;
+      let used = markWidths.reduce((sum, cells) => sum + cells, 0);
+      if (used > room) {
+        const omitted: ReplTokenRun = { text: "  …", token: "history" };
+        while (first < marks.length - 1 && used + omitted.text.length > room) {
+          used -= markWidths[first++];
+        }
+        runs.push(omitted);
       }
-      runs.push(omitted);
     }
-  }
-  for (const mark of marks.slice(first)) {
-    runs.push(...mark);
-  }
-  const head = view.navigation.head;
-  runs.push({ text: "  ── ", token: "history-rail" });
-  runs.push({
-    text: at === undefined ? HEAD_LABELS[head] : `${HEAD_LABELS[head]} · reading earlier`,
-    token: head === "live" ? "history-head-live" : "history-head",
-  });
-  return tokenRuns(runs);
+    for (const mark of marks.slice(first)) {
+      runs.push(...mark);
+    }
+    const head = view.navigation.head;
+    runs.push({ text: "  ── ", token: "history-rail" });
+    runs.push({
+      text: at === undefined ? HEAD_LABELS[head] : `${HEAD_LABELS[head]} · reading earlier`,
+      token: head === "live" ? "history-head-live" : "history-head",
+    });
+    return tokenRuns(runs);
+  };
+}
+
+export function createHistoryMapPreparation(
+  view: ReplView,
+): (width?: number) => readonly ReplTokenRun[] {
+  let prepare: ReturnType<typeof prepareHistoryMarks> | undefined;
+  const visible = new Map<number | undefined, readonly ReplTokenRun[]>();
+  return (width) => {
+    const held = visible.get(width);
+    if (held !== undefined) {
+      return held;
+    }
+    prepare ??= prepareHistoryMarks(view);
+    const runs = prepare(width);
+    visible.set(width, runs);
+    return runs;
+  };
 }
 
 /**
@@ -15257,8 +15277,7 @@ function workspacePresentation(input: {
   const placed = offered.filter(
     (candidate) => context.measuring || context.admission.actions.has(candidate.key),
   );
-  const map = compactHistoryRuns(
-    view,
+  const map = (context.historyRuns ?? createHistoryMapPreparation(view))(
     accepted ? context.wideHistoryMap : context.historySplit?.map,
   );
   const inspected = view.state.route.at !== undefined;
