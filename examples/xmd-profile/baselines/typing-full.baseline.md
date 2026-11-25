@@ -10,6 +10,7 @@ it, or run the same exercise with `XMD_PROFILE_UPDATE=1` and review the differen
 
 A count misses time spent inside one function, garbage collection, WebAssembly and
 other native work. An exercise can get slower without any figure here moving.
+The other layers row is recorded for context and never fails the comparison.
 
 - Runtime: deno 2.9.7 on darwin arm64
 - Measured from: one capture
@@ -17,16 +18,16 @@ other native work. An exercise can get slower without any figure here moving.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 22,247,301 |
+| calls: total | 22,209,933 |
 | calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 4,096,314 |
-| calls: npm @termless/xtermjs | 2,094,675 |
-| calls: effection | 1,259,335 |
-| calls: deno runtime | 295,872 |
-| calls: effectionx | 195,540 |
-| calls: xmd core | 138,040 |
+| calls: xmd cli | 4,097,123 |
+| calls: npm @termless/xtermjs | 2,094,435 |
+| calls: effection | 1,249,348 |
+| calls: deno runtime | 298,603 |
+| calls: effectionx | 183,164 |
+| calls: xmd core | 132,842 |
 | calls: npm @secretlint/core | 45,180 |
-| calls: other layers | 55,885 |
+| calls: other layers | 42,778 |
 
 ```json
 {
@@ -38,7 +39,7 @@ other native work. An exercise can get slower without any figure here moving.
   "measures": [
     {
       "name": "calls: total",
-      "value": 22247301
+      "value": 22209933
     },
     {
       "name": "calls: npm @xterm/headless",
@@ -46,27 +47,27 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: xmd cli",
-      "value": 4096314
+      "value": 4097123
     },
     {
       "name": "calls: npm @termless/xtermjs",
-      "value": 2094675
+      "value": 2094435
     },
     {
       "name": "calls: effection",
-      "value": 1259335
+      "value": 1249348
     },
     {
       "name": "calls: deno runtime",
-      "value": 295872
+      "value": 298603
     },
     {
       "name": "calls: effectionx",
-      "value": 195540
+      "value": 183164
     },
     {
       "name": "calls: xmd core",
-      "value": 138040
+      "value": 132842
     },
     {
       "name": "calls: npm @secretlint/core",
@@ -74,7 +75,7 @@ other native work. An exercise can get slower without any figure here moving.
     },
     {
       "name": "calls: other layers",
-      "value": 55885
+      "value": 42778
     }
   ]
 }
