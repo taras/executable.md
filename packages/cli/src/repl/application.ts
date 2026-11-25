@@ -1554,15 +1554,22 @@ function recordedFeedback(
   }
   const entries = new Map(model.entries.map((entry) => [entry.key, entry.order]));
   const turns = new Map(reading.turns.map((turn) => [turn.key, turn]));
+  const links = new Map<string, { key: string; round: number }[]>();
+  for (const item of work) {
+    const round = entries.get(item.entry);
+    if (item.settled && round !== undefined) {
+      let linked = links.get(item.message);
+      if (linked === undefined) {
+        linked = [];
+        links.set(item.message, linked);
+      }
+      linked.push({ key: item.entry, round });
+    }
+  }
   return reading.feedback.map((packet) => {
     const id = `${packet.conversation}:${packet.response}`;
     const controls = turns.get(`sidekick:${id}`)?.controls ?? [];
-    const linked = work.flatMap((item) => {
-      const round = entries.get(item.entry);
-      return item.message === `chat:${id}` && item.settled && round !== undefined
-        ? [{ key: item.entry, round }]
-        : [];
-    });
+    const linked = links.get(`chat:${id}`) ?? [];
     const label =
       linked.length > 0
         ? `${linked.map((entry) => `Round ${entry.round}`).join(", ")} result sent to Sidekick`
