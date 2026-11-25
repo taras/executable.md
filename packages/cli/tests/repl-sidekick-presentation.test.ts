@@ -159,7 +159,7 @@ describe("987 — mounted original recovery", () => {
         "OUTPUT-END: retained",
       ];
       page.repl.fake.script({
-        reply: `<Let as="code" select="code">\n\`\`\`xmd\n<Output>${lines.join("\n")}</Output>\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+        reply: `<Let as="code" select="code">\n\`\`\`xmd\n<Output>${lines.join("\n")}</Output>\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit /><REPL.Entry.Output entry={1} offset={0} />`,
       });
       page.repl.fake.script({ reply: "", failure: "Internal error" });
       yield* sendMessage(page, "Inspect output.");
@@ -172,7 +172,7 @@ describe("987 — mounted original recovery", () => {
         throw new Error("The actual entry feedback is missing.");
       }
       for (const line of lines) {
-        expect(feedback.text).toContain(line);
+        expect(feedback.text.split(line)).toHaveLength(2);
       }
       if (size !== WIDE) {
         yield* page.resize(size);
