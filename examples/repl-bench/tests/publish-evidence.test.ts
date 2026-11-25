@@ -389,9 +389,10 @@ function run(
   host: ReturnType<typeof modeledHost>,
   mode: "dry-run" | "publish" = "publish",
   setup?: { directory: string; install: () => Operation<void>; beforeEdit: () => Operation<void> },
-  stream = new InMemoryStream(),
+  stream?: InMemoryStream,
 ) {
   return scoped(function* () {
+    const journal = stream ?? (yield* useJournalStream(document));
     yield* API.Env.around({
       cwd: () => call(() => setup?.directory ?? fixture.directory),
     });
@@ -409,7 +410,7 @@ function run(
           ...fileSource(document),
           includes: [components],
           props: { mode, receipt: fixture.path },
-          stream,
+          stream: journal,
         }),
       ),
     );
