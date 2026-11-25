@@ -956,7 +956,7 @@ function opsOf(
     ops.push(open(id, decorated(box, here)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
-      ops.push(...written(content, box, here));
+      appendWritten(ops, content, box, here);
     }
     ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
@@ -1000,45 +1000,51 @@ function decorated(box: ReplBox, focused: boolean): ReplBoxProps {
  * stretches at the room keeps every character the row can show, in order, in
  * the role it has; what is past the edge was never on the screen either way.
  */
-function written(content: string, box: ReplBox, focused: boolean): Op[] {
+function appendWritten(ops: Op[], content: string, box: ReplBox, focused: boolean): void {
   const style = box.style;
   if (style === undefined) {
-    return [text(content)];
+    ops.push(text(content));
+    return;
   }
-  // A History row is padded with blanks to the drawer's width. The engine
-  // measures each text as words and keeps every distinct one for the frame, so
-  // a label carrying its own padding is a long run of empty words per ordinal;
-  // a few dozen rows exhausted that storage before the drawer could be drawn.
-  // Drawn apart, identical padding is one measurement shared by every row.
+  // Split trailing History padding so the engine can reuse its measurement.
   const padded = box.control && style.role === "history";
-  const draw = (piece: string, colour: number, attrs: number): Op[] =>
-    (padded ? apart(piece) : [piece]).map((one) => drawn(one, colour, attrs));
   const { runs } = box;
   const room = roomOf(box.props);
   if (runs === undefined || runs.length === 0 || runText(runs) !== content || room === "unknown") {
     const { colour, attrs } = textStyleOf(style, focused);
-    return draw(content, colour, attrs);
+    appendDrawn(ops, content, colour, attrs, padded);
+    return;
   }
-  return bounded(runs, room).flatMap((run) => {
+  for (const run of bounded(runs, room)) {
     if (run.token === "caret") {
-      return [
+      ops.push(
         text(run.text, {
           color: terminalColour(REPL_PALETTE.composerSurface),
           bg: terminalColour(REPL_PALETTE.focus),
         }),
-      ];
+      );
+      continue;
     }
     const { colour, attrs } = runStyleOf(run.token, style, focused);
-    return draw(run.text, colour, attrs);
-  });
+    appendDrawn(ops, run.text, colour, attrs, padded);
+  }
 }
 
-/** A label and the spaces after it, as two texts; a text that is all one or the other stays whole. */
-function apart(content: string): readonly string[] {
-  const label = content.replace(/ +$/, "");
-  return label.length === 0 || label.length === content.length
-    ? [content]
-    : [label, content.slice(label.length)];
+function appendDrawn(
+  ops: Op[],
+  piece: string,
+  colour: number,
+  attrs: number,
+  padded: boolean,
+): void {
+  if (padded) {
+    const label = piece.replace(/ +$/, "");
+    if (label.length > 0 && label.length < piece.length) {
+      ops.push(drawn(label, colour, attrs), drawn(piece.slice(label.length), colour, attrs));
+      return;
+    }
+  }
+  ops.push(drawn(piece, colour, attrs));
 }
 
 /**
