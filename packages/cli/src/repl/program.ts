@@ -87,6 +87,7 @@ import {
   offering,
   permissionWithdrawn,
   presentationFor,
+  createHistoryMapPreparation,
   presentedDrawer,
   previewedMessage,
   retainedDetailsOf,
@@ -5775,7 +5776,9 @@ export function* prepareFrame(
   // allocated it would otherwise describe none — leaving the queue no width to
   // fit against, and so no fitted rows for any later pass to admit. It is a
   // blank row until something has been fitted, so it makes no column wider.
+  const historyRuns = createHistoryMapPreparation(view);
   const probe = presentationFor(view, {
+    historyRuns,
     ...measuringAt(undefined, false, undefined),
     queueProbe: true,
   });
@@ -5941,6 +5944,7 @@ export function* prepareFrame(
   let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
+    historyRuns,
     headerRefusal,
     headerRefusalWindow,
     drawerHelp,
@@ -6406,6 +6410,7 @@ export function* prepareFrame(
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
+    historyRuns,
     widths,
     admission,
     measuring: false,
