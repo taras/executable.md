@@ -62,8 +62,9 @@
     <ReplBench.Click at={positions} />
     <ReplBench.WaitForText text="[submit]" present={false} />
     <ReplBench.Region name="history">
+      <ReplBench.WaitForText text="> 24 · Entry outcome recorded" />
       <ReplBench.Key key="Tab" />
-      <ReplBench.WaitForText text="Enter closes" />
+      <ReplBench.WaitForText text="> [close]" />
       <ReplBench.WaitForText text="24 · Entry outcome recorded" as="marker" />
       <ReplBench.Scroll delta={1} at={marker} />
       <ReplBench.WaitForText text="24 · Entry outcome recorded" present={false} />
@@ -77,10 +78,10 @@
       <ReplBench.Scroll delta={-25} at={marker} />
       <ReplBench.WaitForText text="24 · Entry outcome recorded" at={marker} />
     </ReplBench.Region>
-    <ReplBench.Key key="Escape" />
+    <ReplBench.WaitForText text="> [close]" />
+    <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="[submit]" />
-    <ReplBench.WaitForText text="held-value" />
-    <ReplBench.WaitForText text="= held-value" />
+    <ReplBench.WaitForText text=">  = held-value" />
 
     <ReplBench.Click at={history} />
     <ReplBench.WaitForText text="[Positions]" as="positions" />

@@ -10945,7 +10945,7 @@ function slotOf(key: string): ReplSlot | undefined {
   ) {
     return "drawer-actions";
   }
-  if (key.startsWith("drawer:")) {
+  if (key.startsWith("drawer:") && key !== "drawer:history") {
     return "drawer";
   }
   if (key === "footer:input") {
