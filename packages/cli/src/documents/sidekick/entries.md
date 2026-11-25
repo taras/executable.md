@@ -48,6 +48,15 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   `<REPL.Entry.Journal />` instruction to inspect the saved evidence. Read
   `<Guide.Recovery />` for how to use that evidence.
 
+To execute a round and see its result, submit it and ask for output.
+
+```xmd
+<REPL.Submit />
+<REPL.Entry.Output offset={0} limit={4096} />
+```
+
+You’ll receive up to 4,096 characters from the beginning of the output in feedback. To keep reading, use the `next` arguments returned with the output window.
+
 ## Use receipt and window data in a response
 
 When the person asks to run an entry and see its beginning, choose a window
