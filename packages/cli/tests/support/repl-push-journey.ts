@@ -178,6 +178,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(yield* pushes(shim.log)).toEqual([]);
     expect(yield* remoteRef(origin, BRANCH, home)).toBe(published);
 
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
     yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
 
@@ -194,6 +195,8 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(yield* pushes(shim.log)).toHaveLength(1);
     expect(yield* remoteRef(origin, "main", home)).toBe(primary);
 
+    yield* settledEntry(third, 2, "ok", ACT_MS);
+    yield* showing(third, "HEAD · SETTLED", ACT_MS);
     yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
@@ -244,6 +247,8 @@ export function replUnsupportedPush(repl: ReplCommand): Operation<void> {
     expect(yield* remoteRef(origin, "main", home)).toBe(head);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
+    yield* settledEntry(pty, 1, "ok", ACT_MS);
+    yield* showing(pty, "HEAD · SETTLED", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });

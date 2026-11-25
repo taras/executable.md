@@ -451,6 +451,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     ]);
     expect(JSON.stringify(answered)).not.toContain(TOKEN);
 
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
     yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });
@@ -514,6 +515,7 @@ export function replUnsupportedPullRequest(repl: ReplCommand): Operation<void> {
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
     yield* settledEntry(pty, 1, "ok", ACT_MS);
+    yield* showing(pty, "HEAD · SETTLED", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
