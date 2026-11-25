@@ -596,6 +596,7 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
     // entry is waiting rather than because it has not got there yet.
     expect(yield* exists(join(checkout, "after.md"))).toBe(false);
 
+    yield* showing(pty, "[answer]", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
@@ -962,6 +963,8 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
     expect(yield* gitSaid(checkout, ["write-tree"], home)).toBe(index);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
+    yield* settledEntry(pty, 1, "ok", ACT_MS);
+    yield* showing(pty, "HEAD · SETTLED", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
