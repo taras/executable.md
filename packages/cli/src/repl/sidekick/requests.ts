@@ -1,3 +1,5 @@
+import type { HostFilesAccess } from "@executablemd/runtime";
+import { readHistoryWindow, readProjectFile, searchWorkspace } from "./workspace-search.ts";
 import { resolveJournalMaxBytes } from "./journal-policy.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
@@ -71,6 +73,7 @@ import type {
  * cannot grow one by being handed something that has it.
  */
 export interface RootReading {
+  readonly projectAccess?: HostFilesAccess;
   /**
    * The acknowledged head of this execution's history, however it is navigated.
    *
@@ -143,6 +146,7 @@ export type RootReads = Omit<RootReading, "fill">;
 export function rootReads(
   session: ReplSession,
   profile: {
+    readonly access?: HostFilesAccess;
     readonly includes: readonly string[];
     readonly permissionMode: string;
     readonly plugins: readonly string[];
@@ -150,6 +154,7 @@ export function rootReads(
   },
 ): RootReads {
   return {
+    projectAccess: profile.access,
     *inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
       const policy = resolveJournalMaxBytes(request.yq ?? ".", request.maxBytes);
       if (!policy.ok) {
@@ -235,6 +240,10 @@ export function sidekickRequests(
   return {
     ...(test === undefined ? {} : { test }),
     importAsset: importAsset ?? refusedImport,
+    search: (request) => searchWorkspace(request, root.projectAccess, () => root.acknowledged()),
+    projectFile: (request) => readProjectFile(request, root.projectAccess),
+    historyWindow: (reader, request) =>
+      readHistoryWindow(reader, request, () => root.acknowledged()),
     *bindings(): Operation<Result<Json>> {
       // The root data as it stands: the retained head for every entry that has
       // settled, and the current root of the entry running now on top of it.

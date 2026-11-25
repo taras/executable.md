@@ -1,5 +1,5 @@
 import { createContext, ensure, useScope } from "effection";
-import type { Operation, Scope } from "effection";
+import type { Operation, Result, Scope } from "effection";
 import type { Api, Around, Middleware } from "@effectionx/context-api";
 import type { FilesHandler } from "./files.ts";
 
@@ -77,10 +77,25 @@ export interface FileRecorderHandle {
   assemble<K extends keyof FilesHandler>(method: K): FilesHandler[K];
 }
 export interface FilesApi extends Api<FilesHandler> {
+  /** Check for transformed reads without listing files or touching a target. */
+  supportsTextTransform(): Operation<boolean>;
+  installTextTransformProvider(layers: Layers): Operation<void>;
   register(boundary: Layers): Operation<FileRecorderHandle>;
 }
 
-export function createFilesApi(terminal: FilesHandler): FilesApi {
+export function createFilesApi(
+  terminal: FilesHandler,
+  unsupportedTransform: () => Result<string>,
+): FilesApi {
+  const recorders = new WeakSet<Layers>();
+  const providers = new WeakSet<Layers>();
+  function supportsTransform(layers: Layers[]): boolean {
+    // An opted-in host provider terminates the read. Only recorder layers may precede it.
+    const reader = layers.find(
+      (layer) => layer.readTextFile !== undefined && !recorders.has(layer),
+    );
+    return reader !== undefined && providers.has(reader);
+  }
   function* around(
     layers: Layers,
     options: { at: "min" | "max" } = { at: "max" },
@@ -98,6 +113,7 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
     function call<A extends unknown[], T>(
       terminal: (...args: A) => Operation<T>,
       select: (layer: Layers) => Middleware<A, Operation<T>> | undefined,
+      wrap?: (layers: Layers[], args: A, invoke: () => Operation<T>) => Operation<T>,
     ): (...args: A) => Operation<T> {
       return (...args) => ({
         *[Symbol.iterator]() {
@@ -114,14 +130,30 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
               const handler = select(layer);
               return handler === undefined ? [] : [handler];
             });
-          const result = combine(handlers)(args, terminal);
-          return isOperation(result) ? yield* result : result;
+          const invoke = function* () {
+            const result = combine(handlers)(args, terminal);
+            return isOperation(result) ? yield* result : result;
+          };
+          return yield* wrap === undefined ? invoke() : wrap(layers, args, invoke);
         },
       });
     }
     return {
       checkFilePath: call(terminal.checkFilePath, (layer) => layer.checkFilePath),
-      readTextFile: call(terminal.readTextFile, (layer) => layer.readTextFile),
+      readTextFile: call(
+        terminal.readTextFile,
+        (layer) => layer.readTextFile,
+        function* (layers, [input], invoke) {
+          if (
+            input.transform === undefined
+              ? input.excludeGitMetadata === true
+              : !supportsTransform(layers)
+          ) {
+            return unsupportedTransform();
+          }
+          return yield* invoke();
+        },
+      ),
       writeTextFile: call(terminal.writeTextFile, (layer) => layer.writeTextFile),
       copyFile: call(terminal.copyFile, (layer) => layer.copyFile),
       deleteFile: call(terminal.deleteFile, (layer) => layer.deleteFile),
@@ -133,11 +165,20 @@ export function createFilesApi(terminal: FilesHandler): FilesApi {
   return {
     operations: operations(),
     around,
+    *supportsTextTransform() {
+      return supportsTransform(collect(yield* useScope()));
+    },
+    *installTextTransformProvider(layers) {
+      const provider = Object.freeze({ ...layers });
+      providers.add(provider);
+      yield* around(provider, { at: "min" });
+    },
     *register(boundary): Operation<FileRecorderHandle> {
       let live = true;
       yield* ensure(() => {
         live = false;
       });
+      recorders.add(boundary);
       yield* around(boundary);
       const selected = operations(boundary, () => live);
       return Object.freeze({

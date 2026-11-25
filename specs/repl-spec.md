@@ -3943,6 +3943,67 @@ is a different thing from an entry that ran and failed. An output read is the
 window the read itself renders, fenced long enough to hold its text, with its
 adjacent instructions pinned to that entry.
 
+### Workspace Search
+
+Use `<REPL.Search query="error message" />` in a Sidekick response to find
+text before you know its path or entry number. The query is a case-sensitive
+literal of 1 to 160 Unicode code points on one line. `scope` is `"both"` by
+default. Use `"files"` for the launch project or `"history"` for this REPL's
+acknowledged entries.
+
+In a Git worktree, file candidates are tracked files plus nonignored
+untracked files below the launch project, with paths relative to that
+project. Git applies standard ignore rules with the filesystem monitor
+disabled. A confirmed non-worktree uses the project Glob. A Git discovery
+or listing failure refuses file search. A provider without transformed
+reads refuses file search even for an empty candidate set. Every
+candidate still passes the provider’s text-read
+access checks. Direct file reads use their own access checks independently
+of enumeration. Search skips Git metadata, unreadable files and text
+containing NUL. Both search and context
+exclude Git metadata by authored path and resolved destination, including through
+internal symlinks. Search and bounded file readers pass a transform in
+their `readTextFile` request. The provider authorizes and reads the file before
+applying that transform. It returns only the approved projection to the
+enclosing control or authored effect, which owns retention. Search matches
+inside that transform. A file with no eligible match skips disclosure detection.
+The same complete text must pass the caller’s disclosure policy before a
+match can contribute a result or establish a continuation. This can make a
+query with a withheld match take longer than an absent query even when their
+pages are identical. A fresh context open authorizes the read and clears the
+complete current file before returning its window. A failed project listing
+refuses a request that includes files. History uses the same
+readable retained projection as entry inspection. It searches admitted source,
+retained rendered output, retained command stdout and stderr, and saved
+entry and Prompt failure messages. An unreadable history refuses the history
+search. Unretained and withheld evidence supplies no searchable text.
+
+The page is `{matches,next}`, with up to 20 non-overlapping occurrences.
+Files come in path order, followed by entries in admission order and their
+retained fields and records. Within each text, matches follow its original
+order. Each match provides `source`, a one-based `line`, a zero-based Unicode
+code point `offset`, an `excerpt` of at most 320 code points and a `ref`.
+A file source names the current project path. A history source names an
+absolute entry number, field and, where applicable, record marker.
+
+`next` is null at the end. Otherwise reuse its `query`, `scope` and `after`
+on the next Search. The continuation advances within the last source and
+recomputes against readable project files and retained evidence on each call.
+File edits can move an occurrence across the saved offset. Search retains no
+index or collection of future matches.
+
+A match's `ref` gives a reader name and its arguments. Pass the complete
+reference as the named reader's `request` in a follow-up response. File matches
+use `REPL.File.Read`. Retained references use the corresponding
+`REPL.Entry.Source`, `REPL.Entry.Output`, `REPL.Entry.Prompt` or
+`REPL.Entry.Journal`. Each revalidates the selector and disclosure before
+returning at most 640 code points from a search reference. The reference never admits or resumes an
+entry. A file open reads the currently authorized file and states whether it
+changed since the search. `REPL.File.Read` also accepts a direct request
+such as `{"path":"note.txt","lines":"38:46"}`.
+
+### Reading one entry
+
 A reply reads one entry's saved evidence through four reads of its own, and
 each of them answers with a page rather than with prose:
 

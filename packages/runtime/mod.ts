@@ -11,7 +11,9 @@
  *   `stat`, `lstat`, `readDirectory`, `glob`, `realpath`, `ensureDir`, `rename`,
  *   `remove`)
  * - `API.Files` — document filesystem access as whole semantic operations,
- *   with no host default. `useHostFiles()` installs the host provider.
+ *   with no host default. `useHostFiles()` installs the host provider. Its
+ *   `readTextFile` accepts an optional transform on the request, which projects
+ *   the authorized text before it leaves the provider.
  * - `API.Fetch` — HTTP requests (`fetch`)
  * - `API.Env` — the host: variables, platform info, the command that invokes
  *   this xmd, and eval-block compilation
@@ -117,6 +119,7 @@ export {
 export type {
   FileCopyInput,
   FilePathInput,
+  FileReadInput,
   FilesDeniableOperation,
   FilesErrorData,
   FilesFailureData,

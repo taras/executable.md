@@ -425,5 +425,10 @@ export type { SecretInputOwner } from "./src/secrets/inputs.ts";
 
 export { useSecretInputs } from "./src/secrets/input-host.ts";
 
+export { SEARCH_PAGE_SIZE, searchText, validSearchQuery } from "./src/search-text.ts";
+export { fileReadArguments, readerArguments, textWindow } from "./src/file-window.ts";
+export { readFileWindow } from "./src/file-read-transform.ts";
+export { searchProjectFiles, SearchProject } from "./src/project-search.ts";
+
 export { applyUnifiedDiff, sourceLines, UnifiedDiffError } from "./src/unified-diff.ts";
 export type { SourceLine } from "./src/unified-diff.ts";

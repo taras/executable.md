@@ -3381,11 +3381,12 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
     const first = held.fake.prompts[0] ?? "";
     // The derived surface, which is read off the ceiling this response is
     // admitted under rather than kept beside it.
-    expect(first).toContain("<REPL.Entry.Source /> — read.");
-    expect(first).toContain("<REPL.Entry.Prompt /> — read.");
-    expect(first).toContain("<REPL.Entry.Output /> — read.");
-    expect(first).toContain("<REPL.Entry.Journal /> — read.");
-    expect(first).toContain("props: entry, offset, limit, prompt, field");
+    expect(first).toContain("<REPL.Entry.Source /> — read. props: entry, offset, limit, request");
+    expect(first).toContain(
+      "<REPL.Entry.Prompt /> — read. props: request, entry, offset, limit, prompt, field",
+    );
+    expect(first).toContain("<REPL.Entry.Output /> — read. props: entry, offset, limit, request");
+    expect(first).toContain("<REPL.Entry.Journal /> — read. props: request, entry, yq, maxBytes");
     // And the chapter that teaches what to do with them, by its own exact
     // invocation.
     expect(first).toContain("<Guide.Recovery />");

@@ -1,3 +1,4 @@
+import { Err } from "effection";
 /**
  * `API.Files` — the document filesystem boundary.
  *
@@ -249,6 +250,13 @@ export interface FilePathInput {
   readonly path: string;
 }
 
+export interface FileReadInput extends FilePathInput {
+  /** Transform the file’s text before returning it to the caller. Omit to return the full text. */
+  readonly transform?: (text: string) => Operation<Result<string>>;
+  /** Exclude Git metadata during provider path authorization of a transformed read. */
+  readonly excludeGitMetadata?: boolean;
+}
+
 export interface FileCopyInput {
   readonly cwd: string;
   readonly source: string;
@@ -262,6 +270,7 @@ export interface FileWriteInput extends FilePathInput {
 }
 
 export interface GlobInput {
+  readonly projectSearch?: true;
   readonly cwd: string;
   readonly include: string[];
   readonly exclude: string[];
@@ -273,7 +282,8 @@ export interface FilesHandler {
    * `cwd` alone. No filesystem access, and nothing usable comes back.
    */
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
-  readTextFile(input: FilePathInput): Operation<Result<string>>;
+  /** Read text after placement and access checks, then apply any requested transform. */
+  readTextFile(input: FileReadInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
   /** Copy a regular file to a vacant destination with an existing parent. */
   copyFile(input: FileCopyInput): Operation<Result<void>>;
@@ -873,7 +883,7 @@ export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefi
  * indistinguishable from an installed one, and the whole point of the boundary
  * is that a workflow run cannot silently touch the caller's filesystem.
  */
-const composedFiles: FilesApi = createFilesApi({
+const unavailableFiles: FilesHandler = {
   // deno-lint-ignore require-yield
   *checkFilePath(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
@@ -906,10 +916,15 @@ const composedFiles: FilesApi = createFilesApi({
   *temporaryDirectory(): Operation<Result<string>> {
     throw new FilesProviderUnavailableError();
   },
-});
+};
+const composedFiles: FilesApi = createFilesApi(unavailableFiles, () =>
+  Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" })),
+);
 
-export const Files: Api<FilesHandler> = {
+export const Files: Api<FilesHandler> & Pick<FilesApi, "supportsTextTransform"> = {
   operations: composedFiles.operations,
   around: composedFiles.around,
+  supportsTextTransform: composedFiles.supportsTextTransform,
 };
+export const installTextTransformProvider = composedFiles.installTextTransformProvider;
 export const registerFileRecorder = composedFiles.register;

@@ -1,3 +1,4 @@
+import { SearchProject } from "@executablemd/core/host";
 import type { EntryPlacement } from "./entry-placement.ts";
 import { useHostFiles } from "@executablemd/runtime";
 import type { HostFilesAccess } from "@executablemd/runtime";
@@ -2003,6 +2004,9 @@ function* start(
         );
         if (workspace !== undefined && options.access !== undefined) {
           yield* useHostFiles({ access: options.access, temporaryRoot: options.access.project });
+        }
+        if (options.projectCwd !== undefined) {
+          yield* SearchProject.set(options.access?.project ?? options.projectCwd);
         }
         const directory = workspace === true ? options.workspace : options.projectCwd;
         if (directory !== undefined) {

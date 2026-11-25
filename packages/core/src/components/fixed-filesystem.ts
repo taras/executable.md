@@ -1,7 +1,8 @@
+import { fileReadArguments } from "../file-window.ts";
 import { cwd } from "@executablemd/runtime";
 import { runSelectedForm } from "../invocation-identity.ts";
 import { authoredOperation } from "../filesystem-placement.ts";
-import { form as filePatchForm, patchBody } from "./FilePatch.ts";
+import { form as filePatchForm, patchBody, props as filePatchProps } from "./FilePatch.ts";
 import { readBody } from "./File.ts";
 import { dirBody } from "./Dir.ts";
 /**
@@ -169,7 +170,7 @@ const DEFINITIONS: readonly FunctionComponentDefinition[] = Object.freeze([
   fixed(
     "File.Patch",
     filePatchForm,
-    parseJsonObject(fileProps),
+    parseJsonObject(filePatchProps),
     {
       description:
         "Apply a unified diff to a file. Provide one fenced diff. A refusal throws by default.",
@@ -247,11 +248,15 @@ export function invokeFixedFilesystem(
     definition.name === "Dir" ? dirForm : definition.name === "File" ? fileForm : fileDeleteForm;
   return runSelectedForm(definition.fn, declaration, props, invocation, function* (form, selected) {
     const directory = yield* cwd();
-    if (directory !== filesystem.frame.actualDirectory || typeof props.path !== "string") {
+    const path =
+      definition.name === "File" && form === "self-closing" && props.request !== undefined
+        ? fileReadArguments(props).path
+        : props.path;
+    if (directory !== filesystem.frame.actualDirectory || typeof path !== "string") {
       return yield* selected(props, invocation);
     }
     const operation = definition.name === "Dir" ? "dir-ensure" : "file-read";
-    const authored = authoredOperation(operation, site.occurrence, props.path, filesystem.frame);
+    const authored = authoredOperation(operation, site.occurrence, path, filesystem.frame);
     if (definition.name === "File" && form === "self-closing") {
       return yield* readBody(props, (request) =>
         filesystem.host.read(authored, Object.freeze({ ...request })),

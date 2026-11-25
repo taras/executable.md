@@ -51,6 +51,7 @@ export interface EntryFileCalls {
 }
 interface CopyRouting {
   guard(): Operation<void>;
+  prepareTransformedRead?(input: FilePathInput): Operation<Result<void>>;
   restoreSelection?(): Operation<unknown>;
   route(source: string, destination: string): Operation<Operation<void> | undefined>;
 }
@@ -127,6 +128,7 @@ function copyRecorder(routing: CopyRouting) {
 function recordingBody(
   route: FileRecordingRoute,
   copy: ReturnType<typeof copyRecorder> | undefined,
+  routing: CopyRouting,
 ) {
   return {
     *read(
@@ -158,7 +160,17 @@ function recordingBody(
     boundary(): Partial<Around<FilesHandler>> {
       const body = this;
       return {
-        readTextFile: ([input], next) => body.read(input, () => next(input)),
+        *readTextFile([input], next) {
+          if (input.transform === undefined) {
+            return yield* body.read(input, () => next(input));
+          }
+          yield* routing.guard();
+          const permitted =
+            routing.prepareTransformedRead === undefined
+              ? Ok(undefined)
+              : yield* routing.prepareTransformedRead(input);
+          return permitted.ok ? yield* next(input) : permitted;
+        },
         ensureDirectory: ([input], next) => body.ensure(input, () => next(input)),
         *writeTextFile([input], next) {
           const result = yield* route("file-write", { ...input }, () => writeOutcome(next(input)));
@@ -189,7 +201,7 @@ export function* useEntryFileRecorder(
   const scope = yield* useScope();
   const alreadyInstalled = scope.hasOwn(entryCopyInstalled);
   scope.set(entryCopyInstalled, true);
-  const body = recordingBody(route, alreadyInstalled ? undefined : copyRecorder(copy));
+  const body = recordingBody(route, alreadyInstalled ? undefined : copyRecorder(copy), copy);
   const handle = yield* registerFileRecorder(body.boundary());
   const read = assembleFileCall(handle, "readTextFile");
   const ensure = assembleFileCall(handle, "ensureDirectory");

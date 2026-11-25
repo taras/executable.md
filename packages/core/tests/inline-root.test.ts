@@ -1,3 +1,4 @@
+import { Stdio } from "@effectionx/process";
 /**
  * Tier IR — root documents supplied as text (issue #76).
  *
@@ -26,17 +27,19 @@ import {
 } from "@executablemd/test-support/failure-journal";
 
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { ensure, race, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, exec, Permissions, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { join } from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { searchText } from "../src/search-text.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import type { InlineRootDocument, RootDocumentSource } from "../src/root-source.ts";
@@ -345,6 +348,417 @@ describe("Tier IR — inline root documents", () => {
     );
 
     expect(output).toContain("notes from the working directory");
+  });
+
+  it("reads inclusive File lines and bounded Unicode windows", function* () {
+    const stream = yield* useJournalStream(INLINE_SOURCE_PATH);
+    yield* useWorkspace({ "notes.md": "before\nsecond\nthird\n" + "🦊".repeat(12000) });
+    const source = [
+      '<File path="notes.md" lines="2:3" as="lines" />',
+      '<File path="notes.md" lines="3" as="line" />',
+      '<File path="notes.md" offset={11996} limit={4} as="window" />',
+      "<Output><Json value={{lines, line, window}} /></Output>",
+    ].join("\n");
+    const output = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+    expect(output).toContain('"lines": "second\\nthird\\n"');
+    expect(output).toContain('"line": "third\\n"');
+    expect(output).toContain('"window": "🦊🦊🦊🦊"');
+  });
+
+  it("isolates concurrent bounded File reads and keeps nested and sibling reads ordinary", function* () {
+    const contents = "left marker\nright marker\nSYNTHETIC_OUTSIDE_1483";
+    const cwd = yield* useWorkspace({ "notes.md": contents, "nested.md": "ordinary nested text" });
+    const bothReading = withResolvers<void>();
+    let arrivals = 0;
+    yield* API.Fs.around({
+      *readTextFile([path], next) {
+        if (path.endsWith("/notes.md")) {
+          const nested = yield* API.Files.operations.readTextFile({ cwd, path: "nested.md" });
+          expect(nested).toMatchObject({ ok: true, value: "ordinary nested text" });
+          arrivals += 1;
+          if (arrivals === 2) {
+            bothReading.resolve();
+          }
+          yield* bothReading.operation;
+        }
+        return yield* next(path);
+      },
+    });
+    function* window(line: string, marker: string) {
+      const stream = new InMemoryStream();
+      const source = `<File path="notes.md" lines="${line}" as="window" />\n\n{window}`;
+      const output = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+      expect(output).toContain(marker);
+      const retained = stream
+        .snapshot()
+        .filter(
+          (event) =>
+            event.type === "yield" &&
+            ["file-window", "file-read", "repl_repository_local"].includes(event.description.type),
+        );
+      expect(retained).toHaveLength(1);
+      expect(JSON.stringify(retained)).toContain(marker);
+      expect(JSON.stringify(stream.snapshot())).not.toContain("SYNTHETIC_OUTSIDE_1483");
+    }
+    const left = yield* spawn(() => window("1", "left marker"));
+    const right = yield* spawn(() => window("2", "right marker"));
+    yield* bothReading.operation;
+    expect(yield* API.Files.operations.readTextFile({ cwd, path: "notes.md" })).toMatchObject({
+      ok: true,
+      value: contents,
+    });
+    yield* left;
+    yield* right;
+  });
+
+  it("continues literal scanning across a chunk and cancels a long miss", function* () {
+    const late = "x".repeat(65534) + "needle needle";
+    const first = yield* searchText(late, "needle", -1, 1);
+    expect(first[0]?.offset).toBe(65534);
+    const next = yield* searchText(late, "needle", first[0].offset, 1);
+    expect(next[0]?.offset).toBe(65541);
+    const long = "z".repeat(2_000_000);
+    const result = yield* race([
+      searchText(long, "missing", -1, 20),
+      (function* () {
+        yield* sleep(0);
+        return "cancelled";
+      })(),
+    ]);
+    expect(result).toBe("cancelled");
+  });
+
+  it("opens authored Workspace Search file references live and restores acknowledged bounded reads", function* () {
+    const phrase = "needle from a project file";
+    const long = phrase + " " + "X".repeat(12000) + " do not retain this tail";
+    const root = yield* useWorkspace({ "notes.md": long });
+    let allowed = true;
+    yield* Permissions.around({
+      files: ([operation], next) => (operation === "read" && !allowed ? false : next(operation)),
+    });
+    let reads = 0;
+    let deniedProbes = 0;
+    yield* API.Fs.around({
+      *realpath([path], next) {
+        if (!allowed && String(path).endsWith("/notes.md")) {
+          deniedProbes += 1;
+        }
+        return yield* next(path);
+      },
+      *stat([path], next) {
+        if (!allowed && String(path).endsWith("/notes.md")) {
+          deniedProbes += 1;
+        }
+        return yield* next(path);
+      },
+      *readTextFile([path], next) {
+        if (path.endsWith("/notes.md")) {
+          reads += 1;
+        }
+        return yield* next(path);
+      },
+    });
+    const search =
+      '<Search query="' + phrase + '" as="page" />\n<Output><Json value={page} /></Output>';
+    const searchStream = new InMemoryStream();
+    const printed = asText(
+      yield* collect(yield* execute({ ...inlineSource(search), stream: searchStream })),
+    );
+    const effects = searchStream
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "workspace-search");
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ description: { name: "project-files" } });
+    expect(JSON.stringify(searchStream.snapshot())).not.toContain("do not retain this tail");
+    const jsonStart = printed.indexOf("{");
+    const jsonEnd = printed.lastIndexOf("}");
+    const page = JSON.parse(printed.slice(jsonStart, jsonEnd + 1));
+    const ref = page.matches[0].ref;
+    const { reader } = ref;
+    expect(reader).toBe("File");
+    expect(page.matches).toHaveLength(1);
+    const source = `<${reader} request={${JSON.stringify(ref)}} as="opened" />\n<Output><Json value={opened} /></Output>`;
+    const stream = new InMemoryStream();
+    const first = asText(yield* collect(yield* execute({ ...inlineSource(source), stream })));
+    expect(first).toContain('"changed": false');
+    expect(first).toContain(phrase);
+    const records = JSON.stringify(stream.snapshot());
+    expect(records).toContain("file-window");
+    expect(records).not.toContain("do not retain this tail");
+    expect(records).not.toContain("X".repeat(700));
+    yield* writeTextFile(join(root, "notes.md"), "edited " + phrase);
+    const changed = asText(
+      yield* collect(yield* execute({ ...inlineSource(source), stream: new InMemoryStream() })),
+    );
+    expect(changed).toContain('"changed": true');
+    expect(changed).toContain("edited");
+    expect(reads).toBe(3);
+    yield* scoped(function* () {
+      let legacyCalls = 0;
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          legacyCalls += 1;
+          return yield* next(input);
+        },
+      });
+      const unsupported = asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(source.replace("<Output><Json value={opened} /></Output>", "")),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+      expect(unsupported).toContain("bounded file read is unavailable");
+      expect(legacyCalls).toBe(0);
+      expect(reads).toBe(3);
+    });
+    allowed = false;
+    const before = reads;
+    const denied = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(source.replace("<Output><Json value={opened} /></Output>", "")),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    expect(denied).toContain("bounded file read is unavailable");
+    expect(reads).toBe(before);
+    expect(deniedProbes).toBe(0);
+    const prefix = new InMemoryStream(
+      stream.snapshot().filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    );
+    const replayed = asText(
+      yield* collect(yield* execute({ ...inlineSource(source), stream: prefix })),
+    );
+    expect(replayed).toBe(first);
+    const acknowledged = new InMemoryStream(stream.snapshot());
+    expect(
+      asText(yield* collect(yield* execute({ ...inlineSource(source), stream: acknowledged }))),
+    ).toBe(first);
+    for (const events of [
+      searchStream.snapshot(),
+      searchStream
+        .snapshot()
+        .filter((event) => event.type !== "close" || event.coroutineId !== "root"),
+    ]) {
+      const replay = new InMemoryStream(events);
+      expect(
+        asText(yield* collect(yield* execute({ ...inlineSource(search), stream: replay }))),
+      ).toBe(printed);
+    }
+    expect(reads).toBe(before);
+
+    allowed = true;
+    for (const [operation, document, prior] of [
+      ["file-window", source, stream],
+      ["workspace-search", search, searchStream],
+    ] as const) {
+      const events = prior.snapshot();
+      const boundary = events.findIndex(
+        (event) => event.type === "yield" && event.description.type === operation,
+      );
+      expect(boundary).toBeGreaterThan(0);
+      const unfinished = new InMemoryStream(events.slice(0, boundary));
+      const output = asText(
+        yield* collect(yield* execute({ ...inlineSource(document), stream: unfinished })),
+      );
+      expect(output).toContain("edited");
+      expect(
+        unfinished
+          .snapshot()
+          .filter((event) => event.type === "yield" && event.description.type === operation),
+      ).toHaveLength(1);
+    }
+    expect(reads).toBe(before + 2);
+  });
+
+  it("refuses Search when the file provider does not support transformed reads, even for an empty directory", function* () {
+    yield* useWorkspace({});
+    const source = '<Search query="no match" />';
+    const run = function* () {
+      return asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(source),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+    };
+    expect(yield* run()).not.toContain("unavailable");
+    yield* API.Files.around({
+      readTextFile() {
+        throw new Error("An unsupported search must not call the legacy reader");
+      },
+      globFiles() {
+        throw new Error("An unsupported search must not list files");
+      },
+    });
+    expect(
+      failureMessage(
+        yield* completion({
+          ...inlineSource(source),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    ).toContain("supports transformed text reads");
+  });
+
+  it("refuses to substitute an outer file for a reference found inside Dir", function* () {
+    const root = yield* useWorkspace({ "notes.md": "outer same name" });
+    yield* ensureDir(join(root, "sub"));
+    yield* writeTextFile(join(root, "sub", "notes.md"), "inner marker");
+    const output = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(`
+<Dir path="sub">
+<Search query="inner marker" as="page" />
+<File request={page.matches[0].ref} as="opened" />
+<Json value={{opened,ref:page.matches[0].ref}} />
+</Dir>`),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    const result = JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
+    expect(result.opened.text).toBe("inner marker");
+    const moved = asText(
+      yield* collect(
+        yield* execute({
+          ...inlineSource(`<File request={${JSON.stringify(result.ref)}} />`),
+          stream: new InMemoryStream(),
+        }),
+      ),
+    );
+    expect(moved).toContain("directory where it was created");
+    expect(moved).not.toContain("outer same name");
+  });
+
+  it("distinguishes Git discovery and listing failures from non-Git fallback", function* () {
+    yield* useWorkspace({ "plain.txt": "fallback witness" });
+    const calls: string[][] = [];
+    const bytes = new TextEncoder();
+    for (const scenario of [
+      "missing",
+      "unsafe",
+      "not-worktree",
+      "mount-boundary",
+      "listing-failed",
+    ] as const) {
+      yield* scoped(function* () {
+        yield* API.Process.around({
+          *exec([input], next) {
+            if (input.command[0] !== "git") {
+              return yield* next(input);
+            }
+            calls.push(input.command);
+            expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+            if (scenario === "missing") {
+              throw new Error("controlled Git startup failure");
+            }
+            if (scenario === "listing-failed" && input.command[3] === "rev-parse") {
+              yield* Stdio.operations.stdout(bytes.encode("true\n"));
+              return { exitCode: 0, stdout: undefined, stderr: undefined };
+            }
+            const diagnostic =
+              scenario === "not-worktree"
+                ? "fatal: not a git repository (or any of the parent directories): .git\n"
+                : scenario === "mount-boundary"
+                  ? "fatal: not a git repository (or any parent up to mount point /)\n" +
+                    "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                  : "fatal: controlled Git discovery or listing failure\n";
+            yield* Stdio.operations.stderr(bytes.encode(diagnostic));
+            return { exitCode: 128, stdout: undefined, stderr: undefined };
+          },
+        });
+        const options = {
+          ...inlineSource(
+            '<Search query="fallback witness" as="page" />\n<Output><Json value={page} /></Output>',
+          ),
+          stream: new InMemoryStream(),
+        };
+        if (scenario === "not-worktree" || scenario === "mount-boundary") {
+          expect(asText(yield* collect(yield* execute(options)))).toContain("plain.txt");
+        } else {
+          const failure = failureMessage(yield* completion(options));
+          expect(failure).toContain("Check project access and Git availability");
+          expect(failure).not.toContain("plain.txt");
+        }
+      });
+    }
+    expect(calls.some((command) => command[3] === "ls-files")).toBe(true);
+  });
+
+  it("uses Git ignore rules below the working directory and keeps direct File reads", function* () {
+    const root = yield* useWorkspace({
+      ".gitignore": "ignored*.txt\n",
+      "outside.txt": "project-marker",
+    });
+    yield* ensureDir(join(root, "sub"));
+    yield* writeTextFile(join(root, "sub", "tracked.txt"), "project-marker");
+    yield* writeTextFile(join(root, "sub", "ignored-untracked.txt"), "project-marker");
+    yield* writeTextFile(join(root, "sub", "ignored-but-tracked.txt"), "project-marker");
+    for (const args of [
+      ["init", "--quiet"],
+      ["add", "-f", "--", "sub/tracked.txt", "sub/ignored-but-tracked.txt"],
+    ]) {
+      const result = yield* exec({ command: ["git", ...args], cwd: root });
+      expect(result.exitCode).toBe(0);
+    }
+    const globalConfig = join(root, ".git", "synthetic-config");
+    const globalExcludes = join(root, ".git", "synthetic-excludes");
+    yield* writeTextFile(globalConfig, '[core]\n  excludesFile = "' + globalExcludes + '"\n');
+    yield* writeTextFile(globalExcludes, "global-excluded.txt\n");
+    yield* writeTextFile(join(root, "sub", "global-excluded.txt"), "project-marker");
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    yield* ensure(() => {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    });
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    yield* API.Process.around({
+      *exec([input], next) {
+        if (input.command[0] === "git") {
+          expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+          expect(input.env?.GIT_CONFIG_GLOBAL === globalConfig).toBe(true);
+          expect(input.env?.PATH === process.env.PATH).toBe(true);
+          expect(input.env?.LC_ALL).toBe("C");
+        }
+        return yield* next(input);
+      },
+    });
+    function* search() {
+      const output = asText(
+        yield* collect(
+          yield* execute({
+            ...inlineSource(`
+<Dir path="sub">
+<Search query="project-marker" as="page" />
+<File path="ignored-untracked.txt" as="direct" />
+<Output><Json value={{page,direct}} /></Output>
+</Dir>`),
+            stream: new InMemoryStream(),
+          }),
+        ),
+      );
+      return JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
+    }
+    const first = yield* search();
+    expect(
+      first.page.matches.map((match: { source: { path: string } }) => match.source.path),
+    ).toEqual(["ignored-but-tracked.txt", "tracked.txt"]);
+    expect(first.direct).toBe("project-marker");
+    yield* writeTextFile(join(root, "sub", "added-after-search.txt"), "project-marker");
+    const repeat = yield* search();
+    expect(
+      repeat.page.matches.map((match: { source: { path: string } }) => match.source.path),
+    ).toEqual(["added-after-search.txt", "ignored-but-tracked.txt", "tracked.txt"]);
   });
 
   const rootProps = "IR11: props are validated and defaulted for a supplied root";

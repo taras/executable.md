@@ -87,7 +87,7 @@
  * temporary the document never chose.
  */
 
-import { ensure, Err, Ok, resource, scoped, until } from "effection";
+import { ensure, Err, lift, Ok, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -95,14 +95,18 @@ import { mkdtempSync } from "node:fs";
 import { constants, copyFile as nativeCopyFile, readFile, realpath, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import process from "node:process";
+import { Stdio } from "@effectionx/process";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
+import { installTextTransformProvider } from "./files.ts";
 import { routeHostCopy } from "./files-host.ts";
 import { Permissions } from "./permissions.ts";
 import type {
   FileCopyInput,
   FilePathInput,
+  FileReadInput,
   FilesHandler,
   FilesOperation,
   FilesPhase,
@@ -135,6 +139,8 @@ export interface HostFilesOptions {
   /** Test boundary for the native copy and its settlement. */
   readonly nativeCopy?: typeof nativeCopyFile;
   readonly access?: HostFilesAccess;
+  /** Exclude Git metadata from text reads, including through aliases. */
+  readonly excludeGitMetadata?: boolean;
   /**
    * The directory temporary directories are minted under, defaulting to the
    * host's temporary root. The host's root is shared by every process on the
@@ -175,6 +181,10 @@ function permits(access: HostFilesAccess, path: string, write: boolean): boolean
     return true;
   }
   return within(access.project, path) && !within(access.private, path);
+}
+
+function isGitMetadata(path: string): boolean {
+  return /(^|[\\/])\.git($|[\\/])/.test(path);
 }
 
 /** Check a live request after restoration, before coverage discovery. */
@@ -477,12 +487,16 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     return Ok(undefined);
   }
 
-  function* readTextFile(input: FilePathInput): Operation<Result<string>> {
+  function* readTextFile(input: FileReadInput): Operation<Result<string>> {
+    const { transform } = input;
     const lexical = inadmissible(input);
     if (lexical !== undefined) {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
+    if ((options.excludeGitMetadata || input.excludeGitMetadata) && isGitMetadata(input.path)) {
+      return nonWriteFailure("read", "lexical", "permission-denied");
+    }
     if (!(yield* Permissions.operations.files("read"))) {
       return nonWriteFailure("read", "resolution", "permission-denied");
     }
@@ -494,6 +508,14 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
 
     if (options.access !== undefined && !permits(options.access, target.path, false)) {
       return nonWriteFailure("read", "resolution", "resolved-escape");
+    }
+
+    if (
+      (options.excludeGitMetadata || input.excludeGitMetadata) &&
+      (isGitMetadata(target.path) ||
+        (options.access !== undefined && within(options.access.private, target.path)))
+    ) {
+      return nonWriteFailure("read", "resolution", "permission-denied");
     }
 
     notify(observe, { operation: "read", phase: "target" });
@@ -513,11 +535,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     notify(observe, { operation: "read", phase: "access" });
+    let text: string;
     try {
-      return Ok(yield* API.Fs.operations.readTextFile(target.path));
+      text = yield* API.Fs.operations.readTextFile(target.path);
     } catch (error) {
       return nonWriteFailure("read", "access", reasonOf(error));
     }
+    return transform === undefined ? Ok(text) : yield* transform(text);
   }
 
   /**
@@ -874,6 +898,101 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     return Ok(undefined);
   }
 
+  function* git(
+    cwd: string,
+    args: string[],
+  ): Operation<{ exitCode: number; stdout: string; stderr: string }> {
+    return yield* scoped(function* () {
+      const decoder = new TextDecoder();
+      let stdout = "";
+      let stderr = "";
+      const errors = new TextDecoder();
+      yield* Stdio.around({
+        stdout: lift(([bytes]) => {
+          stdout += decoder.decode(bytes, { stream: true });
+        }),
+        stderr: lift(([bytes]) => {
+          if (stderr.length < 512) {
+            stderr += errors.decode(bytes.subarray(0, 512 - stderr.length), { stream: true });
+          }
+        }),
+      });
+      const inherited = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
+      const result = yield* API.Process.operations.exec({
+        command: ["git", "-c", "core.fsmonitor=false", ...args],
+        cwd,
+        env: { ...inherited, LC_ALL: "C" },
+        retain: false,
+      });
+      return {
+        exitCode: result.exitCode,
+        stdout: stdout + decoder.decode(),
+        stderr: stderr + errors.decode(),
+      };
+    });
+  }
+
+  function* gitCandidates(cwd: string): Operation<Result<string[]> | undefined> {
+    let worktree;
+    try {
+      worktree = yield* git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+    } catch {
+      return nonWriteFailure("glob", "traversal", "operation-failed");
+    }
+    const outsideRepository =
+      /^fatal: not a git repository \(or any of the parent directories\): \.git\s*$/.test(
+        worktree.stderr,
+      ) ||
+      /^fatal: not a git repository \(or any parent up to mount point [^\r\n]+\)\r?\nStopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.\s*$/.test(
+        worktree.stderr,
+      );
+    if (
+      (worktree.exitCode === 0 && worktree.stdout.trim() === "false") ||
+      (worktree.exitCode === 128 && outsideRepository)
+    ) {
+      return undefined;
+    }
+    if (worktree.exitCode !== 0 || worktree.stdout.trim() !== "true") {
+      return nonWriteFailure("glob", "traversal", "operation-failed");
+    }
+    try {
+      const listed = yield* git(cwd, [
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        ".",
+      ]);
+      if (listed.exitCode !== 0) {
+        return nonWriteFailure("glob", "traversal", "operation-failed");
+      }
+      return Ok(
+        [
+          ...new Set(
+            listed.stdout.split("\0").filter((path) => {
+              const target = resolve(cwd, path);
+              return (
+                path.length > 0 &&
+                !isAbsolute(path) &&
+                within(cwd, target) &&
+                !isGitMetadata(path) &&
+                (options.access === undefined || !within(options.access.private, target))
+              );
+            }),
+          ),
+        ].sort(byCodePoint),
+      );
+    } catch {
+      return nonWriteFailure("glob", "traversal", "operation-failed");
+    }
+  }
+
   /**
    * The regular files under `cwd` that `include` selects and `exclude` does not.
    *
@@ -922,6 +1041,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       }
     } catch (error) {
       return nonWriteFailure("glob", "target", reasonOf(error));
+    }
+
+    if (input.projectSearch) {
+      const git = yield* gitCandidates(input.cwd);
+      if (git !== undefined) {
+        return git;
+      }
     }
 
     try {
@@ -1074,33 +1200,30 @@ function traverse(
  */
 export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
   const handler = hostFilesHandler(options);
-  return API.Files.around(
-    {
-      *checkFilePath([input]) {
-        return yield* handler.checkFilePath(input);
-      },
-      *readTextFile([input]) {
-        return yield* handler.readTextFile(input);
-      },
-      *writeTextFile([input]) {
-        return yield* handler.writeTextFile(input);
-      },
-      *copyFile([input]) {
-        return yield* handler.copyFile(input);
-      },
-      *deleteFile([input]) {
-        return yield* handler.deleteFile(input);
-      },
-      *ensureDirectory([input]) {
-        return yield* handler.ensureDirectory(input);
-      },
-      *globFiles([input]) {
-        return yield* handler.globFiles(input);
-      },
-      *temporaryDirectory() {
-        return yield* handler.temporaryDirectory();
-      },
+  return installTextTransformProvider({
+    *checkFilePath([input]) {
+      return yield* handler.checkFilePath(input);
     },
-    { at: "min" },
-  );
+    *readTextFile([input]) {
+      return yield* handler.readTextFile(input);
+    },
+    *writeTextFile([input]) {
+      return yield* handler.writeTextFile(input);
+    },
+    *copyFile([input]) {
+      return yield* handler.copyFile(input);
+    },
+    *deleteFile([input]) {
+      return yield* handler.deleteFile(input);
+    },
+    *ensureDirectory([input]) {
+      return yield* handler.ensureDirectory(input);
+    },
+    *globFiles([input]) {
+      return yield* handler.globFiles(input);
+    },
+    *temporaryDirectory() {
+      return yield* handler.temporaryDirectory();
+    },
+  });
 }

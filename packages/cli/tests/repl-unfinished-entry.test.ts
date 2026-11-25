@@ -897,6 +897,12 @@ describe("joined entry diagnostics", () => {
         expect(JSON.stringify(whole.value)).not.toContain(secret);
         expect(JSON.stringify(selected.value)).not.toContain(secret);
         expect(scans).toBeGreaterThan(0);
+        expect(
+          (yield* control(
+            f.root,
+            `<REPL.Search scope="history" query={${JSON.stringify(secret)}} />`,
+          )).observations,
+        ).toEqual([{ matches: [], next: null }]);
       }
       expect(f.host.fake.prompts).toHaveLength(0);
     });

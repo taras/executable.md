@@ -73,14 +73,26 @@ import type { FormDeclaration } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
+import { fileReadArguments, fileRevision } from "../file-window.ts";
+import { readFileWindow } from "../file-read-transform.ts";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import { searchDirectory } from "../project-search.ts";
+import { isJsonObject, parseJson } from "../json.ts";
 import { reason } from "./fs-error-phrases.ts";
 
 export const props = {
   type: "object",
   properties: {
     path: { type: "string" },
+    lines: { type: "string" },
+    offset: { type: "integer" },
+    limit: { type: "integer" },
+    request: { type: "object" },
   },
-  required: ["path"],
+  anyOf: [
+    { properties: { path: { type: "string" } }, required: ["path"] },
+    { properties: { request: { type: "object" } }, required: ["request"] },
+  ],
   additionalProperties: false,
 };
 
@@ -96,8 +108,56 @@ export class FileAccessError extends Error {
 export function* readBody(
   props: Record<string, Json>,
   owned?: (input: FilePathInput) => Operation<Result<string>>,
-): Operation<string> {
-  const input = { cwd: yield* cwd(), path: String(props.path) };
+): Operation<string | { path: string; changed: boolean | null; text: string }> {
+  const bounded =
+    props.request !== undefined ||
+    props.lines !== undefined ||
+    props.offset !== undefined ||
+    props.limit !== undefined;
+  if (bounded) {
+    const selection = fileReadArguments(props);
+    const requested = selection.path;
+    const reference = isJsonObject(props.request) && Object.hasOwn(props.request, "reader");
+    const directory = selection.revision === undefined ? yield* cwd() : yield* searchDirectory();
+    const raw: unknown = yield createDurableOperation<Json>(
+      { type: "file-window", name: requested, ...props },
+      function* () {
+        if (
+          (reference || selection.scope !== undefined) &&
+          selection.scope !== fileRevision(directory)
+        ) {
+          return false;
+        }
+        const page = yield* readFileWindow(directory, selection);
+        return page.ok ? page.value : null;
+      },
+    );
+    const result = parseJson(raw);
+    if (result === false) {
+      throw new FileAccessError("Open a search reference in the directory where it was created.");
+    }
+    if (result === null) {
+      throw new FileAccessError("This bounded file read is unavailable.");
+    }
+    if (
+      !isJsonObject(result) ||
+      result.path !== requested ||
+      typeof result.text !== "string" ||
+      (result.changed !== null && typeof result.changed !== "boolean")
+    ) {
+      throw new FileAccessError("The bounded file read could not be restored.");
+    }
+    return props.request === undefined
+      ? result.text
+      : {
+          path: requested,
+          changed: result.changed,
+          text: result.text,
+        };
+  }
+  const requested = String(props.path);
+  const directory = yield* cwd();
+  const input = { cwd: directory, path: requested };
   return yield* readRequestedText(input, owned?.(input));
 }
 
@@ -115,7 +175,10 @@ const read = printErrors((props) => readBody(props));
 
 /** The paired body: it writes, and there is no path from here to a read. */
 const write = printErrors(function* (props: Record<string, Json>): Operation<string> {
-  const requested = String(props.path);
+  if (typeof props.path !== "string" || Object.keys(props).some((name) => name !== "path")) {
+    throw new FileAccessError("Write a File with a path and content.");
+  }
+  const requested = props.path;
   const directory = yield* cwd();
   const admitted = yield* checkFilePath({ cwd: directory, path: requested });
   if (!admitted.ok) {

@@ -1,3 +1,4 @@
+import search, { props as searchProps } from "./Search.ts";
 /**
  * The components core supplies (spec §5.3).
  *
@@ -231,6 +232,18 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     {
       generated: fetchGenerated,
     },
+  ),
+  core(
+    "Search",
+    search,
+    parseJsonObject(searchProps),
+    {
+      description:
+        'Find literal text in project files with `<Search query="error message" as="page" />`.',
+      as: "Capture the bounded matches and continuation.",
+      context: null,
+    },
+    { forms: ["self-closing"] },
   ),
   core("File.Copy", fileCopyForm, parseJsonObject(fileCopyProps), {
     description: null,

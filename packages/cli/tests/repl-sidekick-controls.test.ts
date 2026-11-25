@@ -32,21 +32,24 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
  * covered here.
  */
 
+import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { appendFile, open, readFile } from "node:fs/promises";
+import { appendFile, open, readFile, symlink } from "node:fs/promises";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { Stdio } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { join } from "node:path";
 import { createAcpxProvider } from "../../acp/src/provider.ts";
 import { createAcpxSessionStore } from "../../acp/src/session-store.ts";
 import { fileURLToPath } from "node:url";
-import { Err, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -57,7 +60,10 @@ import {
   Execution,
   INLINE_SOURCE_PATH,
   retainedSource,
+  execute,
+  collect,
   useTempFileCompiler,
+  registerComponents,
 } from "@executablemd/core";
 import { Agent } from "@executablemd/agent/api";
 import { agentIdentityComponents, installAgentComponents } from "@executablemd/agent/host";
@@ -65,7 +71,15 @@ import type { SyntaxSymbols, FunctionComponentDefinition } from "@executablemd/c
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
-import { API, cwd, platform, Permissions, useHostFiles } from "@executablemd/runtime";
+import {
+  API,
+  captureHostFilesAccess,
+  cwd,
+  hostFilesHandler,
+  platform,
+  Permissions,
+  useHostFiles,
+} from "@executablemd/runtime";
 
 import { DESIGNATED, GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
 import { openReplSession } from "../src/repl/session.ts";
@@ -221,6 +235,15 @@ function requests(
   }
   return {
     importAsset: (_source, destination) => answer("importAsset", destination),
+    search: () => answer("search", { matches: [], next: null }),
+    projectFile: () =>
+      answer("projectFile", { source: { kind: "file", path: "test" }, changed: null, text: "" }),
+    historyWindow: () =>
+      answer("historyWindow", {
+        source: { kind: "history", entry: 1, field: "source" },
+        offset: 0,
+        text: "",
+      }),
     bindings: () => answer<Json>("bindings", { names: ["Ada", "Grace"] }),
     entrySyntax: (names) =>
       answer(
@@ -713,6 +736,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "REPL.Search",
+        "REPL.File.Read",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -758,16 +783,19 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
       "entry",
       "offset",
       "limit",
+      "request",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Bindings")?.props).toEqual([]);
     // The saved-evidence reads keep their props closed, and only Prompt takes
     // the two that choose a turn and which of its texts to read.
     expect(surface.find((entry) => entry.name === "REPL.Entry.Journal")?.props).toEqual([
+      "request",
       "entry",
       "yq",
       "maxBytes",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Entry.Prompt")?.props).toEqual([
+      "request",
       "entry",
       "offset",
       "limit",
@@ -813,6 +841,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "REPL.Search",
+        "REPL.File.Read",
         "Sidekick.Todo",
         "Sidekick.Todo",
       ].sort(),
@@ -3158,6 +3188,599 @@ function respond(request) {
       failure: model.entries[0].terminal?.message,
       prompts: { completed: 8, failed: 1, cancelled: 0 },
     });
+  });
+
+  it("1483: an authored bounded REPL entry owns File and search retention", function* () {
+    const project = yield* useTempDirectory("repl-bounded-journal-");
+    const marker = "retained synthetic 1483";
+    const tail = "outside synthetic 1483";
+    yield* writeTextFile(join(project, "bounded.txt"), marker + "\n" + "x".repeat(12000) + tail);
+    yield* useHostFiles();
+    const flagSentinel = "synthetic flag-only text";
+    yield* writeTextFile(join(project, "flag-only.txt"), flagSentinel);
+    let rejected = false;
+    yield* registerComponents([
+      {
+        name: "FlagOnlyRead",
+        origin: "test:flag-only-read",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          yield* API.Files.around({
+            readTextFile() {
+              throw new Error("Flag-only request reached Files middleware");
+            },
+          });
+          yield* API.Fs.around({
+            readTextFile() {
+              throw new Error("Flag-only request reached the physical reader");
+            },
+          });
+          const result = yield* API.Files.operations.readTextFile({
+            cwd: project,
+            path: "flag-only.txt",
+            excludeGitMetadata: true,
+          });
+          expect(result.ok).toBe(false);
+          rejected = true;
+          return "";
+        },
+      },
+    ]);
+    const stream = new InMemoryStream();
+    const session = answered(
+      yield* openReplSession({ projectCwd: project, execution: { id: "bounded", stream } }),
+    );
+    const submitted = answered(
+      yield* session.submit(
+        [
+          "<FlagOnlyRead />",
+          '<File path="bounded.txt" lines="1" as="window" />',
+          '<Search query="retained synthetic 1483" as="page" />',
+          "<Output><Json value={{window, page}} /></Output>",
+        ].join("\n"),
+      ),
+    );
+    answered(yield* submitted.join());
+    const journal = JSON.stringify(stream.snapshot());
+    expect(journal.match(/"type":"file-window"/g)).toHaveLength(1);
+    expect(journal.match(/"type":"workspace-search"/g)).toHaveLength(1);
+    expect(journal).toContain(marker);
+    expect(rejected).toBe(true);
+    expect(journal).not.toContain(flagSentinel);
+    expect(journal).not.toContain('"type":"file-read"');
+    expect(journal).not.toContain(tail);
+    expect(journal).not.toContain("repl_repository_local");
+  });
+
+  it("1428: Sidekick falls back at mount boundaries and honors inherited global ignores", function* () {
+    const project = yield* useTempDirectory("workspace-search-git-");
+    const privateRoot = join(project, "private");
+    yield* ensureDir(privateRoot);
+    yield* writeTextFile(join(project, "visible.txt"), "git discovery marker");
+    yield* writeTextFile(join(project, "excluded.txt"), "git discovery marker");
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    const root = { ...cold(projectedOf([])), projectAccess: access };
+    const source = '<REPL.Search query="git discovery marker" scope="files" />';
+    yield* scoped(function* () {
+      yield* API.Process.around({
+        *exec([input], next) {
+          if (input.command[0] !== "git") {
+            return yield* next(input);
+          }
+          expect(input.command).toEqual([
+            "git",
+            "-c",
+            "core.fsmonitor=false",
+            "rev-parse",
+            "--is-inside-work-tree",
+          ]);
+          yield* Stdio.operations.stderr(
+            new TextEncoder().encode(
+              "fatal: not a git repository (or any parent up to mount point /)\n" +
+                "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n",
+            ),
+          );
+          return { exitCode: 128, stdout: undefined, stderr: undefined };
+        },
+      });
+      const asked = fresh();
+      answered(yield* replyThrough(source, root, asked));
+      expect(observed(asked, 0)).toMatchObject({
+        matches: [{ source: { path: "excluded.txt" } }, { source: { path: "visible.txt" } }],
+        next: null,
+      });
+    });
+    expect(
+      (yield* API.Process.operations.exec({ command: ["git", "init", "--quiet"], cwd: project }))
+        .exitCode,
+    ).toBe(0);
+    const config = join(privateRoot, "synthetic-config");
+    const excludes = join(privateRoot, "synthetic-excludes");
+    yield* writeTextFile(config, '[core]\n  excludesFile = "' + excludes + '"\n');
+    yield* writeTextFile(excludes, "excluded.txt\n");
+    const previous = process.env.GIT_CONFIG_GLOBAL;
+    yield* ensure(() => {
+      if (previous === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    });
+    process.env.GIT_CONFIG_GLOBAL = config;
+    const operations: string[] = [];
+    yield* API.Process.around({
+      *exec([input], next) {
+        if (input.command[0] === "git") {
+          expect(input.command.slice(0, 3)).toEqual(["git", "-c", "core.fsmonitor=false"]);
+          expect(input.env?.GIT_CONFIG_GLOBAL === config).toBe(true);
+          expect(input.env?.PATH === process.env.PATH).toBe(true);
+          expect(input.env?.LC_ALL).toBe("C");
+          operations.push(input.command[3]);
+        }
+        return yield* next(input);
+      },
+    });
+    const asked = fresh();
+    answered(yield* replyThrough(source, root, asked));
+    expect(observed(asked, 0)).toMatchObject({
+      matches: [{ source: { path: "visible.txt" } }],
+      next: null,
+    });
+    expect(operations).toEqual(["rev-parse", "ls-files"]);
+    expect(JSON.stringify(asked)).not.toContain(config);
+  });
+
+  it("1428: Sidekick searches the live project and retained evidence, then opens context without replay", function* () {
+    const project = yield* useTempDirectory("workspace-search-");
+    const privateRoot = join(project, "private");
+    const file = join(project, "note.txt");
+    const shared = "shared[needle]";
+    const repeated = "page[needle]";
+    const late = "🦊".repeat(200_000) + (repeated + "\n").repeat(23);
+    yield* ensureDir(privateRoot);
+    yield* writeTextFile(join(privateRoot, "hidden.txt"), "private[needle]");
+    const withheld = "withheld-from-search";
+    yield* writeTextFile(
+      join(project, "withheld.txt"),
+      withheld + "\n" + " ".repeat(512) + "partial[needle]",
+    );
+    const scannerError = "controlled-scan-error";
+    const heldScan = "controlled-scan-pause";
+    const scanEntered = withResolvers<void>();
+    let scanReleased = false;
+    let failedScans = 0;
+    let withheldScans = 0;
+    yield* writeTextFile(
+      join(project, "withheld-late.txt"),
+      "partial[needle]" + " ".repeat(1500) + withheld,
+    );
+    yield* writeTextFile(join(project, "scan-error.txt"), "partial[needle]" + scannerError);
+    yield* useSecretScannerFactory(() => ({
+      *scan(text) {
+        if (text.includes(scannerError)) {
+          failedScans += 1;
+          throw new Error("Controlled scanner failure");
+        }
+        if (text.includes(heldScan)) {
+          yield* ensure(() => {
+            scanReleased = true;
+          });
+          scanEntered.resolve();
+          yield* suspend();
+        }
+        if (text.includes(withheld)) {
+          withheldScans += 1;
+        }
+        return text.includes(withheld)
+          ? [
+              {
+                ruleId: "controlled",
+                messageId: "withheld",
+                location: { line: 1, column: 1 },
+                fingerprint: "controlled",
+              },
+            ]
+          : [];
+      },
+    }));
+    yield* writeTextFile(file, "before " + shared);
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    let calls = 0;
+    yield* API.Process.around({
+      *exec([options], next) {
+        if (options.command[0] === "git") {
+          return yield* next(options);
+        }
+        calls += 1;
+        const text = yield* readTextFile(file);
+        const encoder = new TextEncoder();
+        yield* Stdio.operations.stdout(encoder.encode(text + "\n" + late));
+        yield* Stdio.operations.stderr(encoder.encode("stderr[needle]"));
+        return { exitCode: 0, stdout: undefined, stderr: undefined };
+      },
+    });
+    const stream = new InMemoryStream();
+    const session = answered(yield* openReplSession({ execution: { id: "search", stream } }));
+    const submission = answered(
+      yield* session.submit(
+        'source[needle]\n\n```sh exec as="held"\nread-project-note\n```\n\nrendered[needle]\n\n{held.stdout}',
+      ),
+    );
+    answered(yield* submission.join());
+    yield* writeTextFile(file, "updated " + shared + "\n" + late);
+    const root: RootReading = {
+      ...rootReads(session, { ...READING_PROFILE, access }),
+      fill: cold(session.model).fill,
+    };
+    const pageSchema = z.object({
+      matches: z.array(
+        z.object({
+          source: z.json(),
+          line: z.number(),
+          excerpt: z.string(),
+          ref: z.json(),
+        }),
+      ),
+      next: z.object({ query: z.string(), scope: z.string(), after: z.json() }).nullable(),
+    });
+    function* search(query: string, scope = "both", after?: Json) {
+      const asked = fresh();
+      answered(
+        yield* replyThrough(
+          `<REPL.Search query={${JSON.stringify(query)}} scope="${scope}"${after === undefined ? "" : ` after={${JSON.stringify(after)}}`} />`,
+          root,
+          asked,
+        ),
+      );
+      return pageSchema.parse(observed(asked, 0));
+    }
+    function* context(ref: Json) {
+      const asked = fresh();
+      const { reader } = z.object({ reader: z.string() }).parse(ref);
+      answered(yield* replyThrough(`<${reader} request={${JSON.stringify(ref)}} />`, root, asked));
+      return asked.settled[0];
+    }
+    yield* scoped(function* () {
+      yield* API.Files.around({
+        readTextFile() {
+          throw new Error("An unsupported search must not call the legacy reader");
+        },
+      });
+      const asked = fresh();
+      const response = answered(
+        yield* replyThrough('<REPL.Search query="shared[needle]" scope="files" />', root, asked),
+      );
+      expect(asked.settled[0]?.ok).toBe(false);
+      expect(JSON.stringify(response)).toContain("supports transformed text reads");
+    });
+    const hits = (yield* search(shared)).matches;
+    expect(hits).toMatchObject([
+      {
+        source: { kind: "file", path: "note.txt" },
+        line: 1,
+        excerpt: expect.stringContaining("updated"),
+      },
+      {
+        source: { kind: "history", entry: 1, field: "output" },
+        excerpt: expect.stringContaining("before"),
+      },
+      {
+        source: { kind: "history", entry: 1, field: "stdout" },
+        line: 1,
+        excerpt: expect.stringContaining("before"),
+      },
+    ]);
+    expect((yield* context(hits[0].ref)).observed).toMatchObject({
+      source: hits[0].source,
+      text: expect.stringContaining("updated"),
+    });
+    expect((yield* context(hits[2].ref)).observed).toMatchObject({
+      source: hits[2].source,
+      text: expect.stringContaining("before"),
+    });
+    expect((yield* search(shared, "files")).matches).toEqual([hits[0]]);
+    expect((yield* search(shared, "history")).matches).toEqual(hits.slice(1));
+    expect((yield* search("private[needle]")).matches).toEqual([]);
+    expect(yield* search("absent[needle]", "files")).toEqual({ matches: [], next: null });
+    expect([withheldScans, failedScans]).toEqual([0, 0]);
+    expect(yield* search("partial[needle]", "files")).toEqual({ matches: [], next: null });
+    expect([withheldScans, failedScans]).toEqual([2, 1]);
+    yield* writeTextFile(join(project, "a-lookahead.txt"), "partial[needle]\n".repeat(20));
+    const exact = yield* search("partial[needle]", "files");
+    expect(exact.matches).toHaveLength(20);
+    expect(exact.next).toBe(null);
+    expect(
+      exact.matches.every(
+        (match) => isJsonObject(match.source) && match.source.path === "a-lookahead.txt",
+      ),
+    ).toBe(true);
+    for (const [path, offset] of [
+      ["withheld.txt", 520],
+      ["withheld-late.txt", 0],
+      ["scan-error.txt", 0],
+    ] as const) {
+      expect((yield* context({ reader: "REPL.File.Read", args: { path, offset } })).ok).toBe(false);
+    }
+    expect(
+      (yield* context({
+        reader: "REPL.File.Read",
+        args: { path: "private/hidden.txt", offset: 0 },
+      })).ok,
+    ).toBe(false);
+    for (const [phrase, field] of [
+      ["source[needle]", "source"],
+      ["rendered[needle]", "output"],
+      ["stderr[needle]", "stderr"],
+    ]) {
+      const match = (yield* search(phrase, "history")).matches.find(
+        (item) => isJsonObject(item.source) && item.source.field === field,
+      );
+      if (match === undefined) {
+        throw new Error(`No ${field} match`);
+      }
+      expect((yield* context(match.ref)).observed).toMatchObject({
+        source: match.source,
+        text: expect.stringContaining(phrase),
+      });
+    }
+    for (const scope of ["files", "history"]) {
+      let page = yield* search(repeated, scope);
+      expect(page.matches).toHaveLength(20);
+      const matches = [...page.matches];
+      while (page.next !== null) {
+        const next = page.next;
+        page = yield* search(next.query, next.scope, next.after);
+        matches.push(...page.matches);
+      }
+      expect(matches.every((one) => [...one.excerpt].length <= 320)).toBe(true);
+      const fields = scope === "files" ? ["file"] : ["output", "stdout"];
+      expect(matches).toHaveLength(23 * fields.length);
+      for (const field of fields) {
+        const occurrences = matches.filter(
+          ({ source }) => isJsonObject(source) && (source.field ?? source.kind) === field,
+        );
+        expect(occurrences).toHaveLength(23);
+        expect(occurrences[22].line).toBe(occurrences[0].line + 22);
+        const opened = z
+          .object({ text: z.string() })
+          .parse((yield* context(occurrences[22].ref)).observed);
+        expect(opened.text).toContain(repeated);
+        expect([...opened.text].length).toBeLessThanOrEqual(640);
+      }
+    }
+    const fileRead = fresh();
+    answered(
+      yield* replyThrough(
+        '<REPL.File.Read request={{"path":"note.txt","lines":"1"}} />',
+        root,
+        fileRead,
+      ),
+    );
+    expect(observed(fileRead, 0)).toEqual({
+      source: { kind: "file", path: "note.txt" },
+      changed: null,
+      text: "updated " + shared + "\n",
+    });
+    const ref = z
+      .object({ reader: z.literal("REPL.File.Read"), args: z.json() })
+      .parse(hits[0].ref);
+    for (const changed of [false, true]) {
+      if (changed) {
+        yield* writeTextFile(file, "later " + shared);
+      }
+      const opened = fresh();
+      answered(
+        yield* replyThrough(`<${ref.reader} request={${JSON.stringify(ref)}} />`, root, opened),
+      );
+      expect(observed(opened, 0)).toMatchObject({
+        source: hits[0].source,
+        changed,
+        text: expect.stringContaining(changed ? "later" : "updated"),
+      });
+      expect((yield* context(hits[2].ref)).observed).toMatchObject({
+        source: hits[2].source,
+        text: expect.stringContaining("before"),
+      });
+    }
+    const authored = yield* scoped(function* () {
+      yield* useHostFiles({ access });
+      yield* API.Env.around({
+        *cwd() {
+          return access.project;
+        },
+      });
+      const program = `
+<Search query={${JSON.stringify(shared)}} as="page" />
+<File request={page.matches[0].ref} as="opened" />
+<Output><Json value={{page,opened}} /></Output>`;
+      return yield* collect(
+        yield* execute({
+          ...retainedSource("authored-search.md", program),
+          stream: new InMemoryStream(),
+        }),
+      );
+    });
+    const authoredText = z.string().parse(authored);
+    const authoredPage = z
+      .object({
+        page: z.object({
+          matches: z.array(z.object({ source: z.json(), ref: z.object({ reader: z.string() }) })),
+        }),
+        opened: z.object({ changed: z.boolean(), text: z.string() }),
+      })
+      .parse(
+        JSON.parse(
+          authoredText.slice(authoredText.indexOf("{"), authoredText.lastIndexOf("}") + 1),
+        ),
+      );
+    expect(authoredPage.page.matches).toEqual([
+      { source: hits[0].source, ref: { reader: "File" } },
+    ]);
+    expect(authoredPage.opened).toEqual({ changed: false, text: "later " + shared });
+    expect((yield* context(hits[2].ref)).observed).toMatchObject({
+      source: hits[2].source,
+      text: expect.stringContaining("before"),
+    });
+    const elapsed = yield* scoped(function* () {
+      const entered = withResolvers<void>();
+      let released = false;
+      yield* API.Fs.around({
+        *readTextFile([path], next) {
+          if (!path.endsWith("/note.txt")) {
+            return yield* next(path);
+          }
+          yield* ensure(() => {
+            released = true;
+          });
+          entered.resolve();
+          yield* suspend();
+          return "";
+        },
+      });
+      const asked = fresh();
+      const search = yield* spawn(() =>
+        replyThrough('<REPL.Search query="never delivered" scope="files" />', root, asked),
+      );
+      yield* entered.operation;
+      const now = performance.now();
+      yield* search.halt();
+      expect(released).toBe(true);
+      expect(asked.settled).toEqual([]);
+      return performance.now() - now;
+    });
+    console.log(`Workspace Search cancellation joined in ${elapsed.toFixed(2)} ms`);
+    yield* writeTextFile(file, shared + " ".repeat(1500) + withheld);
+    expect((yield* context(hits[0].ref)).ok).toBe(false);
+    yield* writeTextFile(file, shared + heldScan);
+    const cancelled = fresh();
+    yield* scoped(function* () {
+      const task = yield* spawn(() =>
+        replyThrough('<REPL.Search query="shared[needle]" scope="files" />', root, cancelled),
+      );
+      yield* scanEntered.operation;
+      yield* task.halt();
+    });
+    expect(scanReleased).toBe(true);
+    expect(cancelled.settled).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it("1428: Workspace Search excludes synthetic Git metadata even through an internal alias", function* () {
+    const project = yield* useTempDirectory("workspace-search-metadata-");
+    const privateRoot = join(project, "private");
+    const metadata = join(project, ".git", "fixture.txt");
+    const marker = "synthetic-search-metadata-marker";
+    const alias = "alias.txt";
+    const ordinary = "ordinary.txt";
+    const authoredMetadata = ".git/ordinary-alias.txt";
+    yield* ensureDir(join(project, ".git"));
+    yield* writeTextFile(metadata, marker);
+    yield* writeTextFile(join(project, ordinary), marker);
+    yield* until(symlink(metadata, join(project, alias), "file"));
+    yield* until(symlink(join(project, ordinary), join(project, authoredMetadata), "file"));
+    const access = yield* captureHostFilesAccess({
+      project,
+      private: privateRoot,
+      assets: join(privateRoot, "assets"),
+      components: join(privateRoot, "components"),
+    });
+    const root: RootReading = { ...cold(projectedOf([])), projectAccess: access };
+    const files = hostFilesHandler({ access });
+    const listing = answered(
+      yield* files.globFiles({ cwd: access.project, include: ["**/*"], exclude: [] }),
+    );
+    expect(listing).toContain(ordinary);
+    expect(listing).not.toContain(alias);
+    expect(answered(yield* files.readTextFile({ cwd: access.project, path: alias }))).toBe(marker);
+
+    const reads: string[] = [];
+    let listedAlias = false;
+    yield* API.Fs.around({
+      *glob([request], next) {
+        const listed = yield* next(request);
+        listedAlias = true;
+        return [{ path: alias, isFile: true }, { path: authoredMetadata, isFile: true }, ...listed];
+      },
+      *readTextFile([path], next) {
+        reads.push(String(path));
+        return yield* next(path);
+      },
+    });
+    const search = fresh();
+    answered(
+      yield* replyThrough(
+        `<REPL.Search scope="files" query={${JSON.stringify(marker)}} />`,
+        root,
+        search,
+      ),
+    );
+    expect(listedAlias).toBe(true);
+    const page = z
+      .object({ matches: z.array(z.object({ ref: z.json() })) })
+      .parse(observed(search, 0));
+    expect(page.matches).toMatchObject([
+      { ref: { reader: "REPL.File.Read", args: { path: ordinary } } },
+    ]);
+    for (const path of [alias, ".git/fixture.txt", authoredMetadata, ordinary]) {
+      const asked = fresh();
+      const args = { path, offset: 0 };
+      answered(
+        yield* replyThrough(`<REPL.File.Read request={${JSON.stringify(args)}} />`, root, asked),
+      );
+      if (path === ordinary) {
+        expect(observed(asked, 0)).toMatchObject({ text: marker });
+      } else {
+        expect(asked.settled).toEqual([{ order: 0, ok: false }]);
+      }
+    }
+    expect(reads).not.toContain(join(access.project, ".git", "fixture.txt"));
+  });
+
+  it("1428: searches a disclosed saved failure and refuses unreadable history", function* () {
+    const model = projectedOf(yield* savedEvents());
+    const root = cold(model);
+    const query = model.entries[0].terminal?.message?.split("\n")[0]?.slice(0, 80);
+    if (!query) {
+      throw new Error("Expected a searchable terminal failure");
+    }
+    const search = `<REPL.Search scope="history" query={${JSON.stringify(query)}} />`;
+    const asked = fresh();
+    answered(yield* replyThrough(search, root, asked));
+    const matches = z
+      .object({ matches: z.array(z.object({ source: z.json(), ref: z.json() })) })
+      .parse(observed(asked, 0)).matches;
+    const failure = matches.find(
+      (one) => isJsonObject(one.source) && one.source.field === "failure",
+    );
+    if (failure === undefined) {
+      throw new Error("Missing retained terminal failure");
+    }
+    const opened = fresh();
+    const context = `<REPL.Entry.Journal request={${JSON.stringify(failure.ref)}} />`;
+    answered(yield* replyThrough(context, root, opened));
+    expect(observed(opened, 0)).toMatchObject({
+      source: failure.source,
+      text: expect.stringContaining(query),
+    });
+    const denied = {
+      ...root,
+      acknowledged: () => Err<ReplModel>(new Error("History disclosure refused.")),
+    };
+    for (const source of [search, context]) {
+      const refusal = fresh();
+      answered(yield* replyThrough(source, denied, refusal));
+      expect(refusal.settled).toEqual([{ order: 0, ok: false }]);
+    }
   });
 
   function diagnosticEvent(value: Json, status = "ok"): DurableEvent {
