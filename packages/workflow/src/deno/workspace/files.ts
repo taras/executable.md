@@ -44,7 +44,7 @@ import type {
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { savepoint } from "../transaction.ts";
-import { createWorkflowWorkspaceEffect } from "./effect.ts";
+import { createWorkflowWorkspaceEffect, type WorkflowWorkspaceTransaction } from "./effect.ts";
 import { journalableWorkspaceCode } from "./errors.ts";
 import type { DenoWorkspaceFilesystem, DenoWorkspaceStat } from "./filesystem.ts";
 import {
@@ -440,6 +440,7 @@ function* writeOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
   input: FileWriteInput,
+  attempt = savepoint,
 ): Operation<FileEffectOutcome<FileWritePhase>> {
   if (
     !(yield* Permissions.operations.files("write")) ||
@@ -479,7 +480,7 @@ function* writeOutcome(
   }
 
   try {
-    yield* savepoint(replace(filesystem, logicalParent(path), path, content));
+    yield* attempt(replace(filesystem, logicalParent(path), path, content));
   } catch (error) {
     return refused("transaction", refusalReason(asRefusal(error)));
   }
@@ -694,6 +695,36 @@ function* globOutcome(
   return { kind: "paths", paths: [...new Set(walk.value.matched)].sort(byCodePoint) };
 }
 
+/** Write a file inside an effect that publishes its own receipt with the Workspace root. */
+export function* writeWorkspaceTextFile(
+  transaction: WorkflowWorkspaceTransaction,
+  input: FileWriteInput,
+): Operation<Result<FileWriteSuccess>> {
+  const resolved = resolveLogicalPath(input.cwd, input.path);
+  if (!resolved.ok) {
+    return Err(fileWriteFailure({ phase: "lexical", reason: lexicalReason(resolved.error) }));
+  }
+  const outcome = yield* writeOutcome(
+    transaction.filesystem,
+    resolved.value,
+    input,
+    transaction.savepoint,
+  );
+  return workspaceWriteResult(outcome);
+}
+
+function workspaceWriteResult(
+  outcome: FileEffectOutcome<FileWritePhase>,
+): Result<FileWriteSuccess> {
+  if (outcome.kind === "refused") {
+    return Err(fileWriteFailure({ phase: outcome.phase, reason: outcome.reason }));
+  }
+  if (outcome.kind !== "written") {
+    throw new FilesInvariantError("protocol");
+  }
+  return Ok(fileWriteSuccess("transaction-staged"));
+}
+
 /** The document filesystem of one workflow run. */
 export interface WorkflowFilesHandler {
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
@@ -764,13 +795,7 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
         parseFileWritePhase,
         (filesystem) => writeOutcome(filesystem, path, input),
       );
-      if (outcome.kind === "refused") {
-        return Err(fileWriteFailure({ phase: outcome.phase, reason: outcome.reason }));
-      }
-      if (outcome.kind !== "written") {
-        throw new FilesInvariantError("protocol");
-      }
-      return Ok(fileWriteSuccess("transaction-staged"));
+      return workspaceWriteResult(outcome);
     },
 
     *copyFile(input: FileCopyInput): Operation<Result<void>> {

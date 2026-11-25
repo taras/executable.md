@@ -82,7 +82,7 @@ import {
   draftText,
   drawerLines,
   entrySettles,
-  openHistory,
+  openHistoryPositions,
   pasteDraft,
   RAIL,
   railMark,
@@ -588,8 +588,8 @@ describe("REPL terminal: responsive semantic frames", () => {
       // surface, for the full width of the footer: the controls it carries sit
       // inside it.
       const rows = app.presenter.grid.rows();
-      expect(rows[history.y]).toContain("HISTORY");
-      expect(rows[0]).not.toContain("HISTORY");
+      expect(rows[history.y]).toContain("[History]");
+      expect(rows[0]).not.toContain("[History]");
       for (const key of ["footer:history", "footer:exit"]) {
         expect([key, within(history, frame.boundsOf(key))]).toEqual([key, true]);
       }
@@ -2605,21 +2605,21 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
   beforeEach(journalBeforeEach(OWNER));
   it("TL6: a drawer is visible with its way out while the footer remains readable", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.press("[history]");
+    yield* page.press("[History]");
     const opened = yield* page.until("the History drawer", (one) => one.shows("[close]"));
     expect(opened.shows("History")).toBe(true);
-    expect(opened.shows("HISTORY")).toBe(true);
+    expect(opened.shows("[History]")).toBe(true);
     expect(opened.shows("[exit]")).toBe(true);
   });
 
   it("TL6: the drawer survives a narrow resize and returns to the wide screen", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* page.press("[history]");
+    yield* page.press("[History]");
     yield* page.until("the History drawer", (one) => one.shows("[close]"));
 
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[close]")).toBe(true);
-    expect(narrow.shows("HISTORY")).toBe(true);
+    expect(narrow.shows("[History]")).toBe(true);
     expect(narrow.shows("[exit]")).toBe(true);
 
     const wide = yield* page.resize(WIDE);
@@ -2676,7 +2676,7 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
     const page = yield* useReplPage({ size: WIDE });
     yield* intoDraft(page);
     yield* draftText(page, "kept in the Draft");
-    yield* page.press("[history]");
+    yield* page.press("[History]");
     yield* page.until("the History drawer", (one) => one.shows("[close]"));
     yield* page.type("stray");
     yield* page.press("[close]");
@@ -3056,8 +3056,8 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     const total = 24;
     for (let order = 1; order <= total; order += 1) {
       yield* submitPast(page, order);
-      const row = page.screen().rows.find((one) => one.includes("HISTORY")) ?? "";
-      expect([order, row.includes("[history]"), row.includes("[exit]")]).toEqual([
+      const row = page.screen().rows.find((one) => one.includes("[History]")) ?? "";
+      expect([order, row.includes("[History]"), row.includes("[exit]")]).toEqual([
         order,
         true,
         true,
@@ -3072,13 +3072,17 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     // The drawer's own rows list what it actually admitted — not the
     // transcript, which already shows an entry's text before the drawer ever
     // opens and proves nothing about the drawer's own content.
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
+    for (let step = 0; step < 150 && !page.screen().shows("Entry 1 admitted"); step++) {
+      yield* page.key("ArrowDown");
+      yield* sleep(10);
+    }
     expect(historyMarkers(page.screen()).some((row) => row.includes("Entry 1 admitted"))).toBe(
       true,
     );
     // Selecting an earlier position and closing the drawer keeps that
     // selection and the draft untouched.
-    yield* page.press("Entry 1 admitted", { rightOf: "[close]" });
+    yield* page.press("Entry 1 admitted", { rightOf: "[Rounds]" });
     yield* page.until("the first position retained", (one) => one.shows("[live]"));
     yield* closeDrawer(page);
     expect(page.screen().shows("[live]")).toBe(true);
@@ -3094,8 +3098,8 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     for (let order = 1; order <= 30; order += 1) {
       yield* submitPast(page, order);
     }
-    const row = page.screen().rows.find((one) => one.includes("HISTORY")) ?? "";
-    expect(row.includes("[history]")).toBe(true);
+    const row = page.screen().rows.find((one) => one.includes("[History]")) ?? "";
+    expect(row.includes("[History]")).toBe(true);
     expect(row.includes("[exit]")).toBe(true);
   });
 });

@@ -341,7 +341,7 @@ function* tmuxPty(inside: string, home: string): Operation<Pty> {
   function* captured(): Operation<string> {
     const pane = yield* attempted(
       "tmux",
-      control("capture-pane", "-p", "-N", "-S", "-200", "-t", name),
+      control("capture-pane", "-p", "-N", "-S", "0", "-t", name),
     );
     if (!pane.ok) {
       // An unreadable screen used to read as an empty one, which this file then
@@ -393,7 +393,7 @@ function* scriptPty(inside: string): Operation<Pty> {
     },
     // deno-lint-ignore require-yield
     *status(): Operation<number | undefined> {
-      const found = replayed(owned.written())
+      const found = readScreen(WINDOW, [owned.written()], (screen) => screen.buffer())
         .join("\n")
         .match(new RegExp(`${SENTINEL}([0-9]+)`));
       return found === null ? undefined : Number(found[1]);
@@ -403,10 +403,10 @@ function* scriptPty(inside: string): Operation<Pty> {
 
 /**
  * What the terminal shows: everything `script` captured, on a screen of this
- * pty's size, from the top of its scrollback.
+ * pty's size. Pointer coordinates refer only to the visible viewport.
  */
 function replayed(written: string): string[] {
-  return readScreen(WINDOW, [written], (screen) => usedRows(screen.buffer()));
+  return readScreen(WINDOW, [written], (screen) => usedRows(screen.rows()));
 }
 
 /** Wait until the screen shows this text, or say what it shows instead. */
@@ -529,7 +529,7 @@ function* settledEntry(
   while (true) {
     const screen = yield* pty.shows();
     const railed = screen.some((line) => {
-      const at = line.indexOf("HISTORY");
+      const at = line.indexOf("[History]");
       return at === -1 ? false : found.test(line.slice(at + 7).split("\u2500\u2500")[0] ?? "");
     });
     if (railed) {

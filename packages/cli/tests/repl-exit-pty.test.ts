@@ -702,7 +702,7 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // in that frame — would still be on the screen, which is why this is
       // asserted before the location is counted rather than instead of it.
       expect(after).not.toContain("[exit]");
-      expect(after).not.toContain("[history]");
+      expect(after).not.toContain("[History]");
 
       // And exactly one location, which is the one the command printed for a
       // caller to come back with.
@@ -757,7 +757,7 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
 
       const after = (yield* pty.shows()).join("\n");
       expect(after).not.toContain("[exit]");
-      expect(after).not.toContain("[history]");
+      expect(after).not.toContain("[History]");
 
       const printed = after.match(/xmd:\/\/repl\//g) ?? [];
       expect(printed).toHaveLength(1);

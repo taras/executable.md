@@ -251,6 +251,8 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     expect(server.issues[0]?.body ?? "").toBe(mark);
     expect(creates(server)).toBe(1);
 
+    // The outcome mark precedes teardown; Exit moves when settling finishes.
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
     yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });
@@ -317,6 +319,8 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     expect(server.issues.length).toBe(1);
     expect(server.issues[0]?.body ?? "").toBe(mark);
 
+    // Printed output precedes Elicit: its answer control moves Exit in the footer.
+    yield* showing(second, "[answer]", ACT_MS);
     yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });

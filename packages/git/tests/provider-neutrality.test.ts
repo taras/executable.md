@@ -28,11 +28,11 @@ import { glob } from "@executablemd/runtime";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 
-// The bundled vocabulary names GitHub.Search. Only its declaration,
-// registration and execution contract may use these names outside the adapter.
-const SEARCH_NAMES: Readonly<Record<string, RegExp>> = {
+// The bundled vocabulary names GitHub features in their declarations.
+const VOCABULARY_NAMES: Readonly<Record<string, RegExp>> = {
   "packages/git/src/composition/components/GitHubSearch.ts":
     /\b(?:GitHubSearch|GitHubSearchApi|githubSearchRegistration|GitHub\.Search|GitHub(?= search provider|'s| repository| response object)|executablemd\.git\.github\.search)\b/gu,
+  "packages/git/src/composition/components/PullRequestReads.ts": /\bGitHub Actions\b/gu,
   "packages/git/src/composition/installation.ts":
     /\b(?:githubSearchRegistration|GitHubSearch\.ts)\b/gu,
   "packages/git/src/composition/pull-request-read-execution.ts": /\bGitHubSearch\.ts\b/gu,
@@ -112,7 +112,7 @@ describe("the Git package's provider-neutral surface", () => {
       if (/^import\s/m.test(source) && moduleSpecifiers(parse(source).file).length === 0) {
         unread.push(path);
       }
-      const vocabulary = SEARCH_NAMES[path];
+      const vocabulary = VOCABULARY_NAMES[path];
       const names = forbiddenNames(
         vocabulary === undefined ? source : source.replace(vocabulary, "Search"),
       );

@@ -26,6 +26,7 @@ import {
 import type { ReplState, ReplView } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplModel } from "../src/repl/model.ts";
+import { resolveWheel } from "../src/repl/renderer.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { journalModel } from "./fixtures/repl/journals.ts";
@@ -62,7 +63,7 @@ function viewOf(
   return withWorkspace(view.value, workspaceOf(model));
 }
 
-/** Press the frame's own `[history]` control and reduce what it asked for. */
+/** Press the frame's own `[History]` control and reduce what it asked for. */
 function* pressHistory(
   presenter: Presenter,
   observed: Observed,
@@ -71,7 +72,7 @@ function* pressHistory(
 ): Operation<ReplState> {
   const bounds = observed.boundsOf("footer:history");
   if (bounds === undefined) {
-    throw new Error("this frame drew no [history] control");
+    throw new Error("this frame drew no [History] control");
   }
   const dispatched = yield* presenter.tree.dispatch({
     kind: "pointer",
@@ -79,9 +80,10 @@ function* pressHistory(
     frame: observed.committed.rendered.tree,
   });
   if (!dispatched.ok || dispatched.value.outcome !== "action") {
-    throw new Error("the [history] control asked for nothing");
+    throw new Error("the [History] control asked for nothing");
   }
-  return reduceRepl(state, dispatched.value.action, model, LIVE).state;
+  const opened = reduceRepl(state, dispatched.value.action, model, LIVE).state;
+  return reduceRepl(opened, { kind: "history-positions" }, model, LIVE).state;
 }
 
 function markers(observed: Observed): readonly string[] {
@@ -95,6 +97,8 @@ describe("History over a long retained history", () => {
     const presenter = yield* usePresenter(TALL);
     const closed = initialState("public-history-capacity");
     const first = yield* presenter.commit(viewOf(closed, model, TALL));
+    expect(first.keys.filter((key) => key === "footer:history")).toHaveLength(1);
+    expect(first.boundsOf("footer:history")?.x).toBe(0);
     const opened = yield* pressHistory(presenter, first, closed, model);
     expect(opened.route.drawers.map((one) => one.kind)).toEqual(["history"]);
 
@@ -103,9 +107,12 @@ describe("History over a long retained history", () => {
     const admitted = markers(drawn);
     expect(admitted.length).toBeGreaterThan(20);
     expect(markers(again)).toEqual(admitted);
-    // In recorded order, from the first position.
+    // Newest first, with the journal positions unchanged.
     expect(admitted).toEqual(
-      model.checkpoints.slice(0, admitted.length).map((one) => `drawer:marker:${one.marker}`),
+      [...model.checkpoints]
+        .reverse()
+        .slice(0, admitted.length)
+        .map((one) => `drawer:marker:${one.marker}`),
     );
     // One column, one row each, one under the other, each as wide as the next.
     const bounds = admitted.map((key) => drawn.boundsOf(key));
@@ -117,8 +124,98 @@ describe("History over a long retained history", () => {
       expect(one.y).toBe((placed[0]?.y ?? 0) + at);
     }
     const label = presenter.grid.textIn(placed[0] ?? { x: 0, y: 0, width: 0, height: 0 })[0] ?? "";
-    expect(label.trimEnd()).toContain("1 · Entry 1 admitted");
+    expect(label.trimEnd()).toContain("120 · Entry outcome recorded");
+    const original = model.checkpoints.map((one) => one.marker);
+    for (const [index, kind] of ["key", "pointer"].entries()) {
+      const key = admitted[index];
+      const bounds = drawn.boundsOf(key);
+      if (bounds === undefined) {
+        throw new Error("History row is absent");
+      }
+      const current = yield* presenter.commit(viewOf(opened, model, TALL, key));
+      const result = yield* presenter.tree.dispatch(
+        kind === "key"
+          ? { kind: "key", key: "Enter" }
+          : {
+              kind: "pointer",
+              target: current.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
+              frame: current.committed.rendered.tree,
+            },
+      );
+      if (!result.ok || result.value.outcome !== "action") {
+        throw new Error("History row selected nothing");
+      }
+      const selected = reduceRepl(opened, result.value.action, model, LIVE).state;
+      expect(selected.route.at).toBe(original[original.length - 1 - index]);
+    }
+    expect(model.checkpoints.map((one) => one.marker)).toEqual(original);
     expect(presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+  });
+
+  it("wheel reaches both ends without selecting and activates the scrolled row", function* () {
+    const model = yield* largeHistory();
+    const presenter = yield* usePresenter(NARROW);
+    let state = initialState("wheel-history");
+    const first = yield* presenter.commit(viewOf(state, model, NARROW));
+    state = yield* pressHistory(presenter, first, state, model);
+    let shown = yield* presenter.commit(viewOf(state, model, NARROW));
+    const start = markers(shown);
+    for (const direction of ["down", "up"] as const) {
+      for (let tick = 0; tick < 60; tick++) {
+        const scroll = shown.committed.rendered.map.scrolls.find(
+          (one) => one.id === "box:drawer:viewport",
+        );
+        if (scroll === undefined) {
+          throw new Error("History viewport is absent");
+        }
+        const event = resolveWheel(
+          shown.committed.rendered,
+          {
+            column: scroll.bounds.x,
+            row: scroll.bounds.y,
+          },
+          direction,
+        );
+        if (event === undefined) {
+          throw new Error("History wheel did not resolve");
+        }
+        const result = yield* presenter.tree.dispatch(event);
+        if (!result.ok || result.value.outcome !== "action") {
+          throw new Error("History wheel asked for nothing");
+        }
+        state = reduceRepl(
+          state,
+          result.value.action,
+          model,
+          LIVE,
+          shown.committed.admission,
+        ).state;
+        expect(state.route.at).toBeUndefined();
+        shown = yield* presenter.commit(viewOf(state, model, NARROW));
+      }
+      if (direction === "down") {
+        expect(markers(shown)).toContain(`drawer:marker:${model.checkpoints[0].marker}`);
+        const key = `drawer:marker:${model.checkpoints[0].marker}`;
+        const bounds = shown.boundsOf(key);
+        if (bounds === undefined) {
+          throw new Error("oldest row is absent");
+        }
+        const picked = yield* presenter.tree.dispatch({
+          kind: "pointer",
+          target: shown.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
+          frame: shown.committed.rendered.tree,
+        });
+        if (!picked.ok || picked.value.outcome !== "action") {
+          throw new Error("oldest row selected nothing");
+        }
+        expect(
+          reduceRepl(state, picked.value.action, model, LIVE, shown.committed.admission).state.route
+            .at,
+        ).toBe(model.checkpoints[0].marker);
+      } else {
+        expect(markers(shown)).toEqual(start);
+      }
+    }
   });
 
   it("H4: a padded row keeps its label, blanks and surface, and restores fresh", function* () {
@@ -126,13 +223,19 @@ describe("History over a long retained history", () => {
     const closed = initialState("public-history-capacity");
     const opened = Object.freeze({
       ...closed,
+      historyPositions: true,
       route: Object.freeze({
         ...closed.route,
         drawers: Object.freeze([Object.freeze({ kind: "history" as const })]),
       }),
     });
     const whole = (presenter: Presenter): readonly string[] =>
-      presenter.grid.styledIn({ x: 0, y: 0, width: TALL.columns, height: TALL.rows });
+      presenter.grid.styledIn({
+        x: 0,
+        y: 0,
+        width: TALL.columns,
+        height: TALL.rows,
+      });
 
     const incremental = yield* scoped(function* () {
       const presenter = yield* usePresenter(TALL);
@@ -166,7 +269,10 @@ describe("History over a long retained history", () => {
       yield* presenter.commit(viewOf(opened, model, NARROW));
       presenter.resize(TALL);
       const last = yield* presenter.commit(viewOf(opened, model, TALL, first));
-      expect(presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+      expect(presenter.renderer.engines()).toEqual({
+        measuring: 1,
+        drawing: 1,
+      });
       return { cells: whole(presenter), keys: last.keys.slice().sort() };
     });
 

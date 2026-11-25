@@ -1101,6 +1101,7 @@ export interface ReplState {
     readonly caret?: ReplCaret;
   };
   readonly heldHistory?: true;
+  readonly historyPositions?: boolean;
   readonly draftCaret?: ReplCaret;
   readonly draftOpen?: boolean;
   readonly humanRound?: string;
@@ -2609,7 +2610,11 @@ export function reduceRepl(
           state.asking?.open === true ||
           state.catalog);
       return navigate(
-        heldHistory ? { ...state, heldHistory: true } : state,
+        heldHistory
+          ? { ...state, heldHistory: true, historyPositions: false }
+          : action.drawer.kind === "history"
+            ? { ...state, historyPositions: false }
+            : state,
         model,
         {
           ...state.route,
@@ -2721,6 +2726,33 @@ export function reduceRepl(
         { ...state.route, drawers: remaining },
         live,
       );
+      if (
+        closing.kind === "history" &&
+        (state.configuring.open || state.asking?.open === true || remaining.length > 0)
+      ) {
+        return {
+          ...closed,
+          state: Object.freeze({
+            ...closed.state,
+            restore:
+              state.configuring.open && remaining.length === 0
+                ? Object.freeze({ kind: "reveal", key: "drawer:configure:agent" })
+                : undefined,
+          }),
+        };
+      }
+      if (closing.kind === "history") {
+        return {
+          ...closed,
+          state: Object.freeze({
+            ...closed.state,
+            restore: Object.freeze({
+              kind: "reveal",
+              key: remaining.length === 0 ? "footer:history" : "footer:top:history",
+            }),
+          }),
+        };
+      }
       // Dismissing the question's drawer discards what was typed into it. It is
       // not an answer, and keeping it would offer it again as though it were.
       return closing.kind === "live-elicit"
@@ -2990,6 +3022,22 @@ export function reduceRepl(
         },
       };
     }
+    case "history-positions":
+      return settled({
+        ...state,
+        historyPositions: !state.historyPositions,
+        viewports: {
+          ...state.viewports,
+          readings: {
+            ...state.viewports.readings,
+            [readingKeyOf(state, { kind: "history" }) ?? ""]: 0,
+          },
+        },
+        restore:
+          action.marker === undefined
+            ? undefined
+            : Object.freeze({ kind: "reveal", key: `drawer:marker:${action.marker}` }),
+      });
     case "select-marker": {
       // Adopted rather than resolved here: a position is a *different reading* of
       // the file, and this model is the one the view being left was built from.
@@ -5675,7 +5723,7 @@ function primaryAction(view: ReplView, narrow: boolean): string {
   }
   if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
-    // the cursor is labelled `[history]`, so the narrow form is not vague — it is
+    // the cursor is labelled `[History]`, so the narrow form is not vague — it is
     // the one word the label already supplies, given back to the keys.
     return narrow ? "Enter opens" : "Enter opens History";
   }
@@ -6320,7 +6368,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
    * What that pane would have drawn is not described where it would be drawn:
    * an opaque modal is in front of it, and a control behind one is a Tab stop
    * and a pointer target with nothing visible on it. The ones a person still
-   * needs are reparented into the form, exactly as `[history]` and `[exit]`
+   * needs are reparented into the form, exactly as `[History]` and `[exit]`
    * already are — described once, in the active focus root.
    */
   const covered = presentedAsking(view) !== undefined;
@@ -6632,14 +6680,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   items.push(...sidekickNoticeRows(view, context.noticeReason));
   const history = row(
     "footer:history",
-    "[history]",
+    "[History]",
     { select: "history" },
     styleOf("action", { inspected }),
     {
       here: view.focused,
+      ...(focusClaim(view) === "footer:history" ? { focus: true } : {}),
     },
   );
-  // The way out, on every screen and in every state. Like `[history]` it is one
+  // The way out, on every screen and in every state. Like `[History]` it is one
   // node: while a drawer is mounted it is reparented into the modal branch, so it
   // stays reachable without reaching past the focus trap, and layout still draws
   // it in the footer where it always is.
@@ -8237,13 +8286,22 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(
-    view,
-    context.widths?.drawer ?? 0,
-    context.preview,
-    context.notices,
-    context.details,
-  );
+  const held =
+    context.measuring && view.selection.drawers.at(-1)?.kind === "history"
+      ? {
+          title: "History",
+          titleStyle: styleOf("drawer-title"),
+          dismissing: undefined,
+          entering: false,
+          content: [],
+        }
+      : drawerContent(
+          view,
+          context.widths?.drawer ?? 0,
+          context.preview,
+          context.notices,
+          context.details,
+        );
   if (held === undefined) {
     return undefined;
   }
@@ -8272,20 +8330,22 @@ function drawerFor(
     ? (from: number, count: number) => catalogReveals(content, from, count)
     : (from: number, count: number) =>
         flatReveals(
-          content.map((one) => one.described),
+          content.map((one) => ({ ...one.described, key: drawerFocusKey(one.described) })),
           from,
           count,
         );
   const admitted = windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
-    configuring &&
-    view.focused !== "drawer:reading:anchor" &&
-    admitted.some((one) => {
-      const read = readDescription(one.description);
-      return isControl(read.component, read.input);
-    })
+    view.selection.drawers.at(-1)?.kind === "history" && !view.state.historyPositions
       ? admitted
-      : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
+      : configuring &&
+          view.focused !== "drawer:reading:anchor" &&
+          admitted.some((one) => {
+            const read = readDescription(one.description);
+            return isControl(read.component, read.input);
+          })
+        ? admitted
+        : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
   for (const placed of readings) {
     rows.push(placed);
   }
@@ -8329,6 +8389,25 @@ function drawerFor(
   }
   if (!inline && drawable && offered("footer:exit")) {
     rows.push(exit);
+  }
+  if (view.selection.drawers.at(-1)?.kind === "history") {
+    const marker = (
+      view.state.historyPositions
+        ? [...view.navigation.checkpoints].reverse().find((one) => one.kind === "entry")
+        : view.navigation.checkpoints.at(-1)
+    )?.marker;
+    rows.push(
+      row(
+        "drawer:history:positions",
+        view.state.historyPositions ? "[Rounds]" : "[Positions]",
+        {
+          select: "history-positions",
+          ...(marker === undefined ? {} : { marker }),
+        },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
   }
   rows.push(
     row(
@@ -8712,6 +8791,22 @@ function messageRows(
   return question.message.split("\n").map((text) => ({ text, runs: sourceRuns(text) }));
 }
 
+/** The retained destinations shared by round drawing and viewport admission. */
+function historyRounds(view: ReplView) {
+  if (view.selection.drawers.at(-1)?.kind !== "history" || view.state.historyPositions) {
+    return undefined;
+  }
+  const points = numbered(view.navigation);
+  const outcomes = new Map(
+    points.filter((one) => one.point.kind === "terminal").map((one) => [one.entry, one]),
+  );
+  const rounds = points
+    .filter((one) => one.point.kind === "entry")
+    .reverse()
+    .map((input) => ({ input, output: outcomes.get(input.entry) }));
+  return rounds.length === 0 ? undefined : rounds;
+}
+
 function drawerContent(
   view: ReplView,
   width: number,
@@ -8829,29 +8924,106 @@ function drawerContent(
     dismissing = request.key;
   } else if (open.kind === "history") {
     title = "History";
-    // Every retained position, through the same window. A marker outside it is
-    // not described, so it is not a cell, not a target and not a Tab stop —
-    // which is what makes reaching the last one a thing the controls do rather
-    // than something clipping hides.
-    // The whole recorded order, not the selected prefix: the positions after
-    // the one being read are where a reader can go next, and a drawer that
-    // stopped at the selection would be a list of where they had already
-    // been. Every position gets its own row — a group is how the rail *draws*
-    // two of them, never how it counts them — and each says what kind it is
-    // without reading anything the position holds.
-    for (const one of numbered(view.navigation)) {
-      content.push({
-        described: row(
-          `drawer:marker:${one.point.marker}`,
-          padControl(pointLabel(one.point, one.ordinal, one.entry), width),
-          { select: "marker", marker: one.point.marker },
-          styleOf("history", {
-            selected: view.state.route.at === one.point.marker,
-            inspected: true,
-          }),
-          { here: view.focused },
-        ),
-      });
+    // Both views use the whole recorded navigation, including positions beyond
+    // the selected prefix, without reading their payloads.
+    const points = numbered(view.navigation);
+    const rounds = historyRounds(view);
+    if (rounds === undefined) {
+      for (const one of [...points].reverse()) {
+        content.push({
+          described: row(
+            `drawer:marker:${one.point.marker}`,
+            padControl(pointLabel(one.point, one.ordinal, one.entry), width),
+            { select: "marker", marker: one.point.marker },
+            styleOf("history", {
+              selected: view.state.route.at === one.point.marker,
+              inspected: true,
+            }),
+            { here: view.focused },
+          ),
+        });
+      }
+    } else {
+      const entries = new Map(view.model.entries.map((entry) => [entry.order, entry]));
+      for (const [index, round] of rounds.entries()) {
+        const { input, output } = round;
+        const older = rounds[index + 1]?.input;
+        const newer = rounds[index - 1]?.input;
+        const neighbours = {
+          Home: `drawer:marker:${rounds[0].input.point.marker}`,
+          End: `drawer:marker:${rounds[rounds.length - 1].input.point.marker}`,
+        };
+        const control = (point: typeof input, label: string) =>
+          row(
+            `drawer:marker:${point.point.marker}`,
+            label,
+            {
+              select: "marker",
+              marker: point.point.marker,
+              historyRound: String(input.entry),
+              historySelected: view.state.route.at === point.point.marker,
+              reveal: {
+                ...neighbours,
+                ArrowDown: `drawer:marker:${older?.point.marker ?? point.point.marker}`,
+                ArrowUp: `drawer:marker:${newer?.point.marker ?? point.point.marker}`,
+                ...(label === "[Input]" && output !== undefined
+                  ? { "Alt+ArrowDown": `drawer:marker:${output.point.marker}` }
+                  : older === undefined
+                    ? {}
+                    : { "Alt+ArrowDown": `drawer:marker:${older.point.marker}` }),
+                ...(label === "[Output]"
+                  ? { "Alt+ArrowUp": `drawer:marker:${input.point.marker}` }
+                  : newer === undefined
+                    ? {}
+                    : {
+                        "Alt+ArrowUp": `drawer:marker:${(rounds[index - 1].output ?? newer).point.marker}`,
+                      }),
+                ...(label === "[Input]" && output !== undefined
+                  ? { ArrowRight: `drawer:marker:${output.point.marker}` }
+                  : label === "[Output]"
+                    ? { ArrowLeft: `drawer:marker:${input.point.marker}` }
+                    : {}),
+              },
+            },
+            styleOf("history", {
+              selected: view.state.route.at === point.point.marker,
+              inspected: true,
+            }),
+            { here: view.focused },
+          );
+        const entry = entries.get(input.entry);
+        const status = entry === undefined ? undefined : workState(entry, view.model, view.live);
+        const glyph =
+          status === undefined
+            ? ""
+            : status.word === "UNFINISHED"
+              ? "·"
+              : status.word.split(" ")[0];
+        const heading = line(
+          `drawer:round:${input.point.marker}`,
+          `${input.entry}: ${glyph}`,
+          styleOf("output"),
+          tokenRuns([
+            { text: `${input.entry}: `, token: "output" },
+            { text: glyph, token: status?.style.role ?? "metadata" },
+          ]),
+        );
+        const read = readDescription(heading.description);
+        content.push({
+          described: {
+            ...heading,
+            description: describeNode<ReplAction>({
+              key: read.key,
+              component: read.component,
+              input: { ...fields(read.input), historyRound: String(input.entry) },
+              children: [
+                control(input, "[Input]").description,
+                ...(output === undefined ? [] : [control(output, "[Output]").description]),
+              ],
+            }),
+          },
+        });
+      }
     }
   } else {
     const question = view.live.question;
@@ -9196,7 +9368,11 @@ function configureContent(
       held.agent,
       "configure-agent",
       styleOf("field-value"),
-      { here: focused, caret: held.caret },
+      {
+        here: focused,
+        caret: held.caret,
+        ...(focusClaim(view) === "drawer:configure:agent" ? { focus: true } : {}),
+      },
     ),
   });
   // Exactly what was asked for, and exactly what was verified. The second is
@@ -9435,6 +9611,11 @@ interface DrawerRow {
  * pass is asking about. The drawer's opening focus request goes to the first field
  * line the window actually holds.
  */
+function drawerFocusKey(one: Described): string {
+  const child = readDescription(one.description).children[0];
+  return child === undefined ? one.key : readDescription(child).key;
+}
+
 function windowed(
   content: readonly DrawerRow[],
   context: ReplPresentationContext,
@@ -9458,7 +9639,7 @@ function windowed(
   return rows.map((candidate, at) => {
     const named = candidate.field;
     if (at !== index || named === undefined) {
-      const reveal = beyond?.get(candidate.described.key);
+      const reveal = beyond?.get(drawerFocusKey(candidate.described));
       return reveal === undefined ? candidate.described : revealing(candidate.described, reveal);
     }
     const read = readDescription(candidate.described.description);
@@ -9469,7 +9650,7 @@ function windowed(
         component: read.component,
         input: {
           ...fields(read.input),
-          ...(beyond?.get(candidate.described.key) === undefined
+          ...(beyond?.get(drawerFocusKey(candidate.described)) === undefined
             ? {}
             : { reveal: beyond.get(candidate.described.key) }),
         },
@@ -9488,6 +9669,17 @@ function revealing(described: Described, reveal: Readonly<Record<string, string>
       key: read.key,
       component: read.component,
       input: { ...fields(read.input), reveal },
+      children: read.children.map((child) => {
+        const nested = readDescription(child);
+        return describeNode<ReplAction>({
+          key: nested.key,
+          component: nested.component,
+          input: {
+            ...fields(nested.input),
+            reveal: { ...fields(fields(nested.input)?.["reveal"] ?? null), ...reveal },
+          },
+        });
+      }),
       layout: read.layout,
       ...(read.focus ? { focus: true } : {}),
     }),
@@ -10745,7 +10937,12 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
     return "drawer-title";
   }
-  if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
+  if (
+    key === "drawer:history:positions" ||
+    key === "drawer:close" ||
+    key === "drawer:sidekick:stop" ||
+    key === "drawer:form:submit"
+  ) {
     return "drawer-actions";
   }
   if (key.startsWith("drawer:")) {
@@ -10865,6 +11062,7 @@ function slotOf(key: string): ReplSlot | undefined {
 
 /** One classified candidate: what it is, and what measurement would draw. */
 interface ReplCandidate {
+  readonly historyRound?: string;
   readonly key: string;
   readonly slot: ReplSlot;
   readonly text: string;
@@ -10923,10 +11121,20 @@ function candidatesOf(
     if (slot !== undefined) {
       found.push({
         key: read.key,
+        ...(typeof fields(read.input)?.["historyRound"] === "string"
+          ? { historyRound: String(fields(read.input)?.["historyRound"]) }
+          : {}),
         slot,
         text: measurementTextOf(read.component, read.input),
         control: isControl(read.component, read.input),
-        style: styles.get(read.key) ?? ORDINARY,
+        style:
+          styles.get(read.key) ??
+          (typeof fields(read.input)?.["historyRound"] === "string"
+            ? styleOf("history", {
+                selected: fields(read.input)?.["historySelected"] === true,
+                inspected: true,
+              })
+            : ORDINARY),
         runs: runs.get(read.key),
       });
     }
@@ -11020,6 +11228,52 @@ function drawerActions(candidates: readonly ReplCandidate[]): ReplBox {
         runs: candidate.runs,
       }),
     ),
+  });
+}
+
+function drawerBoxes(candidates: readonly ReplCandidate[], width: number | undefined): ReplBox[] {
+  const groups = new Map<string, ReplCandidate[]>();
+  const boxes: ReplBox[] = [];
+  for (const candidate of candidates) {
+    if (candidate.historyRound === undefined) {
+      boxes.push(rowBox(candidate, "drawer", width));
+    } else {
+      const group = groups.get(`box:drawer:round:${candidate.historyRound}`);
+      if (group !== undefined) {
+        group.push(candidate);
+      } else {
+        const children = [candidate];
+        groups.set(`box:drawer:round:${candidate.historyRound}`, children);
+        boxes.push(
+          box({
+            id: `box:drawer:round:${candidate.historyRound}`,
+            region: "drawer",
+            props: partsRowProps(1, 1, width),
+            children: children.map((one) => rowBox(one, "drawer", undefined)),
+          }),
+        );
+      }
+    }
+  }
+  return boxes.map((one) => {
+    const group = groups.get(one.id);
+    return group === undefined
+      ? one
+      : box({
+          ...one,
+          children: group.map((candidate) =>
+            box({
+              id: `box:drawer:${candidate.key}`,
+              key: candidate.key,
+              region: "drawer",
+              props: CONTROL_PROPS,
+              text: candidate.text,
+              control: candidate.control,
+              style: candidate.style,
+              runs: candidate.runs,
+            }),
+          ),
+        });
   });
 }
 
@@ -11906,9 +12160,7 @@ export function presentationFor(
             id,
             region: "drawer",
             props: viewportProps(),
-            children: of("drawer").map((candidate) =>
-              rowBox(candidate, "drawer", context.widths?.drawer),
-            ),
+            children: drawerBoxes(of("drawer"), context.widths?.drawer),
           }),
           drawerActions(of("drawer-actions")),
         ],
@@ -12099,9 +12351,11 @@ export function admissionFor(input: {
     );
     const rows =
       slot.window === DRAWER_WINDOW
-        ? drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
-            (one) => one.described,
-          )
+        ? view.selection.drawers.at(-1)?.kind === "history"
+          ? undefined
+          : drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
+              (one) => one.described,
+            )
         : slot.window === QUEUE_WINDOW
           ? queueSequence(staged(view) ?? workspaceOf(), queue).map((one) => ({
               key: one.first
@@ -12116,15 +12370,17 @@ export function admissionFor(input: {
                 ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
                 : undefined;
     const focused =
-      slot.window === SIDEKICK_WINDOW
-        ? view.focused === undefined
-          ? -1
-          : (sequence.positions.get(view.focused) ?? -1)
-        : slot.window === SESSIONS_WINDOW
+      slot.window === DRAWER_WINDOW && view.selection.drawers.at(-1)?.kind === "history"
+        ? -1
+        : slot.window === SIDEKICK_WINDOW
           ? view.focused === undefined
             ? -1
-            : (sessions.positions.get(view.focused) ?? -1)
-          : (rows?.findIndex((one) => one.key === view.focused) ?? -1);
+            : (sequence.positions.get(view.focused) ?? -1)
+          : slot.window === SESSIONS_WINDOW
+            ? view.focused === undefined
+              ? -1
+              : (sessions.positions.get(view.focused) ?? -1)
+            : (rows?.findIndex((one) => one.key === view.focused) ?? -1);
     windows.set(slot.window, {
       ...admitRows({
         offset: offsetFor(
@@ -12254,6 +12510,21 @@ function offsetFor(
     return held;
   }
   const requested = view.state.restore;
+  const rounds = window === DRAWER_WINDOW ? historyRounds(view) : undefined;
+  if (rounds !== undefined) {
+    if (requested?.kind === "reveal" && capacity > 0) {
+      const at = rounds.findIndex(
+        (round) =>
+          requested.key === `drawer:marker:${round.input.point.marker}` ||
+          (round.output !== undefined &&
+            requested.key === `drawer:marker:${round.output.point.marker}`),
+      );
+      if (at >= 0) {
+        return Math.min(Math.max(held, at - capacity + 1), at);
+      }
+    }
+    return held;
+  }
   if (
     requested?.kind === "reveal" &&
     capacity > 0 &&
@@ -12268,7 +12539,14 @@ function offsetFor(
     const at =
       window === SESSIONS_WINDOW
         ? (sessions.positions.get(requested.key) ?? -1)
-        : rows.findIndex((one) => one.key === requested.key);
+        : rows.findIndex(
+            (one) =>
+              one.key === requested.key ||
+              ("description" in one &&
+                readDescription(one.description).children.some(
+                  (child) => readDescription(child).key === requested.key,
+                )),
+          );
     if (at >= 0) {
       if (
         window === DRAWER_WINDOW &&
@@ -12389,7 +12667,12 @@ function totalOf(
   }
   // The same prepared rows the drawing pass consumes, so what this window
   // admits and what it draws cannot disagree about how tall a notice is.
-  return drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ?? 0;
+  const rounds = historyRounds(view);
+  return (
+    rounds?.length ??
+    drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ??
+    0
+  );
 }
 
 /**
@@ -13582,15 +13865,6 @@ const HISTORY_ROW = "box:history";
 /** The gap the accepted wide row keeps between its map and its controls. */
 const HISTORY_SPACE = "box:history:space";
 
-/**
- * What the compact History rail calls itself.
- *
- * Shorter than the drawer's own title, because this is one row shared with the
- * footer's controls: the drawer has room to say what its list is ordered by and
- * this has room to say which reading it belongs to.
- */
-export const COMPACT_HISTORY_TITLE = "HISTORY";
-
 /** The probe row the offered action group's own intrinsic width is read from. */
 export const HISTORY_PROBE_ACTIONS = "box:probe:history:actions";
 
@@ -13629,19 +13903,21 @@ export function historyProbeOf(
   if (actions === undefined || map === undefined) {
     return undefined;
   }
-  const children = actions.children.map((child) =>
-    child.id === HISTORY_SPACE
-      ? // The leading spacer grows into whatever the row has spare. Declared at
-        // zero here, because what is being asked is the minimum the controls
-        // need and a growing child would answer with the whole row.
-        box({ id: `${HISTORY_PROBE_ACTIONS}:space`, props: statedPartProps(0) })
-      : box({
-          id: `${HISTORY_PROBE_ACTIONS}:${child.id}`,
-          props: child.props,
-          text: child.text,
-          ...(child.style === undefined ? {} : { style: child.style }),
-          ...(child.runs === undefined ? {} : { runs: child.runs }),
-        }),
+  const launcher = boxes.find((one) => one.id === "box:action:footer:history");
+  const children = [...(launcher === undefined ? [] : [launcher]), ...actions.children].map(
+    (child) =>
+      child.id === HISTORY_SPACE || child.id === `${HISTORY_SPACE}:actions`
+        ? // The leading spacer grows into whatever the row has spare. Declared at
+          // zero here, because what is being asked is the minimum the controls
+          // need and a growing child would answer with the whole row.
+          box({ id: `${HISTORY_PROBE_ACTIONS}:space`, props: statedPartProps(0) })
+        : box({
+            id: `${HISTORY_PROBE_ACTIONS}:${child.id}`,
+            props: child.props,
+            text: child.text,
+            ...(child.style === undefined ? {} : { style: child.style }),
+            ...(child.runs === undefined ? {} : { runs: child.runs }),
+          }),
   );
   return box({
     id: "box:probe:history",
@@ -13651,7 +13927,7 @@ export function historyProbeOf(
       box({
         id: HISTORY_PROBE_MAP,
         props: fittedPartProps(),
-        text: map.text,
+        text: map.text ?? "",
         ...(map.style === undefined ? {} : { style: map.style }),
         ...(map.runs === undefined ? {} : { runs: map.runs }),
       }),
@@ -13731,11 +14007,12 @@ export function wideHistoryWidths(
     return undefined;
   }
   const bounded = { map: Math.max(0, row - needed), gap: 0 };
-  const natural = widthOf(HISTORY_MAP);
+  const natural = probedWidthOf(HISTORY_PROBE_MAP);
   if (natural === undefined || !Number.isInteger(natural)) {
     return bounded;
   }
-  const gap = Math.floor(Math.max(0, row - natural) / 2);
+  const launcher = probedWidthOf(`${HISTORY_PROBE_ACTIONS}:box:action:footer:history`) ?? 0;
+  const gap = Math.floor(Math.max(0, row - launcher - natural) / 2);
   return row - natural - gap >= needed ? { map: natural, gap } : bounded;
 }
 
@@ -13816,7 +14093,7 @@ function identityRuns(view: ReplView, width: number): readonly ReplTokenRun[] {
  * History drawer, which is what the action beside this map opens.
  */
 function compactHistoryRuns(view: ReplView, width?: number): readonly ReplTokenRun[] {
-  const title: ReplTokenRun = { text: ` ${COMPACT_HISTORY_TITLE}`, token: "history-title" };
+  const title: ReplTokenRun = { text: "", token: "history-title" };
   const marks: ReplTokenRun[][] = [];
   const editing = roundEditorVisible(view);
   const running =
@@ -14961,7 +15238,7 @@ function workspacePresentation(input: {
             id,
             region: "drawer",
             props: viewportProps(),
-            children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+            children: drawerBoxes(of("drawer"), context.widths?.drawer),
           }),
           drawerActions(of("drawer-actions")),
         ],
@@ -15051,6 +15328,20 @@ function workspacePresentation(input: {
                 region: "footer",
                 props: bandRowProps(REPL_PALETTE.historySurface),
                 children: [
+                  ...placed
+                    .filter((candidate) => candidate.key === "footer:history")
+                    .map((candidate) =>
+                      box({
+                        id: `box:action:${candidate.key}`,
+                        key: candidate.key,
+                        region: "footer",
+                        props: CONTROL_PROPS,
+                        text: candidate.text,
+                        control: candidate.control,
+                        style: candidate.style,
+                        runs: candidate.runs,
+                      }),
+                    ),
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
@@ -15092,21 +15383,30 @@ function workspacePresentation(input: {
                       ? actionRowProps()
                       : context.historySplit === undefined
                         ? inlineActionRowProps()
-                        : statedActionRowProps(context.historySplit.actions),
+                        : statedActionRowProps(
+                            Math.max(
+                              0,
+                              context.historySplit.actions -
+                                (placed.find((one) => one.key === "footer:history")?.text.length ??
+                                  0),
+                            ),
+                          ),
                     children: [
-                      ...(accepted ? [] : [spacer(HISTORY_SPACE, "footer")]),
-                      ...placed.map((candidate) =>
-                        box({
-                          id: `box:action:${candidate.key}`,
-                          key: candidate.key,
-                          region: "footer",
-                          props: CONTROL_PROPS,
-                          text: candidate.text,
-                          control: candidate.control,
-                          style: candidate.style,
-                          runs: candidate.runs,
-                        }),
-                      ),
+                      spacer(`${HISTORY_SPACE}:actions`, "footer"),
+                      ...placed
+                        .filter((candidate) => candidate.key !== "footer:history")
+                        .map((candidate) =>
+                          box({
+                            id: `box:action:${candidate.key}`,
+                            key: candidate.key,
+                            region: "footer",
+                            props: CONTROL_PROPS,
+                            text: candidate.text,
+                            control: candidate.control,
+                            style: candidate.style,
+                            runs: candidate.runs,
+                          }),
+                        ),
                     ],
                   }),
                 ],
@@ -15121,7 +15421,7 @@ function workspacePresentation(input: {
         // group as wide as itself, that edge is the band's rather than the
         // group's — a group bounded by its own width would admit every control
         // it was offered, however little room the row had.
-        id: accepted ? ACTION_ROW : "box:history",
+        id: "box:history",
         controls: Object.freeze(
           offered.map((candidate) => ({
             key: candidate.key,

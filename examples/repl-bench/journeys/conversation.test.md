@@ -60,7 +60,7 @@
       <Terminal.WaitForText text="visible-draft-witness" />
 
       <Terminal.Resize columns={120} rows={30} />
-      <Terminal.WaitForText text="HISTORY" row={29} />
+      <Terminal.WaitForText text="[History]" row={29} />
       <Terminal.WaitForText text="[S] Checkout review complete." as="mediumReply" />
       <Terminal.Click at={mediumReply} />
       <Terminal.WaitForText text="Turn 2 · prompted by [X]" as="mediumTurn" />
@@ -75,7 +75,7 @@
       <Terminal.WaitForText text="Entries › Entry 1" />
 
       <Terminal.Resize columns={72} rows={20} />
-      <Terminal.WaitForText text="HISTORY" row={19} />
+      <Terminal.WaitForText text="[History]" row={19} />
       <Repl.Focus.Message />
       <Terminal.WaitForText text="↳ [X] Round 1 result sent" as="narrowFeedback" />
       <Terminal.Click at={narrowFeedback} />

@@ -57,6 +57,7 @@ import {
   drawerOpen,
   draftText,
   entrySettles,
+  openHistoryPositions,
   pasteDraft,
   railMark,
   selectPane,
@@ -754,7 +755,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     yield* scoped(function* (): Operation<void> {
       const { page, workspace } = yield* beginJourney({ fake: live, hostRoot, size: WIDE });
       yield* takeTheJourney(page, live, hostRoot, workspace);
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
       markers = historyMarkers(page.screen());
       expect(markers.length).toBeGreaterThan(3);
       yield* closeDrawer(page);
@@ -801,7 +802,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(fragment.occurrences("answered 11:1")).toBe(1);
       expect(fragment.occurrences(STOPPED)).toBe(1);
 
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
       expect(historyMarkers(page.screen())).toEqual(markers);
       yield* closeDrawer(page);
 
@@ -973,7 +974,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* page.until("the reply", (frame) => frame.shows(REPLY.trim()));
       yield* entrySettles(page, 1, "ok");
 
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
       for (const marker of ["Entry 1 admitted", "Agent turn recorded", "Entry outcome recorded"]) {
         expect([marker, historyMarkers(page.screen()).some((row) => row.includes(marker))]).toEqual(
           [marker, true],
@@ -988,7 +989,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       );
       expect(admitted.shows(REPLY.trim())).toBe(false);
       expect(admitted.shows("ok? ·")).toBe(false);
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
 
       expect(readingRetained(page.screen())).toBe(true);
       expect(historyMarkers(page.screen()).some((row) => row.includes("Agent turn recorded"))).toBe(
@@ -997,7 +998,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* closeDrawer(page);
       expect(page.screen().shows(REPLY.trim())).toBe(false);
       expect(settledAgentTurns(page.screen())).toHaveLength(0);
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
 
       yield* closeDrawer(page);
       yield* page.press("[live]");
@@ -1006,7 +1007,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
         (frame) => !readingRetained(frame) && frame.shows(REPLY.trim()),
       );
 
-      yield* openHistory(page);
+      yield* openHistoryPositions(page);
       yield* chooseMarker(page, "Agent turn recorded");
       yield* closeDrawer(page);
       yield* page.until(
@@ -1921,13 +1922,8 @@ function readingRetained(one: ScreenReading): boolean {
   return one.shows("[live]");
 }
 
-function* openHistory(page: ReplPage): Operation<void> {
-  yield* page.press("[history]");
-  yield* page.until("the History positions", (one) => historyMarkers(one).length > 0);
-}
-
 function* chooseMarker(page: ReplPage, name: string): Operation<void> {
-  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.press(name, { rightOf: "[Rounds]" });
   yield* page.until("the retained position", readingRetained);
 }
 

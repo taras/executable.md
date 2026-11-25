@@ -32,7 +32,12 @@ import { useRetainedIssueOperations } from "../issue/effect.ts";
 import { denoRepositoryHost } from "./composition/host.ts";
 import { denoGitHubSource } from "./composition/github-host.ts";
 import { useGitHubPullRequests } from "./composition/pull-request.ts";
-import type { GitHubPullRequestsOptions } from "./composition/pull-request-reads.ts";
+import {
+  gitHubPullRequestReadResolver,
+  type GitHubPullRequestsOptions,
+} from "./composition/pull-request-reads.ts";
+import { useGitHubCheckLogs } from "./composition/github-check-log.ts";
+import { cwd } from "@executablemd/runtime";
 import type { HelperAssembly } from "./composition/credential-helper.ts";
 import {
   useGitComposition,
@@ -153,10 +158,14 @@ export function gitWorkspaceAttachment(
     // Installed on every live or partial attachment, configured or not: the
     // configuration governs URL reads, and `<PullRequest>` must keep working
     // on a host that authorizes none.
+    const gitHubReads = { host: denoGitHubSource, ...options.gitHubPullRequests };
+    yield* useGitHubCheckLogs(yield* cwd(), gitHubPullRequestReadResolver(gitHubReads), {
+      database,
+    });
     yield* useGitHubPullRequests(
       database,
       composition.host ?? denoRepositoryHost(),
-      { host: denoGitHubSource, ...options.gitHubPullRequests },
+      gitHubReads,
       selections,
     );
   };

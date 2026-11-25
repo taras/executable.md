@@ -42,7 +42,7 @@ import { useReplPage } from "./support/repl-page.ts";
 import {
   COMPOSER,
   replaceAgent,
-  openHistory,
+  openHistoryPositions,
   openConfigure,
   tab,
   scrollDrawerTo,
@@ -371,7 +371,7 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
   const column = anchors[0].indexOf(anchor);
   const end = reading.shows(COMPOSER)
     ? reading.locate(COMPOSER).row - 2
-    : reading.locate("HISTORY").row;
+    : reading.locate("[History]").row;
 
   const start = reading.locate(SIDEKICK).row;
   return pane.slice(start + 1, end).map((row) => {
@@ -1027,11 +1027,11 @@ function* openedQuestion(page: ReplPage): Operation<void> {
 }
 
 function* historyOver(page: ReplPage): Operation<boolean> {
-  yield* openHistory(page);
+  yield* openHistoryPositions(page);
   yield* page.press("[close]");
   yield* page.until(
     "History leaving",
-    (one) => !one.shows("History") || one.shows("[submit]") || one.shows("[refresh]"),
+    (one) => !one.shows("[close]") || one.shows("[submit]") || one.shows("[refresh]"),
   );
   return page.screen().shows("[submit]");
 }
@@ -1180,21 +1180,9 @@ describe("PV3/PV4: question and Configure editing", () => {
       "History over Configure",
       (one) => one.shows("History") && !one.shows("[refresh]"),
     );
-    yield* tab(page);
-    yield* tab(page);
-    yield* page.key("ArrowRight");
-    yield* page.until("held History Exit guidance", (one) => one.shows("Enter exits"));
-    yield* page.key("ArrowLeft");
-    yield* page.until("held History opener guidance", (one) => one.shows("Enter opens History"));
-    yield* page.key("Backtab");
-    yield* sleep(30);
-    yield* page.key("Enter");
+    yield* page.key("Escape");
     yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
-    // Explicit restoration is the History opener; ordinary Content entry is Agent.
-    yield* page.key("Backtab");
-    yield* sleep(30);
-    yield* page.key("Backtab");
-    yield* sleep(30);
+    yield* page.until("Configure owns focus again", (one) => one.shows(">> Agent:"));
     yield* page.type("!");
     yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
     expect(draftShows(page.screen(), "draft-kept")).toBe(true);
@@ -1329,9 +1317,20 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* draftText(page, "note");
     yield* configureOpened(page);
     yield* chooseOffered(page, "Fast");
-    yield* openHistory(page);
+    yield* openHistoryPositions(page);
     yield* page.key("Escape");
-    yield* page.until("History closing over Configure", (one) => one.shows("[refresh]"));
+    yield* page.until(
+      "History closing over Configure",
+      (one) => one.shows("[refresh]") && one.shows(">> Agent: scribe"),
+    );
+    yield* page.key("End");
+    yield* page.type("X");
+    yield* page.until("restored Configure input is usable", (one) => one.shows("Agent: scribeX"));
+    yield* page.key("Backspace");
+    yield* page.until(
+      "restored Configure input is unchanged",
+      (one) => one.shows("Agent: scribe") && !one.shows("scribeX"),
+    );
     expect(page.repl.outcome()).toBeUndefined();
     expect(page.screen().shows("(x) Fast")).toBe(true);
     yield* page.key("Escape");
@@ -2416,7 +2415,7 @@ describe("Sidekick original provider membership and cancelled append", () => {
 function composerRows(one: ScreenReading, anchor?: string): string[] {
   const prompt = one.locate(COMPOSER);
   const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
-  const footer = one.locate("HISTORY");
+  const footer = one.locate("[History]");
   // On the narrow Sidekick outlet, the compact selected-work row precedes History.
   const end = footer.row - (one.size.columns === NARROW.columns ? 1 : 0);
   return one.rows.slice(prompt.row + 1, end).map((row) => row.slice(edge).trimEnd());
@@ -2461,7 +2460,7 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(pasted.join(" ")).toContain("広");
     expect(pasted.join(" ")).toContain("い");
     expect(chatHas(page.screen(), "SAID-10")).toBe(true);
-    for (const label of [COMPOSER, "[history]", "[exit]"]) {
+    for (const label of [COMPOSER, "[History]", "[exit]"]) {
       expect(page.screen().shows(label)).toBe(true);
     }
     expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
@@ -2593,7 +2592,7 @@ function* entryRun(page: ReplPage, source: string, ordinal: number): Operation<v
 }
 
 function* freezeFirst(page: ReplPage): Operation<void> {
-  yield* openHistory(page);
+  yield* openHistoryPositions(page);
   yield* page.press("2 · Entry outcome recorded");
   yield* page.until("the first entry's outcome selected", (one) => one.shows("[live]"));
 }
@@ -3068,15 +3067,15 @@ describe("Sidekick original interrupted identities and native input routes", () 
     expect(yield* finishDraft(page)).toBe("kept entry");
   });
 
-  it("UH5: an open History drawer still says Esc closes, and closing keeps both texts", function* () {
+  it("UH5: History exposes Close, and closing keeps both texts", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
     yield* compose(page, "kept question");
     yield* tab(page);
     yield* page.key("Enter");
     yield* page.until("the keyboard-opened History drawer", (one) => one.shows("[close]"));
-    expect(page.screen().shows("Esc closes")).toBe(true);
-    expect(page.screen().shows("Tab regions Alt↑↓")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+    expect(page.screen().shows("Tab regions Alt↑↓")).toBe(false);
     yield* page.key("Escape");
     yield* page.until("History closing once", (one) => !one.shows("[close]"));
     expect(composerHolds(page.screen(), "kept question")).toBe(true);
@@ -3590,7 +3589,7 @@ describe("Retained Sidekick token usage", () => {
     yield* intoDraft(page);
     yield* typed(page, "unsent Draft");
     yield* page.type("\x078");
-    yield* page.until("History focused", (one) => one.shows("> [history]"));
+    yield* page.until("History focused", (one) => one.shows("> [History]"));
     yield* page.key("ArrowRight");
     yield* page.until("Exit focused", (one) => one.shows("> [exit]"));
     yield* page.key("ArrowRight");

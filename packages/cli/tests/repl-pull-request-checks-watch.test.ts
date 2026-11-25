@@ -28,7 +28,7 @@ import {
 import type { Operation, Task } from "effection";
 import { fromReadable } from "@effectionx/node";
 import { once } from "@effectionx/node/events";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -85,6 +85,7 @@ interface Ci {
   partial?: boolean;
   /** A status the pull request itself answers with instead of its record. */
   pullRefuses?: number;
+  logResponses?: ReadonlyMap<string, { status: number; body: string; location?: string }>;
   /** Called before a request is answered; a row holds or rewrites state here. */
   before?: (request: GitHubHttpRequest) => Operation<void>;
 }
@@ -253,10 +254,15 @@ function useGitHub(
           const answer =
             pull && ci.pullRefuses !== undefined
               ? { status: ci.pullRefuses, body: JSON.stringify({ message: "Server Error" }) }
-              : (checksAnswer(store, ci, request) ?? respond(store, request));
+              : (ci.logResponses?.get(new URL(request.url).pathname) ??
+                checksAnswer(store, ci, request) ??
+                respond(store, request));
           outgoing.writeHead(answer.status, {
             "content-type": "application/json",
-            ...(answer.link === undefined ? {} : { link: answer.link }),
+            ...("link" in answer && answer.link !== undefined ? { link: answer.link } : {}),
+            ...("location" in answer && answer.location !== undefined
+              ? { location: answer.location }
+              : {}),
           });
           outgoing.end(answer.body);
         } finally {
@@ -407,6 +413,7 @@ interface RunOptions {
   readonly holdQuestion?: () => void;
   /** Where live output is collected, when a row reads it before the entry ends. */
   readonly live?: string[];
+  readonly recordFiles?: boolean;
 }
 
 /** One entry, over one journal, with the production entry capability. */
@@ -471,7 +478,10 @@ function run(
         { at: "min" },
       );
     }
-    const installation = yield* replRepositoryInstallation(OWNER, {});
+    const installation = yield* replRepositoryInstallation(
+      OWNER,
+      options.recordFiles ? { workspace: fixture.root, projectCwd: fixture.root } : {},
+    );
     let refusal: string | undefined;
     let output = "";
     try {
@@ -1250,5 +1260,111 @@ describe("read failures without a deadline", () => {
     expect(retained(ran.events, PULL_REQUEST_CHECKS_WATCH_DEADLINE)).toEqual([
       { deadline: String(BigInt(START) + BigInt(seconds) * 1000n) },
     ]);
+  });
+});
+
+describe("failed job logs in a REPL entry", () => {
+  it("restores a completed watch and log offline with a compact partial journal", function* () {
+    const fixture = yield* useFixture();
+    fixture.ci.runs = [
+      checkRun(42, "red", "completed", "failure"),
+      checkRun(43, "green", "completed", "success"),
+    ];
+    const body = "never-journal-repl-log".repeat(51_000);
+    const storage = "https://storage.example.test/signed?token=private";
+    const repo = "/repos/owner/repository";
+    fixture.ci.logResponses = new Map([
+      [
+        `${repo}/check-runs/42`,
+        {
+          status: 200,
+          body: JSON.stringify({
+            id: 42,
+            head_sha: HEAD,
+            status: "completed",
+            conclusion: "failure",
+            app: { slug: "github-actions" },
+          }),
+        },
+      ],
+      [
+        `${repo}/actions/jobs/42`,
+        {
+          status: 200,
+          body: JSON.stringify({
+            id: 42,
+            run_id: 88,
+            run_attempt: 2,
+            head_sha: HEAD,
+            status: "completed",
+            conclusion: "failure",
+            check_run_url: `${fixture.endpoint}${repo}/check-runs/42`,
+          }),
+        },
+      ],
+      [
+        `${repo}/actions/runs/88/attempts/2`,
+        {
+          status: 200,
+          body: JSON.stringify({
+            id: 88,
+            run_attempt: 2,
+            head_sha: HEAD,
+            repository: { full_name: "owner/repository" },
+          }),
+        },
+      ],
+      [`${repo}/actions/jobs/42/logs`, { status: 302, body: "", location: storage }],
+    ]);
+
+    const fetch = globalThis.fetch;
+    let storageRequests = 0;
+    yield* ensure(() => {
+      globalThis.fetch = fetch;
+    });
+    globalThis.fetch = (input, options) => {
+      if (input !== storage) {
+        return fetch(input, options);
+      }
+      storageRequests += 1;
+      new Headers(options?.headers).forEach((_value, name) => {
+        throw new Error(`Redirected log request sent an unexpected header: ${name}`);
+      });
+      return Promise.resolve(new Response(body));
+    };
+    const source = watching(null).replace(" watch ", ' watch logs="evidence" ');
+    const first = yield* run(fixture, source, new InMemoryStream(), { recordFiles: true });
+    expect(first.refusal).toBe(undefined);
+    expect(first.output).toContain("run-88-attempt-2-job-42.log");
+    expect(rendered(first.output)).toMatchObject({
+      outcome: "failure",
+      checks: [{ conclusion: "failure" }, { conclusion: "success" }],
+      logs: [{ status: "saved", checkId: "42" }],
+    });
+    const destination = join(fixture.root, "evidence/run-88-attempt-2-job-42.log");
+    expect(yield* readTextFile(destination)).toBe(body);
+    const prefix = first.events.filter(
+      (event) => event.type !== "close" || event.coroutineId !== "root",
+    );
+    expect(prefix.length).toBeLessThan(first.events.length);
+    const journal = JSON.stringify(prefix);
+    expect(journal.length).toBeLessThan(32_768);
+    expect(journal).not.toContain("never-journal-repl-log");
+    expect(journal).not.toContain("token=private");
+
+    pullRequest(fixture).headSha = MOVED;
+    fixture.ci.pullRefuses = 503;
+    let replayRequests = 0;
+    fixture.ci.before = function* () {
+      replayRequests += 1;
+    };
+    const again = yield* run(fixture, source, new InMemoryStream([...prefix]), {
+      recordFiles: true,
+    });
+    expect(again.refusal).toBe(undefined);
+    expect(rendered(again.output)).toEqual(rendered(first.output));
+    expect(replayRequests).toBe(0);
+    expect(storageRequests).toBe(1);
+    expect(yield* readTextFile(destination)).toBe(body);
   });
 });

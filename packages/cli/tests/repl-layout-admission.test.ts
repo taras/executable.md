@@ -338,7 +338,7 @@ describe("REPL layout: what an empty measurement describes", () => {
       const presenter = yield* usePresenter(size);
       const observed = yield* presenter.commit(viewOf(model, size));
       for (const [key, label] of [
-        ["footer:history", "[history]"],
+        ["footer:history", "[History]"],
         ["footer:exit", "[exit]"],
         ["draft:new", "+ New Round"],
       ]) {
@@ -556,7 +556,7 @@ describe("REPL layout: what an action row admits", () => {
       const where = `${size.columns}x${size.rows}`;
       const presenter = yield* usePresenter(size);
       const observed = yield* presenter.commit(viewOf(model, size));
-      const actions = observed.regionOf(ACTION_ROW);
+      const actions = observed.regionOf("box:history");
       for (const key of ["footer:history", "footer:exit"]) {
         expect({ where, key, inside: within(actions, observed.boundsOf(key)) }).toEqual({
           where,
@@ -639,7 +639,7 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
       expect((observed.cells.get(key) ?? "").trim()).not.toBe("");
     }
     expect(observed.cells.get("entries:heading")?.trim()).toBe("Entries");
-    expect(observed.cells.get("footer:history")?.trim()).toBe("[history]");
+    expect(observed.cells.get("footer:history")?.trim()).toBe("[History]");
     expect(readingRows(presenter, observed).some((line) => line.includes("Short."))).toBe(true);
   });
 
@@ -688,7 +688,7 @@ describe("REPL layout: the profiles this product supports", () => {
         width: size.columns,
         height: 1,
       });
-      expect(presenter.grid.rows()[size.rows - 1]).toContain("HISTORY");
+      expect(presenter.grid.rows()[size.rows - 1]).toContain("[History]");
       expect(within(bounds("box:history"), observed.boundsOf("footer:history"))).toBe(true);
       expect(bounds("box:round-bar")?.y).toBe(size.rows - 2);
       expect(observed.boundsOf("footer:input")).toBeUndefined();
@@ -1000,14 +1000,14 @@ describe("REPL layout: what the application admits at each size", () => {
         // being measured rather than appended after the fact — and each is
         // drawn whole, inside the row, with its own complete label.
         const labels: Readonly<Record<string, string>> = {
-          "footer:history": "[history]",
+          "footer:history": "[History]",
           "footer:exit": "[exit]",
           "footer:pause": "[pause]",
           "footer:continue": "[continue]",
         };
         const row = committed.regionOf("box:history");
         const map = committed.regionOf("box:history:map");
-        const actions = committed.regionOf(ACTION_ROW);
+        const actions = committed.regionOf("box:history");
         if (row === undefined || map === undefined || actions === undefined) {
           throw new Error(`${where} drew no History row to divide`);
         }
@@ -1057,7 +1057,12 @@ describe("REPL layout: what the application admits at each size", () => {
           where,
           true,
         ]);
-        expect([where, map.width + actions.width]).toEqual([where, row.width]);
+        expect([
+          where,
+          map.width +
+            (committed.regionOf(ACTION_ROW)?.width ?? 0) +
+            (committed.boundsOf("footer:history")?.width ?? 0),
+        ]).toEqual([where, row.width]);
         expect([where, actions.width >= 0]).toEqual([where, true]);
 
         // And the control a keystroke reaches is one the frame actually drew.
@@ -1076,12 +1081,44 @@ describe("REPL layout: what the application admits at each size", () => {
     }
   });
 
+  it("History allocates all overflow cells once and keeps wide Exit at the edge", function* () {
+    for (const count of [1, 40]) {
+      const model = yield* entriesModel(count);
+      for (const size of [NARROW, MEDIUM, WIDE]) {
+        yield* scoped(function* () {
+          const presenter = yield* usePresenter(size);
+          const shown = yield* presenter.commit(withWorkspace(viewOf(model, size), workspaceOf()));
+          const row = shown.regionOf("box:history");
+          const map = shown.regionOf("box:history:map");
+          const actions = shown.regionOf(ACTION_ROW);
+          const launcher = shown.boundsOf("footer:history");
+          const exit = shown.boundsOf("footer:exit");
+          if (!row || !map || !actions || !launcher || !exit) {
+            throw new Error("History row missing");
+          }
+          if (count === 40) {
+            expect([size.columns, map.width + launcher.width + actions.width]).toEqual([
+              size.columns,
+              row.width,
+            ]);
+            expect(map.x).toBe(launcher.x + launcher.width);
+            expect(actions.x).toBe(map.x + map.width);
+          }
+          if (size === WIDE && count === 40) {
+            expect(exit.x + exit.width).toBe(row.x + row.width);
+          }
+          expect(shown.cells.get("footer:exit")).toContain("[exit]");
+        });
+      }
+    }
+  });
+
   it("A2: the wide History row divides an odd remainder into whole cells", function* () {
     const empty = projectRepl([]);
     if (!empty.ok) {
       throw empty.error;
     }
-    const size = WIDE;
+    const size = { ...WIDE, columns: WIDE.columns + 1 };
     const model = empty.value;
     const view = viewFor(
       initialState("ordinary-root"),
@@ -1116,7 +1153,8 @@ describe("REPL layout: what the application admits at each size", () => {
     if (row === undefined || map === undefined) {
       throw new Error("this frame drew no History row to divide");
     }
-    expect({ odd: (row.width - map.width) % 2 === 1 }).toEqual({ odd: true });
+    const available = row.width - (first.boundsOf("footer:history")?.width ?? 0);
+    expect({ odd: (available - map.width) % 2 === 1 }).toEqual({ odd: true });
 
     // Committing is the assertion the renderer makes: it refuses a control on
     // half a cell rather than rounding it, so a frame that drew at all drew on
@@ -1144,8 +1182,8 @@ describe("REPL layout: what the application admits at each size", () => {
       whole: true,
     });
     expect({ gap: gap.width, actions: actions.width }).toEqual({
-      gap: Math.floor((row.width - map.width) / 2),
-      actions: row.width - map.width - Math.floor((row.width - map.width) / 2),
+      gap: Math.floor((available - map.width) / 2),
+      actions: available - map.width - Math.floor((available - map.width) / 2),
     });
 
     // The controls say what they are, where the frame put them.
@@ -1153,7 +1191,7 @@ describe("REPL layout: what the application admits at each size", () => {
     if (history === undefined) {
       throw new Error("the History control was not drawn");
     }
-    expect(presenter.grid.textIn(history).join(" ")).toContain("[history]");
+    expect(presenter.grid.textIn(history).join(" ")).toContain("[History]");
     // And focus is the mounted tree's own answer, read back rather than set.
     expect({ focused: focused !== undefined }).toEqual({ focused: true });
   });
@@ -1208,17 +1246,23 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       IDLE,
     ).state;
     yield* presenter.commit(
-      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+      viewOf(model, WIDE, {
+        state: { ...history, historyPositions: true },
+        focused: focusedKey(presenter),
+      }),
     );
-    const marker = `drawer:marker:${model.checkpoints[0]?.marker ?? ""}`;
+    const marker = `drawer:marker:${model.checkpoints.at(-1)?.marker ?? ""}`;
     expect(focusedKey(presenter)).toBe(marker);
     const before = yield* presenter.commit(
-      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+      viewOf(model, WIDE, {
+        state: { ...history, historyPositions: true },
+        focused: focusedKey(presenter),
+      }),
     );
     const closeAt = before.boundsOf("drawer:close");
     expect(closeAt).toBeDefined();
     const refused = reduceRepl(
-      history,
+      { ...history, historyPositions: true },
       { kind: "select-scope", scopes: ["entry-1", "Nowhere-9"] },
       model,
       IDLE,
@@ -1522,7 +1566,7 @@ describe("Owned narrow guidance and pane navigation routes", () => {
       expect(focusedKey(presenter)).toBe(key);
       const rows = presenter.grid.rows();
       expect(rows[0]).toContain("Ready for Entry 1");
-      expect(rows.at(-1)).toContain("HISTORY");
+      expect(rows.at(-1)).toContain("[History]");
     }
   });
 
@@ -1642,14 +1686,14 @@ describe("Owned footer, History and single-field inventory", () => {
     expect(refusal.shows(recovery)).toBe(false);
     expect(refusal.rows[5]).toContain(`${scroll} · 1–4 of `);
     expect(refusal.rows.at(-2)).toContain("> Send");
-    expect(refusal.rows.at(-1)).toContain("HISTORY");
+    expect(refusal.rows.at(-1)).toContain("[History]");
 
     yield* page.wheel("down", refusal.locate("Cannot resolve component:"));
     const tail = yield* page.until("the tail of the diagnostic", (one) => one.shows(recovery));
     const from = Number(/· (\d+)–/.exec(tail.rows[5])?.[1]);
     expect(tail.rows[6 - from]?.trimEnd()).toBe(`/${"b".repeat(70)}${cutoff}`);
     expect(tail.rows.at(-2)).toContain("> Send");
-    expect(tail.rows.at(-1)).toContain("HISTORY");
+    expect(tail.rows.at(-1)).toContain("[History]");
     yield* page.wheel("up", tail.locate(scroll));
     yield* page.until("the start of the refusal again", (one) =>
       one.shows("Cannot resolve component:"),
@@ -1658,7 +1702,7 @@ describe("Owned footer, History and single-field inventory", () => {
     const resized = yield* page.resize(MEDIUM);
     expect(resized.shows(recovery)).toBe(true);
     expect(resized.rows.at(-2)).toContain("> Send");
-    expect(resized.rows.at(-1)).toContain("HISTORY");
+    expect(resized.rows.at(-1)).toContain("[History]");
     yield* page.press("Show token usage");
     yield* page.until("the usage toggle responding", (one) => one.shows("[x] Show token usage"));
 
@@ -1697,7 +1741,7 @@ describe("Owned footer, History and single-field inventory", () => {
     expect(guidance.y).toBeLessThan(exit.y);
     expect(exit.y).toBe(NARROW.rows - 1);
     const rows = presenter.grid.rows();
-    for (const word of ["HISTORY", "─", "[history]", "[exit]"]) {
+    for (const word of ["[History]", "─", "[History]", "[exit]"]) {
       expect(rows[exit.y]).toContain(word);
     }
     expect(rows[guidance.y]).toContain("Ready for Entry 2");
@@ -1710,7 +1754,7 @@ describe("Owned footer, History and single-field inventory", () => {
     yield* useTempFileCompiler();
     const events = yield* referenceEvents();
     const model = projected(events);
-    const marker = model.checkpoints[0]?.marker ?? "";
+    const marker = model.checkpoints.at(-1)?.marker ?? "";
     const projection = projectRepl(events, marker);
     if (!projection.ok) {
       throw projection.error;
@@ -1729,7 +1773,7 @@ describe("Owned footer, History and single-field inventory", () => {
     ).state;
     const presenter = yield* usePresenter(WIDE);
     const resolved = viewFor(
-      state,
+      { ...state, historyPositions: true },
       projection.value,
       IDLE,
       WIDE,
@@ -1936,7 +1980,7 @@ describe("accepted rendered scrolling guidance", () => {
       expect(words()).toContain(
         "PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
       );
-      for (const label of ["[refresh]", "[close]", "[history]", "[exit]", "Esc closes"]) {
+      for (const label of ["[refresh]", "[close]", "[History]", "[exit]", "Esc closes"]) {
         expect(page.screen().shows(label)).toBe(true);
       }
       yield* page.key("ArrowLeft");

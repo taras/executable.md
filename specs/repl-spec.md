@@ -1823,7 +1823,8 @@ outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
 the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
-History is one compact row at every size: its name, one mark for each entry in
+History is one compact row at every size: one leading `[History]` button,
+one mark for each entry in
 admission order, the head's own state, and the controls that are available now.
 It is a map of the whole recorded order, which is the one thing on this screen
 not read at the selected prefix. The positions after the selected one are where
@@ -1840,6 +1841,31 @@ position, and `[live]` returns from any of them to the head. The selected
 position keeps its own surface and the head its own colour, so the two can sit
 side by side.
 
+The History drawer shows one row per admitted round, newest first, prefixed
+with its existing round number as `n:` in the theme’s white output foreground. Each row shows only its lifecycle glyph in the existing status color: `●` active, `✓` completed, `×` failed, `-` interrupted, or the neutral `·` unfinished. Lifecycle words are omitted in History only; state is read from the selected reading. Rounds beyond a selected historical prefix retain their destinations without revealing later lifecycle outcomes. The History heading is followed directly
+by the list, with no instructional row reserved beneath it. Each row
+has distinct Input and Output controls. Input selects that round's retained
+entry-admission marker; Output selects its retained root-outcome marker. An
+unfinished round has Input but no Output control until its outcome is retained.
+Neither a live head nor an intermediate marker substitutes for an absent outcome.
+Keyboard and pointer activation use the same retained markers. Left and Right
+move between the two controls; Up and Down move between rounds, and Home and
+End reach the newest and oldest rounds. At either end, vertical arrows keep
+the current control. Alt+Down traverses Input, Output, then
+the next older round's Input; Alt+Up reverses that order. Missing Output
+controls are skipped. These paths reveal controls beyond either viewport edge
+without selecting a historical position.
+
+Positions opens every retained position in descending journal order, including
+component, binding, generated, answer and Agent positions. Rounds returns to the
+round list. These views share the existing measured viewport and preserve the
+journal's order and entry identities.
+Wheel and trackpad scrolling over the list moves three displayed rows per tick
+through the existing viewport, including batched ticks, clamped at both ends.
+Scrolling down reaches older positions and scrolling up returns to newer ones.
+Scrolling selects no position; activating a visible row selects its retained
+marker even after scrolling moves a previously focused row out of view.
+
 The map and the content are one reading, taken from one acknowledged array and
 carried together through the frame. Nothing on this screen pairs a prefix with
 a map the file no longer has: a record retained while the terminal is being
@@ -1847,6 +1873,16 @@ measured changes the next reading, not half of this one. Where that reading
 cannot be built at all, because the file holds a record this process can no
 longer read, the whole screen is the refusal — not a map standing beside a
 prefix that still looks plausible.
+
+The History map yields space to the footer controls as entries accumulate.
+Its allocation never exceeds the terminal width left after those controls,
+including when measuring an overflowing map reports a wider row. The History
+launcher remains visible and operable at supported widths. It is the only
+History launcher and Tab stop in the footer; click and Enter open its drawer,
+and ordinary dismissal restores focus to it. When History covers another
+active modal surface, dismissal returns focus to a usable control in that
+surface. No trailing History link is
+shown.
 
 The contextual controls sit at the right of the History row, side by side, each
 as wide as its own label so a pointer on one reaches that one. Order is priority:

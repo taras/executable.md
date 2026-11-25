@@ -92,7 +92,7 @@
     <ReplBench.WaitForText text="│ draft survives" />
     <ReplBench.Key key="Home" />
     <Repl.Focus.History />
-    <ReplBench.WaitForText text="> [history]" />
+    <ReplBench.WaitForText text="> [History]" />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="[close]" />
     <ReplBench.Type text="stray input" />
@@ -133,7 +133,7 @@
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="1 ✓" />
     <Repl.Focus.History />
-    <ReplBench.WaitForText text="> [history]" />
+    <ReplBench.WaitForText text="> [History]" />
     <ReplBench.Key key="ArrowRight" />
     <ReplBench.WaitForText text="> [exit]" />
     <ReplBench.Key key="Enter" />
@@ -189,7 +189,7 @@
     <ReplBench.Key key="Home" />
 
     <ReplBench.Resize columns={120} rows={30} />
-    <ReplBench.WaitForText text="HISTORY" row={29} />
+    <ReplBench.WaitForText text="[History]" row={29} />
     <ReplBench.WaitForText text="> Round" as="medium" />
     <ReplBench.WaitForText text="│ Draft kept through resize" as="mediumValue" />
     <AssertEquals actual={Math.sign(mediumValue.row - medium.row)} expected={1} />

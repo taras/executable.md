@@ -246,6 +246,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
     // Entries catalog, which this screen keeps in a drawer.
     yield* settledEntry(second, 1, "ok", ACT_MS);
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(checkout, "after.md"), "continued");
@@ -269,6 +270,8 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* sleep(500);
     yield* third.type("\t\r");
     yield* showing(third, "live is second", ACT_MS);
+    yield* settledEntry(third, 2, "ok", ACT_MS);
+    yield* showing(third, "HEAD · SETTLED", ACT_MS);
 
     yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
@@ -490,6 +493,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
     // Entries catalog, which this screen keeps in a drawer.
     yield* settledEntry(second, 1, "ok", ACT_MS);
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer — in the
     // checkout the restored placement named.
@@ -516,6 +520,8 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* sleep(500);
     yield* third.type("\t\r");
     yield* showing(third, "live is second", ACT_MS);
+    yield* settledEntry(third, 2, "ok", ACT_MS);
+    yield* showing(third, "HEAD · SETTLED", ACT_MS);
 
     yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
@@ -590,6 +596,7 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
     // entry is waiting rather than because it has not got there yet.
     expect(yield* exists(join(checkout, "after.md"))).toBe(false);
 
+    yield* showing(pty, "[answer]", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
@@ -865,6 +872,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
     // Entries catalog, which this screen keeps in a drawer.
     yield* settledEntry(second, 1, "ok", ACT_MS);
+    yield* showing(second, "HEAD · SETTLED", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(working, "after.md"), "continued");
@@ -897,6 +905,9 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     expect(yield* gitSaid(working, ["show", "HEAD:today.md"], home)).toBe("today");
     expect(yield* gitSaid(working, ["show", "HEAD:note.md"], home)).toBe("second");
 
+    // The commit and its output precede completion, which removes footer controls.
+    yield* settledEntry(third, 2, "ok", ACT_MS);
+    yield* showing(third, "HEAD · SETTLED", ACT_MS);
     yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
@@ -952,6 +963,8 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
     expect(yield* gitSaid(checkout, ["write-tree"], home)).toBe(index);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
+    yield* settledEntry(pty, 1, "ok", ACT_MS);
+    yield* showing(pty, "HEAD · SETTLED", ACT_MS);
     yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });

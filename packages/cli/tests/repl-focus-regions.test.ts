@@ -111,10 +111,10 @@ describe("REPL focus regions: the normal screen", () => {
     expect(page.screen().shows("[refresh]")).toBe(false);
     yield* page.key("Enter");
     yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
-    for (let at = 0; at < 5 && !page.screen().shows("> [history]"); at++) {
+    for (let at = 0; at < 5 && !page.screen().shows("> [History]"); at++) {
       yield* key(page, "Tab");
     }
-    expect(page.screen().shows("> [history]")).toBe(true);
+    expect(page.screen().shows("> [History]")).toBe(true);
     yield* key(page, "ArrowRight");
     expect(page.repl.terminal.ending).toBe(undefined);
     yield* key(page, "ArrowLeft");
@@ -605,8 +605,9 @@ describe("REPL focus regions: logical drawer reveal", () => {
       model,
       IDLE,
     ).state;
+    state = reduceRepl(state, { kind: "history-positions" }, model, IDLE).state;
     const opened = yield* commit();
-    const markers = model.checkpoints.map((one) => `drawer:marker:${one.marker}`);
+    const markers = [...model.checkpoints].reverse().map((one) => `drawer:marker:${one.marker}`);
     const last = markers.at(-1);
     expect(last).toBeDefined();
     expect(opened.keys).not.toContain(last);
@@ -633,7 +634,7 @@ describe("REPL focus regions: logical drawer reveal", () => {
       IDLE,
       presenter.last()?.committed.admission,
     ).state;
-    expect(state.route.at).toBe(model.checkpoints.at(-1)?.marker);
+    expect(state.route.at).toBe(model.checkpoints.at(0)?.marker);
   });
 
   it("a revealed feedback toggle and its linked entry stay in place after focus settles", function* () {

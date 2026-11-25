@@ -86,6 +86,57 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 
 describe("wheel bursts in one input chunk", () => {
   beforeEach(journalBeforeEach(OWNER));
+  it("overflowing History keeps its launcher through resize and keyboard access", function* () {
+    const page = yield* useReplPage({ size: SIZE });
+    yield* generateTypingHistory(page, 120, 1);
+    for (const size of [SIZE, { columns: 120, rows: 30 }, { columns: 72, rows: 20 }]) {
+      if (size !== SIZE) {
+        yield* page.resize(size);
+      }
+      expect(page.screen().found("[History]")).toBe(1);
+      expect(page.screen().shows("[exit]")).toBe(true);
+      yield* page.press("[History]");
+      yield* page.until("History opens", (one) => one.shows("120:"));
+      expect(page.screen().shows("120:")).toBe(true);
+      yield* page.key("Escape");
+      yield* page.until("History closes", (one) => !one.shows("120:"));
+      yield* page.until("History focus restored", (one) => one.shows("> [History]"));
+      for (let stop = 0; stop < 30 && !page.screen().shows("> [History]"); stop++) {
+        yield* page.key("Tab");
+        yield* sleep(30);
+      }
+      expect(page.screen().shows("> [History]")).toBe(true);
+      yield* page.key("Enter");
+      yield* page.until("keyboard History opens", (one) => one.shows("120:"));
+      yield* page.key("Escape");
+      yield* page.until("keyboard History closes", (one) => !one.shows("120:"));
+    }
+  });
+
+  it("History batches reach the sequential endpoint and return to newest", function* () {
+    const page = yield* useReplPage({ size: SIZE });
+    yield* generateTypingHistory(page, 30, 1);
+    yield* page.press("[History]");
+    yield* page.until("History", (one) => one.shows("[close]"));
+    yield* page.key("Tab");
+    yield* page.until("History actions own focus", (one) => one.shows("> [close]"));
+    const cell = page.screen().locate("30:");
+    const positions = () =>
+      page
+        .screen()
+        .rows.flatMap((row) => [...row.matchAll(/(?:^|\s)(\d+):/g)].map((match) => match[1]));
+    const newest = positions();
+    yield* burst(page, "down", cell, 4);
+    const older = positions();
+    expect(older).not.toEqual(newest);
+    yield* ticked(page, "up", cell, 4);
+    expect(positions()).toEqual(newest);
+    yield* ticked(page, "down", cell, 4);
+    expect(positions()).toEqual(older);
+    yield* burst(page, "up", cell, 100);
+    expect(positions()).toEqual(newest);
+  });
+
   it("Sidekick chat reaches the sequential endpoint and keeps follow", function* () {
     const page = yield* useReplPage({ size: SIZE });
     yield* intoComposer(page);
@@ -192,7 +243,7 @@ describe("wheel bursts in one input chunk", () => {
       );
     }
     yield* page.key("Tab");
-    yield* page.until("History focused", (one) => one.shows("> [history]"));
+    yield* page.until("History focused", (one) => one.shows("> [History]"));
     yield* page.key("Tab");
     yield* page.until("Transcript selector focused", (one) => one.shows("> All sessions"));
     yield* sleep(60);

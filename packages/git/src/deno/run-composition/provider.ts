@@ -127,9 +127,11 @@ import type { GitHubSource } from "../composition/github.ts";
 import { denoGitHubSource } from "../composition/github-host.ts";
 import {
   gitHubPullRequestAccess,
+  gitHubPullRequestReadResolver,
   useGitHubPullRequestReads,
   type GitHubPullRequestsOptions,
 } from "../composition/pull-request-reads.ts";
+import { useGitHubCheckLogs } from "../composition/github-check-log.ts";
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import { selectionRegistry } from "../selections.ts";
 import { discoverAmbientRepository, type AmbientRepository } from "./ambient.ts";
@@ -596,8 +598,9 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   // not the platform. Naming it here is not building one: it is a factory the
   // adapter calls if and when a request turns out to be its own.
   yield* useGitHubIssues({ host: denoGitHubSource, ...options.gitHubIssues });
+  const gitHubReads = { host: denoGitHubSource, ...options.gitHubPullRequests };
   yield* useGitHubSearch(
-    { host: denoGitHubSource, ...options.gitHubPullRequests },
+    gitHubReads,
     // deno-lint-ignore require-yield
     function* (selection) {
       return selections.authenticate(
@@ -606,7 +609,8 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       ).checkout.origin;
     },
   );
-  yield* useGitHubPullRequestReads({ host: denoGitHubSource, ...options.gitHubPullRequests });
+  yield* useGitHubPullRequestReads(gitHubReads);
+  yield* useGitHubCheckLogs(options.cwd, gitHubPullRequestReadResolver(gitHubReads));
 
   yield* IssueOperations.around(
     {
