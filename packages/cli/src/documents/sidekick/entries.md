@@ -58,10 +58,7 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   }
   ```
 
-  When an entry fails, the receipt can include a `failure` message, and `read` points to its journal.
-- For a cancelled entry, follow the receipt's
-  `<REPL.Entry.Journal />` instruction to inspect the saved evidence. Read
-  `<Guide.Recovery />` for how to use that evidence.
+  For a failed or cancelled entry, follow `read` to its journal.
 
 To execute a round and see its result, submit it and ask for output.
 
