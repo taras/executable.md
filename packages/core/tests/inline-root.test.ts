@@ -574,7 +574,7 @@ describe("Tier IR — inline root documents", () => {
     expect(reads).toBe(before + 2);
   });
 
-  it("refuses an unavailable observation provider even with an empty listing", function* () {
+  it("refuses Search when the file provider does not support transformed reads, even for an empty directory", function* () {
     yield* useWorkspace({});
     const source = '<Search query="no match" />';
     const run = function* () {
