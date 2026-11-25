@@ -3,7 +3,7 @@ import type { Context, Operation, Result } from "effection";
 import { cwd, Files } from "@executablemd/runtime";
 import { fileRevision } from "./file-window.ts";
 import { globFiles } from "./files.ts";
-import { observeFile } from "./file-observation.ts";
+import { readFileWithTransform } from "./file-observation.ts";
 import { SEARCH_PAGE_SIZE, searchText, validSearchQuery } from "./search-text.ts";
 import type { TextMatch } from "./search-text.ts";
 
@@ -33,7 +33,7 @@ function* matchProjectFile(
   reader: FileSearchHit["ref"]["reader"],
   scope: string | undefined,
 ): Operation<FileSearchHit[]> {
-  const result = yield* observeFile<FileSearchHit[]>(directory, path, true, {
+  const result = yield* readFileWithTransform<FileSearchHit[]>(directory, path, true, {
     miss: [],
     *match(text) {
       if (text.includes("\0")) {

@@ -3,11 +3,15 @@ import type { Operation, Result } from "effection";
 import { Files, filesFailure } from "@executablemd/runtime";
 import { readFileText } from "./files.ts";
 import { retainsOptionalText } from "./secrets/policy.ts";
-import { fileRevision, FILE_WINDOW_LIMIT, readFileWindow } from "./file-window.ts";
+import {
+  fileRevision,
+  FILE_WINDOW_LIMIT,
+  readFileWindow as sliceTextWindow,
+} from "./file-window.ts";
 import type { FileReadSelection } from "./file-window.ts";
 import type { Json } from "./types.ts";
 
-export function* observeFile<T extends Json>(
+export function* readFileWithTransform<T extends Json>(
   cwd: string,
   path: string,
   excludeGitMetadata: boolean,
@@ -53,15 +57,15 @@ export function* observeFile<T extends Json>(
     : Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }));
 }
 
-export function observeFileWindow(
+export function readFileWindow(
   cwd: string,
   selection: FileReadSelection,
 ): Operation<Result<{ path: string; changed: boolean | null; text: string }>> {
-  return observeFile(cwd, selection.path, selection.revision !== undefined, {
+  return readFileWithTransform(cwd, selection.path, selection.revision !== undefined, {
     read: lift((text: string) => ({
       path: selection.path,
       changed: selection.revision === undefined ? null : selection.revision !== fileRevision(text),
-      text: readFileWindow(text, { ...selection, limit: selection.limit ?? FILE_WINDOW_LIMIT }),
+      text: sliceTextWindow(text, { ...selection, limit: selection.limit ?? FILE_WINDOW_LIMIT }),
     })),
   });
 }

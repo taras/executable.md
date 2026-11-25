@@ -6,7 +6,7 @@ import {
   fileReadArguments,
   readerArguments,
   searchProjectFiles,
-  observeFileWindow,
+  readFileWindow,
   retainsOptionalText,
   searchText,
   textWindow,
@@ -271,7 +271,7 @@ export function* readProjectFile(
   }
   const page = yield* scoped(function* () {
     yield* useHostFiles({ access, excludeGitMetadata: true });
-    return yield* observeFileWindow(access.project, {
+    return yield* readFileWindow(access.project, {
       ...selection,
       limit: selection.limit ?? 640,
     });

@@ -74,7 +74,7 @@ import { ContentError, DocumentationError, ProjectedContentError } from "../erro
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
 import { fileReadArguments, fileRevision } from "../file-window.ts";
-import { observeFileWindow } from "../file-observation.ts";
+import { readFileWindow } from "../file-observation.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { searchDirectory } from "../project-search.ts";
 import { isJsonObject, parseJson } from "../json.ts";
@@ -128,7 +128,7 @@ export function* readBody(
         ) {
           return false;
         }
-        const page = yield* observeFileWindow(directory, selection);
+        const page = yield* readFileWindow(directory, selection);
         return page.ok ? page.value : null;
       },
     );
