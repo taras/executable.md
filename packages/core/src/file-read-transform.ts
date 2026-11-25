@@ -24,7 +24,7 @@ export function* readFileWithTransform<T extends Json>(
     cwd,
     path,
   };
-  const observed = yield* readFileText(
+  const readResult = yield* readFileText(
     input,
     Files.operations.readTextFile({
       ...input,
@@ -49,10 +49,10 @@ export function* readFileWithTransform<T extends Json>(
       },
     }),
   );
-  if (!observed.ok) {
-    return observed;
+  if (!readResult.ok) {
+    return readResult;
   }
-  return approved !== undefined && observed.value === approved.serialized
+  return approved !== undefined && readResult.value === approved.serialized
     ? Ok(approved.value)
     : Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }));
 }
