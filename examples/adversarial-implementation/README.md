@@ -370,8 +370,12 @@ If `nextAction` is `publish_review`, use `--props-action publish-review` with
 the same record and PR number. It checks for the matching comment before any
 write and adopts it if GitHub already accepted it. Concurrent calls with the
 same delivery record share one write reservation per PR and reviewed SHA.
-If a write could have reached GitHub and no matching comment is visible, the
-reservation stays in place for reconciliation. `status` and `closeout` only
+An active write holds the reservation until its attempt settles. Each
+retry takes the reservation and reads the full comment collection again.
+If GitHub acknowledged the previous write, Delivery waits for that comment.
+If an unacknowledged attempt finished and the full read has no matching
+comment, Delivery makes one new attempt. An abrupt process death can leave
+an active reservation that requires operator reconciliation. `status` and `closeout` only
 read GitHub. A pending comment holds readiness and the repair handoff.
 
 Reconciliation is limited to independent review from a work item launched under
