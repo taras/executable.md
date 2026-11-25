@@ -1033,7 +1033,9 @@ describe("1151 — ordinary Send after a joined human Stop", () => {
     const dispatch = yield* stopping(held);
     const first = yield* send(dispatch, "Run the counted effect.");
     yield* held.fake.streamingTurns(1);
-    expect(held.fake.prompts[1]).toContain("counted once");
+    expect(held.fake.prompts[1]).toContain("Entry entry-1 completed.");
+    expect(held.fake.prompts[1]).toContain("Output length: 12 Unicode code points.");
+    expect(held.fake.prompts[1]).not.toContain("counted once");
     dispatch.hold();
     yield* first.cancel("human");
     expect((yield* first.completion).ok).toBe(false);
@@ -1274,7 +1276,9 @@ describe("1183 — admission behind live automatic feedback", () => {
     const first = yield* send(dispatch, "Run the counted effect.");
     yield* held.fake.holdingTurns(1);
     expect(held.fake.prompts).toHaveLength(2);
-    expect(held.fake.prompts[1]).toContain("counted once");
+    expect(held.fake.prompts[1]).toContain("Entry entry-1 completed.");
+    expect(held.fake.prompts[1]).toContain("Output length: 12 Unicode code points.");
+    expect(held.fake.prompts[1]).not.toContain("counted once");
     return first;
   }
 
