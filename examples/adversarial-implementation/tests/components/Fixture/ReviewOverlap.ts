@@ -20,7 +20,7 @@ export const props = {
     command: { type: "string" },
     directory: { type: "string" },
     revision: { type: "string" },
-    scenario: { enum: ["pass", "changes_required", "lost", "interrupted"] },
+    scenario: { enum: ["pass", "changes_required", "lost", "interrupted", "dropped"] },
   },
   required: ["command", "directory", "revision", "scenario"],
   additionalProperties: false,
@@ -30,7 +30,7 @@ const input = z.strictObject({
   command: z.string(),
   directory: z.string().startsWith("/"),
   revision: z.string(),
-  scenario: z.enum(["pass", "changes_required", "lost", "interrupted"]),
+  scenario: z.enum(["pass", "changes_required", "lost", "interrupted", "dropped"]),
 });
 const production = new URL("../../../", import.meta.url);
 const fixtures = new URL("../../acp-overlap/", import.meta.url);
@@ -52,6 +52,7 @@ const statusSchema = z.object({
     state: z.string(),
     revision: z.string().optional(),
     url: z.string().optional(),
+    reason: z.string().optional(),
   }),
   review: z.object({
     attempt: z.string(),
@@ -75,7 +76,8 @@ const outcomeSchema = z.object({
 
 export default function* ReviewOverlap(value: unknown) {
   const { command, directory, revision, scenario } = input.parse(value);
-  const retry = scenario === "lost" || scenario === "interrupted";
+  const dropped = scenario === "dropped";
+  const retry = scenario === "lost" || scenario === "interrupted" || dropped;
   const repository = yield* cwd();
   const evidence = `${directory}/overlap`;
   const attempt = `${directory}/review-${revision}`;
@@ -246,6 +248,9 @@ export default function* ReviewOverlap(value: unknown) {
     if (scenario === "interrupted") {
       yield* writeTextFile(`${evidence}/interrupt-post`, "");
     }
+    if (dropped) {
+      yield* writeTextFile(`${evidence}/drop-post`, "");
+    }
     yield* scoped(function* () {
       const first = yield* spawn(() => review("winner", 75_000, "reconcile"));
       yield* ensure(function* () {
@@ -289,7 +294,14 @@ export default function* ReviewOverlap(value: unknown) {
         `Reconciliation after lost acknowledgement failed: ${result.stderr}`,
       );
       const unconfirmed = statusSchema.parse(JSON.parse(result.stdout));
-      check(unconfirmed.nextAction === "publish_review", "Lost acknowledgement granted readiness.");
+      check(unconfirmed.nextAction === "publish_review", "An unconfirmed POST granted readiness.");
+      if (dropped) {
+        check(
+          unconfirmed.reviewPublication.reason?.includes("HTTP 502") === true &&
+            !(yield* exists(`${evidence}/comment.json`)),
+          "The dropped write did not retain a useful failure without a comment.",
+        );
+      }
     });
     const report = yield* review("later", 25_000, "closeout");
     check(
@@ -298,6 +310,17 @@ export default function* ReviewOverlap(value: unknown) {
       "Closeout must leave unconfirmed publication pending.",
     );
     check(!(yield* exists(`${evidence}/later-posted`)), "Closeout attempted a GitHub write.");
+    if (dropped) {
+      yield* writeTextFile(`${evidence}/deny-reconciliation`, "");
+      const denied = yield* review("later", 25_000, "publish-review");
+      check(
+        denied.code === 0 &&
+          statusSchema.parse(JSON.parse(denied.stdout)).nextAction === "publish_review" &&
+          !(yield* exists(`${evidence}/later-posted`)),
+        "Retry after a 502 wrote without a complete authorized read.",
+      );
+      yield* rm(`${evidence}/deny-reconciliation`);
+    }
   }
   const published = yield* review("later", 25_000, "publish-review");
   check(published.code === 0, `Publication retry failed: ${published.stderr} ${published.stdout}`);
@@ -324,7 +347,10 @@ export default function* ReviewOverlap(value: unknown) {
     `The published comment does not describe the validated Astra review: ${comment.body}`,
   );
   for (const actor of ["contender", "later"] as const) {
-    check(!(yield* exists(`${evidence}/${actor}-posted`)), `${actor} sent an extra POST.`);
+    check(
+      (yield* exists(`${evidence}/${actor}-posted`)) === (actor === "later" && dropped),
+      `${actor} sent an unexpected number of POSTs.`,
+    );
     check(
       (yield* readPrompts(evidence, actor)).length === 0,
       `${actor} contacted ACP during publication.`,
@@ -332,6 +358,29 @@ export default function* ReviewOverlap(value: unknown) {
   }
   if (scenario === "lost") {
     check((yield* readPrompts(evidence, "winner")).length === 0, "Reconciliation contacted ACP.");
+  }
+
+  if (dropped) {
+    const commentPath = `${evidence}/comment.json`;
+    const original = yield* readTextFile(commentPath);
+    const replacement = z.object({}).passthrough().parse(JSON.parse(original));
+    yield* writeTextFile(
+      commentPath,
+      JSON.stringify({
+        ...replacement,
+        id: "43",
+        url: "https://github.com/taras/executable.md/pull/7#issuecomment-43",
+      }),
+    );
+    const changed = yield* review("later", 25_000, "publish-review");
+    const changedStatus = statusSchema.parse(JSON.parse(changed.stdout));
+    check(
+      changed.code === 0 &&
+        changedStatus.nextAction === "publish_review" &&
+        changedStatus.reviewPublication.reason?.includes("recorded identity") === true,
+      "A replacement comment was accepted as the previously recorded comment.",
+    );
+    yield* writeTextFile(commentPath, original);
   }
 
   const later = yield* review("later", 25_000);

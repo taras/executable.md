@@ -1,7 +1,8 @@
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
+import { z } from "zod";
 import { createHash } from "node:crypto";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, rmdir } from "node:fs/promises";
 interface NativeTextHandle {
   read(
     buffer: Uint8Array,
@@ -77,4 +78,23 @@ export function createDirectory(path: string): Operation<void> {
     pending = mkdir(path);
     yield* until(pending);
   });
+}
+
+export function* reserveDirectory(path: string): Operation<boolean> {
+  let creating: Promise<boolean> | undefined;
+  yield* ensure(function* () {
+    if (creating !== undefined && (yield* until(creating.then((created) => created, ignore)))) {
+      yield* until(rmdir(path));
+    }
+  });
+  creating = mkdir(path).then(
+    () => true,
+    (error: unknown) => {
+      if (z.object({ code: z.literal("EEXIST") }).safeParse(error).success) {
+        return false;
+      }
+      throw error;
+    },
+  );
+  return yield* until(creating);
 }

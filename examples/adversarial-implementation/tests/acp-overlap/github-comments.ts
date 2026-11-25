@@ -59,6 +59,13 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
       if (lost || (yield* exists(`${directory}/comments-unavailable`))) {
         throw new Error("The pull request comments are unavailable.");
       }
+      if (
+        actor === "later" &&
+        (yield* exists(`${directory}/deny-reconciliation`)) &&
+        (yield* exists(`${directory}/../review-${revision}/publication-7/active`))
+      ) {
+        throw new Error("The authorized comment read failed under the write reservation.");
+      }
       const items = (yield* exists(tracked))
         ? [evidence.parse(JSON.parse(yield* readTextFile(tracked)))]
         : [];
@@ -90,6 +97,9 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
           throw new Error("Timed out waiting to release the GitHub write.");
         }
       }
+      if (actor === "winner" && (yield* exists(`${directory}/drop-post`))) {
+        return reply("HTTP/2.0 502 Bad Gateway\r\n\r\n", 1);
+      }
       if (yield* exists(tracked)) {
         throw new Error("GitHub received a duplicate review write.");
       }
@@ -108,8 +118,8 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
         yield* waitForFile(`${directory}/never-acknowledge`, 45_000);
         throw new Error("The publication process survived interruption.");
       }
-      lost = delayed;
-      return delayed ? reply("", 1) : reply("HTTP/2.0 201 Created\r\n\r\n" + JSON.stringify(saved));
+      lost = delayed && actor === "winner";
+      return lost ? reply("", 1) : reply("HTTP/2.0 201 Created\r\n\r\n" + JSON.stringify(saved));
     },
   });
 }

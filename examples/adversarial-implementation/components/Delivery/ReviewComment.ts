@@ -1,9 +1,8 @@
-import { rm } from "@effectionx/fs";
 import { PullRequestAPI } from "@executablemd/git/api";
 import { API, cwd, exec, parseFilesFailure } from "@executablemd/runtime";
-import { ensure, scoped, type Operation } from "effection";
+import { scoped } from "effection";
 import { z } from "zod";
-import { createDirectory, digest } from "../Ticket/native-node.ts";
+import { reserveDirectory, digest } from "../Ticket/native-node.ts";
 import { clear, write } from "../Ticket/text-storage.ts";
 import { reviewerSchema } from "./records.ts";
 
@@ -102,8 +101,12 @@ function* github(...args: string[]) {
   });
 }
 
+function targetUrl(target: Target) {
+  return `https://github.com/${target.repository}/pull/${target.number}`;
+}
+
 function* readTarget(target: Target) {
-  const url = `https://github.com/${target.repository}/pull/${target.number}`;
+  const url = targetUrl(target);
   const result = yield* PullRequestAPI.operations.read(url, { kind: "details" });
   if (result.kind !== "details") {
     return false;
@@ -121,9 +124,11 @@ function* readTarget(target: Target) {
   );
 }
 
+class CommentConflict extends Error {}
+
 function findComment(
   target: Target,
-  comments: z.infer<typeof input>["comments"],
+  comments: readonly z.infer<typeof input>["comments"][number][],
   marker: string,
   body: string,
 ): Verified | null {
@@ -131,7 +136,7 @@ function findComment(
     (item) => item.kind === "conversation" && item.body.split("\n", 1)[0] === marker,
   );
   if (matches.length > 1) {
-    throw new Error("Multiple GitHub comments claim the same review revision.");
+    throw new CommentConflict("Multiple GitHub comments claim the same review revision.");
   }
   const [value] = matches;
   if (value === undefined) {
@@ -149,15 +154,15 @@ function findComment(
     value.body !== body ||
     !urls.includes(value.url.toLowerCase())
   ) {
-    throw new Error("The GitHub comment does not match the saved review.");
+    throw new CommentConflict("The GitHub comment does not match the saved review.");
   }
   return { revision, bodySha256: digest(new TextEncoder().encode(body)), id, url: value.url };
 }
 
-function* readSaved(directory: string) {
-  const result = yield* API.Files.operations.readTextFile({ cwd: directory, path: "comment.json" });
+function* readPublicationFile(directory: string, path: string) {
+  const result = yield* API.Files.operations.readTextFile({ cwd: directory, path });
   if (result.ok) {
-    return saved.parse(JSON.parse(result.value));
+    return result.value;
   }
   if (parseFilesFailure(result.error)?.reason === "missing") {
     return null;
@@ -165,29 +170,73 @@ function* readSaved(directory: string) {
   throw result.error;
 }
 
-function* post(target: Target, reservation: string, body: string): Operation<void> {
-  try {
-    // A reservation survives interruption so a retry can adopt the remote comment.
-    yield* createDirectory(reservation);
-  } catch (error) {
-    if (z.object({ code: z.literal("EEXIST") }).safeParse(error).success) {
-      return;
+function* readSaved(directory: string) {
+  const text = yield* readPublicationFile(directory, "comment.json");
+  return text === null ? null : saved.parse(JSON.parse(text));
+}
+
+function* recordComment(
+  record: string,
+  target: Target,
+  previous: Verified | null,
+  observed: Verified,
+) {
+  if (previous !== null) {
+    if (
+      previous.id !== observed.id ||
+      previous.url !== observed.url ||
+      previous.revision !== observed.revision ||
+      previous.bodySha256 !== observed.bodySha256
+    ) {
+      return pending("The GitHub comment differs from its recorded identity.");
     }
-    throw error;
+  } else {
+    yield* API.Fs.operations.ensureDir(record);
+    yield* write(target.directory, record + "/comment.json", JSON.stringify(observed));
   }
-  yield* scoped(function* () {
-    let release = true;
-    yield* ensure(function* () {
-      if (release) {
-        yield* rm(reservation, { recursive: true, force: true });
-      }
-    });
-    const payload = reservation + "/request.json";
-    yield* write(target.directory, payload, JSON.stringify({ body }));
-    if (!(yield* readTarget(target))) {
-      return;
+  return { state: "verified", ...observed };
+}
+
+function* reconcileAndPost(target: Target, record: string, marker: string, body: string) {
+  return yield* scoped(function* () {
+    yield* API.Fs.operations.ensureDir(record);
+    if (!(yield* reserveDirectory(record + "/active"))) {
+      return pending("Another publication attempt holds the reservation. Retry after it settles.");
     }
-    release = false;
+
+    const previous = yield* readSaved(record);
+    let observed: Verified | null;
+    try {
+      // An earlier snapshot can predate the last writer. Reconcile again under the reservation.
+      const result = yield* PullRequestAPI.operations.read(targetUrl(target), { kind: "comments" });
+      if (result.kind !== "comments") {
+        return pending("The GitHub provider did not return a complete comment read.");
+      }
+      observed = findComment(target, result.items, marker, body);
+    } catch (error) {
+      if (error instanceof CommentConflict) {
+        throw error;
+      }
+      return pending(
+        "Could not reconcile pull request comments. Check GitHub read access and retry.",
+      );
+    }
+    if (!(yield* readTarget(target))) {
+      return pending("The current pull request does not match the reviewed revision.");
+    }
+    if (observed !== null) {
+      return yield* recordComment(record, target, previous, observed);
+    }
+    if (previous !== null) {
+      return pending("The recorded GitHub comment is missing. Restore or reconcile its identity.");
+    }
+
+    if ((yield* readPublicationFile(record, "acknowledged")) !== null) {
+      return pending("GitHub acknowledged the POST. The comment is still missing from readback.");
+    }
+
+    const payload = record + "/request.json";
+    yield* write(target.directory, payload, JSON.stringify({ body }));
     const { exitCode, stdout } = yield* github(
       "--include",
       "--method",
@@ -196,8 +245,17 @@ function* post(target: Target, reservation: string, body: string): Operation<voi
       "--input",
       payload,
     );
-    // An explicit rejection permits another attempt. Transport and server errors leave the reservation in place.
-    release = exitCode !== 0 && /^HTTP\/\d(?:\.\d)? (400|401|403|404|422|429)\b/.test(stdout);
+    if (exitCode === 0) {
+      yield* write(target.directory, record + "/acknowledged", target.revision);
+    }
+    const httpStatus = /^HTTP\/\d(?:\.\d)? (\d{3})\b/.exec(stdout)?.[1];
+    return {
+      state: "readback",
+      reason:
+        exitCode === 0
+          ? "GitHub acknowledged the comment request."
+          : `GitHub comment POST failed${httpStatus === undefined ? "" : " (HTTP " + httpStatus + ")"}.`,
+    };
   });
 }
 
@@ -231,27 +289,29 @@ export default function* ReviewComment(value: unknown) {
     }
 
     const observed = findComment(target, comments, marker, body);
-    if (observed === null && publish && allowPost && previous === null) {
-      yield* post(target, record, body);
-      return { state: "readback" };
-    }
     if (observed === null) {
+      if (previous !== null) {
+        return pending(
+          "The recorded GitHub comment is missing. Restore or reconcile its identity.",
+        );
+      }
+      if (publish && allowPost) {
+        return yield* reconcileAndPost(target, record, marker, body);
+      }
       return pending(
-        "The current review comment could not be verified. Retry publication from the saved receipt.",
+        "The current review comment could not be verified. Retry from the saved receipt.",
       );
     }
-    if (previous !== null && JSON.stringify(previous) !== JSON.stringify(observed)) {
-      return pending("The GitHub comment differs from its recorded identity.");
+    if (publish || previous !== null) {
+      return yield* recordComment(record, target, previous, observed);
     }
-    if (publish && previous === null) {
-      // A matching comment may already exist even if no local request survived.
-      yield* API.Fs.operations.ensureDir(record);
-      yield* write(target.directory, record + "/comment.json", JSON.stringify(observed));
+    return pending("Publish the joined review and verify the GitHub comment.");
+  } catch (error) {
+    if (error instanceof CommentConflict) {
+      return pending(error.message);
     }
-    return { state: "verified", ...observed };
-  } catch {
     return pending(
-      "The current review comment could not be verified. Check publication access and reconcile the saved receipt.",
+      "Could not verify the review publication record or pull request target. Check local records and GitHub access.",
     );
   }
 }
