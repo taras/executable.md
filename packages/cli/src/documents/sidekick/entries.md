@@ -40,10 +40,13 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 - If the entry source itself contains fenced blocks, enclose it in a longer
   fence, and leave `exec` and `eval` off the enclosing fence.
 - Add `<REPL.Submit />` after `<REPL.EntryInput>` only when the request calls
-  for execution. Submit runs the actual shared draft, waits for that entry to
-  finish and release its resources, and reports its entry key, status, elapsed
-  seconds and output length in Unicode code points when known. To receive an
-  output window in feedback, request it with `<REPL.Entry.Output />`.
+  for execution.
+- Capture the `REPL.Submit` receipt to see whether the round succeeded, how long it took, and how many characters it printed.
+
+  ```xmd
+  <REPL.Submit as="receipt" />
+  <Output><Json value={receipt} /></Output>
+  ```
 - For a failed or cancelled entry, follow the receipt's
   `<REPL.Entry.Journal />` instruction to inspect the saved evidence. Read
   `<Guide.Recovery />` for how to use that evidence.
