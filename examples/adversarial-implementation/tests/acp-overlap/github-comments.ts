@@ -5,7 +5,6 @@ import { z } from "zod";
 import { waitForFile } from "./receipts.ts";
 
 const repository = "taras/executable.md";
-const pr = `repos/${repository}/pulls/7`;
 const comments = `repos/${repository}/issues/7/comments`;
 const url = `https://github.com/${repository}/pull/7`;
 const evidence = z.strictObject({
@@ -27,8 +26,35 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
 
   yield* PullRequestAPI.around({
     *read([target, options]) {
-      if (target !== url || options.kind !== "comments") {
+      if (target !== url) {
         throw new Error("Unexpected pull request evidence read.");
+      }
+      const { revision, branch } = remote.parse(
+        JSON.parse(yield* readTextFile(`${checkout}/remote.json`)),
+      );
+      if (options.kind === "details") {
+        const stale = yield* exists(`${directory}/stale`);
+        return {
+          kind: "details",
+          details: {
+            providerId: "fixture-pr-7",
+            number: 7,
+            url,
+            state: "open",
+            title: "Review publication fixture",
+            body: "",
+            draft: false,
+            headBranch: branch,
+            headSha: stale ? "0".repeat(40) : revision,
+            headRepository: repository,
+            baseBranch: "main",
+            baseSha: "1".repeat(40),
+            baseRepository: repository,
+          },
+        };
+      }
+      if (options.kind !== "comments") {
+        throw new Error("Unexpected pull request evidence kind.");
       }
       if (lost || (yield* exists(`${directory}/comments-unavailable`))) {
         throw new Error("The pull request comments are unavailable.");
@@ -49,19 +75,6 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
         throw new Error("Unexpected GitHub CLI boundary.");
       }
       const rest = args.slice(3);
-      if (rest.join(" ") === pr) {
-        const { revision, branch } = remote.parse(
-          JSON.parse(yield* readTextFile(`${checkout}/remote.json`)),
-        );
-        const stale = yield* exists(`${directory}/stale`);
-        return reply(
-          JSON.stringify({
-            number: 7,
-            base: { repo: { full_name: repository } },
-            head: { ref: branch, sha: stale ? "0".repeat(40) : revision },
-          }),
-        );
-      }
       if (
         rest.length !== 6 ||
         rest.slice(0, 5).join(" ") !== `--include --method POST ${comments} --input`
@@ -90,6 +103,11 @@ export function* installGitHub(directory: string, checkout: string, actor: strin
         body,
       });
       yield* writeTextFile(tracked, JSON.stringify(saved));
+      if (yield* exists(`${directory}/interrupt-post`)) {
+        yield* writeTextFile(`${directory}/post-accepted`, "");
+        yield* waitForFile(`${directory}/never-acknowledge`, 45_000);
+        throw new Error("The publication process survived interruption.");
+      }
       lost = delayed;
       return delayed ? reply("", 1) : reply("HTTP/2.0 201 Created\r\n\r\n" + JSON.stringify(saved));
     },

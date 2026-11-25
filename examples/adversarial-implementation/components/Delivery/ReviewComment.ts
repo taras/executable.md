@@ -1,4 +1,5 @@
 import { rm } from "@effectionx/fs";
+import { PullRequestAPI } from "@executablemd/git/api";
 import { API, cwd, exec, parseFilesFailure } from "@executablemd/runtime";
 import { ensure, scoped, type Operation } from "effection";
 import { z } from "zod";
@@ -49,11 +50,6 @@ const input = z.strictObject({
       body: z.string(),
     }),
   ),
-});
-const pulls = z.object({
-  number: targetSchema.shape.number,
-  base: z.object({ repo: z.object({ full_name: z.string() }) }),
-  head: z.object({ ref: z.string(), sha }),
 });
 const saved = z.strictObject({
   revision: sha,
@@ -107,16 +103,21 @@ function* github(...args: string[]) {
 }
 
 function* readTarget(target: Target) {
-  const { exitCode, stdout } = yield* github(`repos/${target.repository}/pulls/${target.number}`);
-  if (exitCode !== 0) {
+  const url = `https://github.com/${target.repository}/pull/${target.number}`;
+  const result = yield* PullRequestAPI.operations.read(url, { kind: "details" });
+  if (result.kind !== "details") {
     return false;
   }
-  const pr = pulls.parse(JSON.parse(stdout));
+  const pr = result.details;
+  const repository = target.repository.toLowerCase();
   return (
+    pr.url.toLowerCase() === url.toLowerCase() &&
     pr.number === target.number &&
-    pr.base.repo.full_name.toLowerCase() === target.repository.toLowerCase() &&
-    pr.head.ref === target.branch &&
-    pr.head.sha === target.revision
+    pr.baseRepository.toLowerCase() === repository &&
+    pr.headRepository.toLowerCase() === repository &&
+    pr.baseBranch === "main" &&
+    pr.headBranch === target.branch &&
+    pr.headSha === target.revision
   );
 }
 

@@ -354,7 +354,8 @@ continues to hold. Status uses this same validation boundary to read receipts.
 `review` and `reconcile` publish each validated verdict as a comment on the
 current pull request, including findings that require repair. The comment
 names the exact reviewed commit and the reviewer who supplied the result.
-Delivery uses `<PullRequest.Comments>` to reconcile and verify the comment. With
+Delivery uses the native pull request provider to verify the target and
+`<PullRequest.Comments>` to reconcile and verify the comment. With
 the native GitHub provider, include the repository URL in the host's
 `XMD_WORKFLOW_GITHUB_PULL_REQUESTS` allowlist. For a host that reads one repository:
 

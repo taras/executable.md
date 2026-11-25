@@ -20,7 +20,7 @@ export const props = {
     command: { type: "string" },
     directory: { type: "string" },
     revision: { type: "string" },
-    scenario: { enum: ["pass", "changes_required", "lost"] },
+    scenario: { enum: ["pass", "changes_required", "lost", "interrupted"] },
   },
   required: ["command", "directory", "revision", "scenario"],
   additionalProperties: false,
@@ -30,7 +30,7 @@ const input = z.strictObject({
   command: z.string(),
   directory: z.string().startsWith("/"),
   revision: z.string(),
-  scenario: z.enum(["pass", "changes_required", "lost"]),
+  scenario: z.enum(["pass", "changes_required", "lost", "interrupted"]),
 });
 const production = new URL("../../../", import.meta.url);
 const fixtures = new URL("../../acp-overlap/", import.meta.url);
@@ -75,6 +75,7 @@ const outcomeSchema = z.object({
 
 export default function* ReviewOverlap(value: unknown) {
   const { command, directory, revision, scenario } = input.parse(value);
+  const retry = scenario === "lost" || scenario === "interrupted";
   const repository = yield* cwd();
   const evidence = `${directory}/overlap`;
   const attempt = `${directory}/review-${revision}`;
@@ -186,7 +187,7 @@ export default function* ReviewOverlap(value: unknown) {
       `Unexpected contender result (${contender.code}): ${contender.stderr} ${contender.stdout}`,
     );
 
-    if (scenario === "lost") {
+    if (retry) {
       yield* writeTextFile(`${evidence}/stale`, "");
     }
     yield* writeTextFile(release, "");
@@ -221,7 +222,7 @@ export default function* ReviewOverlap(value: unknown) {
     `Winner did not retain its exact-head Astra pass: ${JSON.stringify(status)}`,
   );
 
-  if (scenario === "lost") {
+  if (retry) {
     check(!(yield* exists(`${evidence}/winner-posted`)), "A stale PR head received a POST.");
     check(
       status.nextAction === "publish_review",
@@ -242,11 +243,16 @@ export default function* ReviewOverlap(value: unknown) {
     yield* rm(`${evidence}/comments-unavailable`);
     yield* rm(`${replacement}/receipt.json`);
     yield* writeTextFile(`${evidence}/delay-post`, "");
+    if (scenario === "interrupted") {
+      yield* writeTextFile(`${evidence}/interrupt-post`, "");
+    }
     yield* scoped(function* () {
       const first = yield* spawn(() => review("winner", 75_000, "reconcile"));
       yield* ensure(function* () {
         yield* writeTextFile(`${evidence}/release-post`, "");
-        yield* first;
+        if (scenario !== "interrupted") {
+          yield* first;
+        }
       });
       function* exitedEarly(): Operation<never> {
         const result = yield* first;
@@ -268,6 +274,15 @@ export default function* ReviewOverlap(value: unknown) {
         "Concurrent publication sent a second POST.",
       );
       yield* writeTextFile(`${evidence}/release-post`, "");
+      if (scenario === "interrupted") {
+        const accepted = yield* race([
+          waitForFile(`${evidence}/post-accepted`, 35_000),
+          exitedEarly(),
+        ]);
+        check(!accepted.timeout, "The GitHub double did not accept the comment.");
+        yield* first.halt();
+        return;
+      }
       const result = yield* first;
       check(
         result.code === 0,
