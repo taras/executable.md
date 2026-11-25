@@ -9984,7 +9984,9 @@ under current authority.
 `<Search query="error message" as="page" />` finds a case-sensitive
 literal in project files. A page returns up to 20 matches and continuation
 arguments. File references name `File` and carry the matching path, bounded
-window and content revision. Pass the complete reference to
+window, content revision and search directory identity. Open the reference
+in the directory where Search created it. A fresh open in another placement
+refuses the reference. Pass the complete reference to
 `<File request={page.matches[0].ref} as="context" />`. The bounded
 result states `path`, `text` and whether the current content has changed.
 `Search` uses project authority. In a Git worktree its candidate set
