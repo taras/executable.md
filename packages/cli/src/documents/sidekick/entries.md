@@ -57,25 +57,13 @@ To execute a round and see its result, submit it and ask for output.
 
 You’ll receive up to 4,096 characters from the beginning of the output in feedback. To keep reading, use the `next` arguments returned with the output window.
 
-## Use receipt and window data in a response
-
-When the person asks to run an entry and see its beginning, choose a window
-size and request the window after Submit. An omitted entry selector reads the
-latest entry. Use a positive entry number from the receipt for a later read.
+## Show the receipt and output window as JSON
 
 ```xmd
-<REPL.EntryInput>&lt;Output&gt;Hello 🙂&lt;/Output&gt;</REPL.EntryInput>
 <REPL.Submit as="receipt" />
-<REPL.Entry.Output offset={0} limit={64} as="window" />
+<REPL.Entry.Output offset={0} limit={4096} as="window" />
 <Output><Json value={{receipt, window}} /></Output>
 ```
-
-This publishes both objects as JSON to the person. The receipt's
-`outputLength` and the window's `length` count the same Unicode code points.
-Feedback also includes a readable receipt and the requested window. Omit the
-`Output` region to keep the data in Sidekick feedback. Pass bindings whole to
-`Json` or compose them with object shorthand as shown. Expressions such as
-`receipt.outputLength` or `window.text` are unavailable in a response.
 
 ## Find text in project files or REPL history
 
