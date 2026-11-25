@@ -288,10 +288,10 @@ release, its digest, the platform and the architecture are reported beside it
 as evidence of what this run exercised; none is compared with an earlier run.
 
 <AssertEquals actual={proof.adapterPackage} expected={"@agentclientprotocol/codex-acp"} />
-<AssertEquals actual={proof.adapterVersion} expected={"1.6.2"} />
+<AssertEquals actual={proof.adapterVersion} expected={"1.8.0"} />
 <AssertEquals
   actual={proof.adapterDigest}
-  expected={"a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1"}
+  expected={"64f0b7be79e0d9d5c74c933967e9ef4e96b50e5a2857767e19bf2267cb5384f1"}
 />
 <Assert expr={proof.compatibilityTupleFrozen} />
 

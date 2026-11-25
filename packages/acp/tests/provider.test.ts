@@ -3362,14 +3362,14 @@ describe("Tier AP — Prompt usage observation", () => {
       },
       {
         agent: "codex",
-        adapter: { version: "1.6.2", digest: "sha256:codex" },
+        adapter: { version: "1.8.0", digest: "sha256:codex" },
         response: { scope: "last-request", counter: "snapshot" },
         model: { scope: "last-request", counter: "snapshot" },
         limitations: ["codex-last-request-only", "codex-reasoning-inclusion-unverified"],
       },
       {
         agent: "codex",
-        adapter: { version: "1.7.0" },
+        adapter: { version: "1.6.2" },
         response: { scope: "unknown", counter: "unknown" },
         model: { scope: "unknown", counter: "unknown" },
         limitations: ["source-semantics-unknown"],

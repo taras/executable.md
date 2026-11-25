@@ -82,7 +82,7 @@ interface SourceSemantics {
  * overlap. It fills absent native counters with zero and always reports
  * `reasoningOutputTokens: 0` because thinking is billed inside output.
  *
- * Codex 1.6.2 builds both its response usage and its quota from the last
+ * Codex 1.8.0 builds response usage and quota from the last
  * internal request's reading, which is reset when a prompt begins, so neither
  * covers a prompt that made several model calls. Reasoning is reported beside
  * output without established inclusion.
@@ -99,7 +99,7 @@ const SEMANTICS: Readonly<Record<string, SourceSemantics>> = Object.freeze({
       UsageLimitation.claudeSubagentInclusionUnverified,
     ],
   },
-  "codex@1.6.2": {
+  "codex@1.8.0": {
     response: { scope: "last-request", counter: "snapshot" },
     quotaTotal: { scope: "last-request", counter: "snapshot" },
     quotaModel: { scope: "last-request", counter: "snapshot" },

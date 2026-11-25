@@ -207,6 +207,29 @@ function handle(message) {
       // Held briefly so two prompts can be in flight at once, which is what
       // makes the interleaved case an actual overlap.
       setTimeout(() => {
+        if (process.env.FAKE_CODEX_SUBAGENT_ACTIVITY === "1") {
+          for (const [method, id, kind] of [
+            ["item/started", "paired", "interacted"],
+            ["item/completed", "paired", "interacted"],
+            ["item/completed", "completion-only", "completed"],
+          ]) {
+            send({
+              jsonrpc: "2.0",
+              method,
+              params: {
+                threadId,
+                turnId,
+                item: {
+                  type: "subAgentActivity",
+                  id,
+                  agentThreadId: "child-thread",
+                  agentPath: "/root/scout",
+                  kind,
+                },
+              },
+            });
+          }
+        }
         // The token readings a real App Server reports as a turn's internal
         // requests finish, when a case scripts them: each carries the last
         // request's reading and the thread's running total.

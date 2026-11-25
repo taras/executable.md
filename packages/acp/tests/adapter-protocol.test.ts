@@ -16,6 +16,8 @@
  * each identity is derived from its own session, so an adapter reporting
  * anything session-global hands at least one of them the other's answer.
  */
+import { client, methods, ndJsonStream } from "@agentclientprotocol/sdk";
+import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
@@ -308,6 +310,57 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(metaOf(response, "codex")).toEqual({ turnId: `turn:${sessionId}:1` });
     // Beside what the adapter already reported, never in place of it.
     expect(metaOf(response, "quota")).toBeDefined();
+  });
+
+  it("Codex emits a valid initial tool call for a completed subagent activity", function* () {
+    const adapter = yield* useAdapter("codex", { ...CODEX_ENV, FAKE_CODEX_SUBAGENT_ACTIVITY: "1" });
+    yield* initialize(adapter);
+    const sessionId = yield* openSession(adapter);
+    yield* prompt(adapter, sessionId);
+
+    const received: SessionUpdate[] = [];
+    const sdk = client().onNotification(methods.client.session.update, ({ params }) => {
+      received.push(params.update);
+    });
+    const input = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const params of adapter.updates) {
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                method: methods.client.session.update,
+                params,
+              }) + "\n",
+            ),
+          );
+        }
+        controller.close();
+      },
+    });
+    const connection = sdk.connect(ndJsonStream(new WritableStream(), input));
+    yield* until(connection.closed);
+
+    const toolCalls = received.filter(
+      (update) =>
+        update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",
+    );
+    expect(toolCalls).toMatchObject([
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "paired",
+        status: "in_progress",
+        title: "Interact with subagent scout",
+      },
+      { sessionUpdate: "tool_call_update", toolCallId: "paired", status: "completed" },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "completion-only",
+        status: "completed",
+        title: "Complete subagent scout",
+      },
+    ]);
   });
 
   it("EA2: interleaved Codex sessions each carry their own turn", function* () {

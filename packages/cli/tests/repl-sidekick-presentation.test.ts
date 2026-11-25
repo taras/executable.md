@@ -3623,7 +3623,7 @@ describe("Retained Sidekick token usage", () => {
         advertiseNativeLaunch: [],
         advertiseClientNativeAttachment: [],
         promptUsageHost: { host: "deno-source" as const, xmd: {} },
-        adapterBuild: (agent: string) => ({ version: agent === "codex" ? "1.6.2" : "0.70.0" }),
+        adapterBuild: (agent: string) => ({ version: agent === "codex" ? "1.8.0" : "0.70.0" }),
         *agentProcessEnv() {
           return {
             CLAUDE_CODE_EXECUTABLE: new URL(
