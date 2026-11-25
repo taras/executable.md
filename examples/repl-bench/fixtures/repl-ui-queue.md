@@ -26,7 +26,7 @@ printf '%s\n' 'Queue gate released'
 </Let>
 {submit}
 
-<WhenPrompt template={"{?before}## Execution outcome\n\nEntry entry-1 completed.{?details}The person says:\n\nWait for tax check."} />
+<WhenPrompt template={"{?before}## REPL.Submit\n\nEntry entry-1 completed.{?receipt}The person says:\n\nWait for tax check."} />
 
 <Let as="follow" select="code">
 `````xmd
@@ -45,7 +45,7 @@ printf '%s\n' 'Follow gate released'
 </Let>
 {follow}
 
-<WhenPrompt template="{?before}Entry entry-2 completed.{?after}" />
+<WhenPrompt template={"{?before}## REPL.Submit\n\nEntry entry-2 completed.{?after}"} />
 
 <Let as="done" select="code">
 ```xmd

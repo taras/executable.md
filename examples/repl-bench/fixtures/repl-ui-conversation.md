@@ -27,11 +27,12 @@
 </Let>
 <REPL.EntryInput>{entry}</REPL.EntryInput>
 <REPL.Submit />
+<REPL.Entry.Output entry={1} />
 ````
 </Let>
 {submit}
 
-<WhenPrompt template="{?before}Entry entry-1 completed.{?details}Checkout output witness.{?after}" />
+<WhenPrompt template={"{?before}## REPL.Submit\n\nEntry entry-1 completed.{?receipt}## REPL.Entry.Output\n\n```json\n{\n  \"entry\": 1,\n  \"status\": \"completed\",\n  \"text\": \"Checkout output witness.\"{?after}"} />
 
 <Let as="done" select="code">
 ```xmd
