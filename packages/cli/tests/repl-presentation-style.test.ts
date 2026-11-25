@@ -3724,6 +3724,75 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
     };
   }
 
+  it("feedback links retain exact identities, order and selected-prefix settlement", function* () {
+    const model = yield* settledFailedAndRunning();
+    const identities = ["response", "response-extra", "unsettled"];
+    const chat: ReplSidekickReading = {
+      ...chatOf(
+        identities.map((response, at) => ({
+          ...replyRow("chat-one", at + 1, "same text"),
+          key: `chat:chat-one:${response}`,
+        })),
+      ),
+      submits: [
+        { ordinal: 1, response: "response" },
+        { ordinal: 2, response: "response-extra" },
+        { ordinal: 0, response: "response" },
+        { ordinal: 0, response: "unsettled" },
+      ].map(({ ordinal, response }) => ({
+        conversation: "chat-one",
+        response,
+        ordinal,
+        entry: model.entries[ordinal].key,
+        source: model.entries[ordinal].source,
+        settled: response !== "unsettled",
+        admitted: true,
+      })),
+      feedback: ["response-extra", "response", "unsettled", "response"].map((response, at) => ({
+        conversation: "chat-one",
+        response,
+        turn: at + 1,
+        source: at,
+        text: "same text",
+      })),
+    };
+    const packets = workspaceOf(model, chat).feedback;
+    expect(packets?.map((packet) => packet.entries)).toEqual([
+      [{ key: model.entries[2].key, round: 3 }],
+      [
+        { key: model.entries[1].key, round: 2 },
+        { key: model.entries[0].key, round: 1 },
+      ],
+      [],
+      [
+        { key: model.entries[1].key, round: 2 },
+        { key: model.entries[0].key, round: 1 },
+      ],
+    ]);
+    expect(packets?.map((packet) => packet.label)).toEqual([
+      "Round 3 result sent to Sidekick",
+      "Round 2, Round 1 result sent to Sidekick",
+      "Feedback sent to Sidekick",
+      "Round 2, Round 1 result sent to Sidekick",
+    ]);
+    expect(
+      packets?.every((packet) => Object.isFrozen(packet) && Object.isFrozen(packet.entries)),
+    ).toBe(true);
+    const prefix = { ...model, entries: model.entries.slice(0, 2) };
+    expect(workspaceOf(prefix, chat).feedback?.map((packet) => packet.entries)).toEqual([
+      [],
+      [
+        { key: model.entries[1].key, round: 2 },
+        { key: model.entries[0].key, round: 1 },
+      ],
+      [],
+      [
+        { key: model.entries[1].key, round: 2 },
+        { key: model.entries[0].key, round: 1 },
+      ],
+    ]);
+  });
+
   it("RS3: typing reuses an unchanged chat, however long it is", function* () {
     const measured: Record<string, { warm: number; draft: number; message: number }> = {};
     for (const [name, texts] of [
