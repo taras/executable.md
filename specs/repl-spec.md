@@ -3935,13 +3935,11 @@ given an answer nobody gave.
 
 Each answer is in its own terms, read back from what was retained. The binding
 map is the map itself, with no provenance or status put inside it. A filled
-draft is acknowledged and never echoed back as its own source. A submission is
-the exact entry's terminal outcome once its teardown has joined, followed by the
-read instruction for that entry, with no output body or summary; a submission
-that was refused before it reserved anything says so and names no entry, which
-is a different thing from an entry that ran and failed. An output read is the
-window the read itself renders, fenced long enough to hold its text, with its
-adjacent instructions pinned to that entry.
+draft is acknowledged without echoing its source. An admitted submission
+returns the [Submit receipt](#submit-receipts) after the exact entry joins its
+teardown. A refusal names the reason without claiming an entry. An explicit
+output read returns its selected window and continuation arguments pinned to
+that entry.
 
 ### Workspace Search
 
@@ -4210,14 +4208,34 @@ that wants a page in front of the person composes one:
 
 ```xmd
 <REPL.Entry.Prompt entry={22} prompt={9} as="turn" />
-<Output>{turn}</Output>
+<Output><Json value={turn} /></Output>
 ```
 
-A submission's receipt names the entry that was admitted and the read that
-explains it: an entry that completed is pointed at its output, and one that
-failed or was cancelled at its Journal, because an entry that failed may have
-printed nothing at all. The number is the admitted entry's, whatever entry or
-recorded position the screen is showing.
+#### Submit receipts
+
+`<REPL.Submit />` reports the admitted entry key and its actual status
+(`completed`, `failed` or `cancelled`). The receipt includes elapsed seconds
+from the start of the entry after preflight through joined teardown, and the
+total rendered output length in Unicode code points when available, including
+zero for empty output. An admitted failure with no terminal has no known output
+length. For a cancelled entry, the receipt counts the owning Send's final live
+output observation when available. A cold read of that entry can still return
+an empty window under the retention rules above.
+
+A receipt includes the failure reason when available and a ready-to-use read
+instruction pinned to the admitted entry number. A completed entry points to
+`REPL.Entry.Output`. A failed or cancelled entry points to `REPL.Entry.Journal`.
+
+With `as`, Submit binds an object with `entry`, `status`, `read` and, when
+available, `durationSeconds`, `outputLength` and `failure`. Without `as`, it
+renders readable receipt text. Designated feedback carries the readable
+receipt in either case. Older status-only observations remain readable and omit
+metrics they never recorded. A recovered reservation can establish admission
+before a terminal is known. Its feedback reports admission and points to the
+entry's journal. Only explicit output reads deliver entry output
+to Sidekick. A response can pass either bound object as a whole to
+`<Json value={binding} />`. Response expressions support bindings and JSON-like
+composition. Property access and indexing require an ordinary entry.
 
 These reads are of the validated journal projection and of this process's own
 observed output, and of nothing else. They reach no provider session file, and
@@ -4298,12 +4316,9 @@ is a round; a Draft Send is not, and a round is one admitted entry rather than o
 turn. The evaluation the Sidekick invokes during Send creates and owns the
 continuation, so nothing else watches entries and starts turns.
 
-When that exact entry settles, and the current exchange and its cleanup have
-joined, the continuation gives the Sidekick the entry's actual outcome —
-completed, failed or interrupted, each its own — and its actual output, as two
-separate facts. The Submit answer is still the receipt described above; the
-output comes through the continuation, never through the receipt's wording. With
-Follow on, the next eligible queued message goes first and another autonomous
+When that exact entry settles, the continuation carries the Submit receipt
+and the results of any controls the response explicitly requested. With Follow
+on, the next eligible queued message goes first and another autonomous
 round only after it, under the queue's own rules (#964). That message carries
 the settled round's results and its request uses the
 [live feedback exception](#live-feedback-exception). FIFO applies across

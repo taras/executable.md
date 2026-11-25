@@ -41,11 +41,32 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   fence, and leave `exec` and `eval` off the enclosing fence.
 - Add `<REPL.Submit />` after `<REPL.EntryInput>` only when the request calls
   for execution. Submit runs the actual shared draft, waits for that entry to
-  finish and release its resources, and returns status and a read instruction —
-  not the output. Read the output with `<REPL.Entry.Output />`.
-- When an entry fails, its receipt points at `<REPL.Entry.Journal />` rather
-  than at its output, because an entry that failed may have printed nothing.
-  Read `<Guide.Recovery />` for what to do with what it answers.
+  finish and release its resources, and reports its entry key, status, elapsed
+  seconds and output length in Unicode code points when known. To receive an
+  output window in feedback, request it with `<REPL.Entry.Output />`.
+- For a failed or cancelled entry, follow the receipt's
+  `<REPL.Entry.Journal />` instruction to inspect the saved evidence. Read
+  `<Guide.Recovery />` for how to use that evidence.
+
+## Use receipt and window data in a response
+
+When the person asks to run an entry and see its beginning, choose a window
+size and request the window after Submit. An omitted entry selector reads the
+latest entry. Use a positive entry number from the receipt for a later read.
+
+```xmd
+<REPL.EntryInput>&lt;Output&gt;Hello 🙂&lt;/Output&gt;</REPL.EntryInput>
+<REPL.Submit as="receipt" />
+<REPL.Entry.Output offset={0} limit={64} as="window" />
+<Output><Json value={{receipt, window}} /></Output>
+```
+
+This publishes both objects as JSON to the person. The receipt's
+`outputLength` and the window's `length` count the same Unicode code points.
+Feedback also includes a readable receipt and the requested window. Omit the
+`Output` region to keep the data in Sidekick feedback. Pass bindings whole to
+`Json` or compose them with object shorthand as shown. Expressions such as
+`receipt.outputLength` or `window.text` are unavailable in a response.
 
 ## Find text in project files or REPL history
 

@@ -36,7 +36,14 @@
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
-import { DESIGNATED, DRAFT_FILLED, renderRead, renderReceipt } from "./controls.ts";
+import {
+  DESIGNATED,
+  DRAFT_FILLED,
+  renderRead,
+  renderReceipt,
+  submitObservation,
+  submitReceipt,
+} from "./controls.ts";
 import type { ControlOutcomeRecord, ControlRecord } from "./history.ts";
 import type { OutputRead } from "./output.ts";
 import { describeGuideIndex, readSidekickBootstrap, sidekickGuideIndex } from "./guide.ts";
@@ -480,19 +487,20 @@ function submitted(
   plain: (text: string) => Omit<DesignatedResult, "order">,
   refused: (text: string) => Omit<DesignatedResult, "order">,
 ): Omit<DesignatedResult, "order"> {
-  const entry = intent.submit?.entry;
-  const status = typeof record.observed === "string" ? record.observed : undefined;
-  if (entry === undefined || status === undefined) {
+  const submit = intent.submit;
+  if (submit === undefined) {
     return refused(reason ?? "this submission's outcome was not retained.");
   }
-  return plain(
-    renderReceipt({
-      entry,
-      status: status === "completed" || status === "cancelled" ? status : "failed",
-      failure: reason,
-      read: { entry },
-    }),
-  );
+  if (record.observed === submit.entry) {
+    return plain(
+      `Entry ${submit.entry} was admitted. Inspect its saved evidence with <REPL.Entry.Journal entry={${submit.ordinal + 1}} />.`,
+    );
+  }
+  const observation = submitObservation(record.observed);
+  if (observation === undefined) {
+    return refused(reason ?? "this submission's outcome was not retained.");
+  }
+  return plain(renderReceipt(submitReceipt(submit.entry, observation, reason)));
 }
 
 /**

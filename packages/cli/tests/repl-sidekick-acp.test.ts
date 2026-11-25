@@ -3885,10 +3885,9 @@ describe("Follow: joined mixed-origin queue handoff", () => {
     yield* page.until("all Send work joined", sidekickIdle);
     expect(host.fake.prompts).toHaveLength(4);
     expect(host.fake.prompts[2]).toContain("The person says:\n\nUI queued text");
-    expect(host.fake.prompts[2]).toContain("## Execution outcome");
     expect(host.fake.prompts[2]).toContain("Entry entry-1 completed.");
-    expect(host.fake.prompts[2]).toContain("## Execution output");
-    expect(host.fake.prompts[2]).toContain("FINISHED-ROUND-CONTEXT");
+    expect(host.fake.prompts[2]).toContain("Output length: 22 Unicode code points.");
+    expect(host.fake.prompts[2]).not.toContain("FINISHED-ROUND-CONTEXT");
     expect(host.fake.prompts[3]).toContain("The person says:\n\nACP queued text");
     expect(composerHolds(page.screen(), "newer composer text")).toBe(true);
     const saved = (yield* settledReading(page.repl)).chat.filter(

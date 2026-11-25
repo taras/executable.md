@@ -1,3 +1,4 @@
+import { ReplClock } from "./frame.ts";
 import { SearchProject } from "@executablemd/core/host";
 import type { EntryPlacement } from "./entry-placement.ts";
 import { useHostFiles } from "@executablemd/runtime";
@@ -553,6 +554,8 @@ export type StartingCheck = () => Result<void>;
  * read somebody else's.
  */
 export interface ReplSubmission {
+  /** Monotonic start time in seconds, after preflight. */
+  readonly startedAt: number | undefined;
   /** The admission-order key of the entry this submission became. */
   readonly entry: string;
   /**
@@ -642,6 +645,7 @@ type ReplEntryStop = () => Operation<Result<void>>;
 
 /** The one entry task a session owns, for as long as it owns one. */
 interface ReplEntryTask {
+  readonly startedAt: number | undefined;
   /** The admission-order key of the entry this task is running. */
   readonly key: string;
   readonly task: Task<void>;
@@ -1458,6 +1462,7 @@ function* start(
     function submissionOf(held: ReplEntryTask): ReplSubmission {
       return {
         entry: held.key,
+        startedAt: held.startedAt,
         *join(): Operation<Result<unknown>> {
           const outcome = yield* held.finished;
           yield* held.task.halt();
@@ -1493,6 +1498,7 @@ function* start(
       if (!validated.ok) {
         return validated;
       }
+      const startedAt = yield* ReplClock.operations.now();
       // Asked again, because validating suspended. What a submission needs to be
       // true is true at the moment the task starts, not at the moment somebody
       // pressed a key — a session that began tearing down in between starts
@@ -1520,6 +1526,7 @@ function* start(
         pausing,
         workspace,
         onAdmitted,
+        startedAt,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
         // Registered before the wait below, so it covers the whole interval in
@@ -1571,6 +1578,7 @@ function* start(
       pausing?: PendingPause,
       workspace?: true | "project",
       onAdmitted?: (submission: ReplSubmission) => void,
+      startedAt?: number,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
@@ -1795,6 +1803,7 @@ function* start(
       });
       const started: ReplEntryTask = {
         key,
+        startedAt,
         task,
         admitted: admission.operation,
         finished: completion.operation,

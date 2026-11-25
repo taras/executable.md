@@ -2724,7 +2724,7 @@ describe("Sidekick original acknowledged history submission identity", () => {
           entry: "entry-3",
           status: "failed",
           failure: "the third entry failed",
-          read: { entry: "entry-3" },
+          read: "<REPL.Entry.Journal entry={3} />",
         }),
       ).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
     } finally {

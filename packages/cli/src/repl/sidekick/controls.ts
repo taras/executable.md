@@ -59,7 +59,7 @@ import type { ReplTesting, ReplTestReport } from "./testing.ts";
 
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { content } from "@executablemd/core";
+import { content, hasBinding } from "@executablemd/core";
 import type { InvocationForm } from "@executablemd/core";
 import type {
   FunctionComponentDefinition,
@@ -165,21 +165,54 @@ export interface SidekickRequests {
   inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>>;
 }
 
-/**
- * What Submit answers with.
- *
- * A status, the exact entry, and a read that is ready to use — and no output
- * body, preview or summary. A reply that wants to know what the entry printed
- * reads it, which is a separate operation with its own bounds. Handing back a
- * body here would make every submission carry output nobody asked for.
- */
 export interface SubmitReceipt {
   readonly entry: string;
   readonly status: "completed" | "failed" | "cancelled";
-  /** Why it failed, when it did. */
-  readonly failure: string | undefined;
-  /** The read a reply follows to see what it printed. */
-  readonly read: OutputReadRequest;
+  readonly durationSeconds?: number;
+  readonly outputLength?: number;
+  readonly failure?: string;
+  readonly read?: string;
+}
+
+export function submitObservation(
+  value: unknown,
+): Pick<SubmitReceipt, "status" | "durationSeconds" | "outputLength"> | undefined {
+  const details =
+    typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
+  const status = details !== undefined && "status" in details ? details.status : value;
+  const durationSeconds =
+    details !== undefined && "durationSeconds" in details ? details.durationSeconds : undefined;
+  const outputLength =
+    details !== undefined && "outputLength" in details ? details.outputLength : undefined;
+  if (status !== "completed" && status !== "failed" && status !== "cancelled") {
+    return undefined;
+  }
+  return {
+    status,
+    ...(typeof durationSeconds === "number" &&
+    Number.isFinite(durationSeconds) &&
+    durationSeconds >= 0
+      ? { durationSeconds }
+      : {}),
+    ...(typeof outputLength === "number" && Number.isSafeInteger(outputLength) && outputLength >= 0
+      ? { outputLength }
+      : {}),
+  };
+}
+
+export function submitReceipt(
+  entry: string,
+  observation: Pick<SubmitReceipt, "status" | "durationSeconds" | "outputLength">,
+  failure: string | undefined,
+): SubmitReceipt {
+  const admitted = admissionNumber(entry);
+  const reader = observation.status === "completed" ? "Output" : "Journal";
+  return {
+    entry,
+    ...observation,
+    ...(failure === undefined ? {} : { failure }),
+    ...(admitted === undefined ? {} : { read: `<REPL.Entry.${reader} entry={${admitted}} />` }),
+  };
 }
 
 /** One control occurrence, as the conversation retains it. */
@@ -469,31 +502,6 @@ function* settled<T>(
 }
 
 /**
- * Run one control whose own work writes the pair, and render what it answered.
- *
- * `<REPL.Submit />` alone, and the reason is the thing that makes its intent
- * different from every other control's: that intent *binds the reservation it
- * took*, and the reservation does not exist until the root has established the
- * session's terms, let the entry writer settle and taken the slot — all inside
- * the work. A wrapper that recorded an intent out here would write one before
- * there was anything to bind, and the response's history would hold two
- * intents for one submission: an interrupted Submit would then be readable as
- * two attempts, which is the one reading recovery must never be given.
- *
- * So the ordering belongs to whoever takes the slot, and this does what is
- * left: it renders the answer, and renders a refusal as the reason it is. A
- * submission refused before the slot was taken writes nothing at all, which is
- * correct — a reservation that never existed has no outcome to record.
- */
-function* delegated<T>(
-  work: () => Operation<Result<T>>,
-  render: (value: T) => string,
-): Operation<string> {
-  const answer = yield* work();
-  return answer.ok ? render(answer.value) : answer.error.message;
-}
-
-/**
  * The read class: everything a reply may observe.
  *
  * Self-closing, every one of them, and with no component-specific props. A read
@@ -762,7 +770,7 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       description:
         "Read what one entry printed. `<REPL.Entry.Output entry={22} />` answers with the last " +
         "window of that entry's output; `offset={0}` reads from the beginning. An entry that " +
-        "retained none answers with an empty window.",
+        'retained none answers with an empty window. Use `as="window"` to bind the page.',
       *fn(
         props: EntryReadRequest & { request?: Json },
       ): Operation<EntryTextPage | HistoryWindow | string> {
@@ -914,11 +922,17 @@ export function sidekickMutations(
       kind: "function",
       name: "REPL.Submit",
       props: NO_PROPS,
-      *fn(): Operation<string> {
-        // Unjournaled here on purpose; see {@link delegated}. The root writes
-        // this control's pair, because the intent binds the slot the root
-        // took and nothing out here knows what that is yet.
-        return yield* delegated(() => requests.submit(), renderReceipt);
+      description:
+        "Run the shared draft with `<REPL.Submit />` and wait for its receipt. " +
+        'Use `<REPL.Submit as="receipt" />` to bind it, or read it in feedback. ' +
+        "Read the entry's output separately with `<REPL.Entry.Output />`.",
+      *fn(): Operation<SubmitReceipt | string> {
+        // The root journals Submit because only it can bind the reserved slot.
+        const answer = yield* requests.submit();
+        if (!answer.ok) {
+          return answer.error.message;
+        }
+        return (yield* hasBinding()) ? answer.value : renderReceipt(answer.value);
       },
     }),
     // Core's own `<Elicit>`, admitted paired — and with **no definition of its
@@ -960,15 +974,19 @@ export function sidekickMutations(
 export function renderReceipt(receipt: SubmitReceipt): string {
   const lines = [`Entry ${receipt.entry} ${receipt.status}.`];
   if (receipt.failure !== undefined) {
-    lines.push(`It failed: ${receipt.failure}`);
+    const label = receipt.status === "cancelled" ? "Reason" : "It failed";
+    lines.push(`${label}: ${receipt.failure}`);
   }
-  const admitted = admissionNumber(receipt.entry);
-  if (admitted !== undefined) {
-    lines.push(
-      receipt.status === "completed"
-        ? `Read what it printed with <REPL.Entry.Output entry={${admitted}} />.`
-        : `Inspect its saved evidence with <REPL.Entry.Journal entry={${admitted}} />.`,
-    );
+  if (receipt.durationSeconds !== undefined) {
+    lines.push(`Duration: ${receipt.durationSeconds.toFixed(3)} seconds.`);
+  }
+  if (receipt.outputLength !== undefined) {
+    lines.push(`Output length: ${receipt.outputLength} Unicode code points.`);
+  }
+  if (receipt.read !== undefined) {
+    const instruction =
+      receipt.status === "completed" ? "Read what it printed" : "Inspect its saved evidence";
+    lines.push(`${instruction} with ${receipt.read}.`);
   }
   return lines.join("\n");
 }
