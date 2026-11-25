@@ -47,7 +47,19 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   <REPL.Submit as="receipt" />
   <Output><Json value={receipt} /></Output>
   ```
-- For a failed or cancelled entry, follow the receipt's
+
+  ```json
+  {
+  "entry": "entry-42",
+  "status": "completed",
+  "durationSeconds": 2.3,
+  "outputLength": 24000,
+  "read": "<REPL.Entry.Output entry={42} />"
+  }
+  ```
+
+  When an entry fails, the receipt can include a `failure` message, and `read` points to its journal.
+- For a cancelled entry, follow the receipt's
   `<REPL.Entry.Journal />` instruction to inspect the saved evidence. Read
   `<Guide.Recovery />` for how to use that evidence.
 
