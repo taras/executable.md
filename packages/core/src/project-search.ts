@@ -3,7 +3,7 @@ import type { Context, Operation, Result } from "effection";
 import { cwd, Files } from "@executablemd/runtime";
 import { fileRevision } from "./file-window.ts";
 import { globFiles } from "./files.ts";
-import { readFileWithTransform } from "./file-observation.ts";
+import { readFileWithTransform } from "./file-read-transform.ts";
 import { SEARCH_PAGE_SIZE, searchText, validSearchQuery } from "./search-text.ts";
 import type { TextMatch } from "./search-text.ts";
 

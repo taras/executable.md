@@ -74,7 +74,7 @@ import { ContentError, DocumentationError, ProjectedContentError } from "../erro
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
 import { fileReadArguments, fileRevision } from "../file-window.ts";
-import { readFileWindow } from "../file-observation.ts";
+import { readFileWindow } from "../file-read-transform.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { searchDirectory } from "../project-search.ts";
 import { isJsonObject, parseJson } from "../json.ts";
