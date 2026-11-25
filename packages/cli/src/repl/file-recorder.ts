@@ -51,7 +51,7 @@ export interface EntryFileCalls {
 }
 interface CopyRouting {
   guard(): Operation<void>;
-  observe?(input: FilePathInput): Operation<Result<void>>;
+  prepareTransformedRead?(input: FilePathInput): Operation<Result<void>>;
   restoreSelection?(): Operation<unknown>;
   route(source: string, destination: string): Operation<Operation<void> | undefined>;
 }
@@ -166,7 +166,9 @@ function recordingBody(
           }
           yield* routing.guard();
           const permitted =
-            routing.observe === undefined ? Ok(undefined) : yield* routing.observe(input);
+            routing.prepareTransformedRead === undefined
+              ? Ok(undefined)
+              : yield* routing.prepareTransformedRead(input);
           return permitted.ok ? yield* next(input) : permitted;
         },
         ensureDirectory: ([input], next) => body.ensure(input, () => next(input)),

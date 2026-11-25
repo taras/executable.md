@@ -356,7 +356,7 @@ export function* useReplFileRecorder(
       routed(recorder, operation, request, perform, workspace, authored, policy, access),
     {
       guard: () => policy.guard(),
-      *observe(input) {
+      *prepareTransformedRead(input) {
         if (!(yield* Permissions.operations.files("read"))) {
           return Err(
             filesFailure({ operation: "read", phase: "resolution", reason: "permission-denied" }),
