@@ -189,8 +189,8 @@ describe("native proof evidence", { sanitizeOps: false, sanitizeResources: false
     const snapshot = embeddedAdapterIdentities().find((item) => item.provider === "codex");
     expect(snapshot).toMatchObject({
       package: "@agentclientprotocol/codex-acp",
-      version: "1.6.2",
-      sha256: "a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1",
+      version: "1.8.0",
+      sha256: "64f0b7be79e0d9d5c74c933967e9ef4e96b50e5a2857767e19bf2267cb5384f1",
     });
     for (const doc of ["CodexNativeLaunch", "CodexZeroNativeTurnExit"]) {
       const content = yield* readTextFile(new URL("../src/" + doc + ".test.md", import.meta.url));

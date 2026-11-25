@@ -31,8 +31,8 @@ const VENDOR = "packages/acp/vendor/adapters";
 /** Exact source commits carried by the adapter snapshots. */
 const PINNED = {
   codex: {
-    upstreamBase: "50f69e57ca761ccafd2ca29de7fb591068277516",
-    patchedCommit: "e1a15637c13e85cca05cd8ba398c5cef92dcaf33",
+    upstreamBase: "87997e2627e8fa246a49de533c612f6196c4004e",
+    patchedCommit: "5586332feb31a26e6c1d6aab2798132e2753d9dd",
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",

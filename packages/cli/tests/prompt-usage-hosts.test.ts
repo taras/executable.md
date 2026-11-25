@@ -252,7 +252,7 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
             }),
         },
       );
-      expectRetained(usageIn(yield* database.journal.readAll())[0], "1.6.2");
+      expectRetained(usageIn(yield* database.journal.readAll())[0], "1.8.0");
     });
   });
 

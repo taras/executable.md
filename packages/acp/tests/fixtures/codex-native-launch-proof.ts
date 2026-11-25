@@ -99,8 +99,8 @@ const ACP_DOCUMENT = fileURLToPath(new URL("./codex-native-to-acp-prompt.md", im
  * opt-in regression should be able to exercise (#891).
  */
 const REQUIRED_ADAPTER_PACKAGE = "@agentclientprotocol/codex-acp";
-const REQUIRED_ADAPTER_VERSION = "1.6.2";
-const REQUIRED_ADAPTER_DIGEST = "a3f699537970127972635b4596aef40ab8a4caa25a9028861d9ee07bf6c4b1a1";
+const REQUIRED_ADAPTER_VERSION = "1.8.0";
+const REQUIRED_ADAPTER_DIGEST = "64f0b7be79e0d9d5c74c933967e9ef4e96b50e5a2857767e19bf2267cb5384f1";
 
 /** The one prompt version a Codex launch may spend a turn on. */
 const PROMPT_VERSION = "codex-materialization.v1";

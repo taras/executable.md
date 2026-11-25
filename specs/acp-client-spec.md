@@ -1388,7 +1388,7 @@ traced adapter release's view covers:
 | Adapter | `response` and `quota-total` | `quota-model` | Outer Prompt |
 | --- | --- | --- | --- |
 | Claude 0.70.0 | `main-loop`, `turn-total` | `broader-model-work`, `turn-total` | `partial`: subagent inclusion is unverified, absent counters are reported as zero, and reasoning is billed inside output |
-| Codex 1.6.2 | `last-request`, `snapshot` | `last-request`, `snapshot` | `partial`: only the final internal request is reported |
+| Codex 1.6.2 and 1.8.0 | `last-request`, `snapshot` | `last-request`, `snapshot` | `partial`: only the final internal request is reported |
 
 Any other release reports `unknown` scope and counter with
 `source-semantics-unknown`. `finalReport` is `unavailable` when the turn ended

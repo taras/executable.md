@@ -1,8 +1,8 @@
 diff --git a/README.md b/README.md
-index 2bda2a2..36d1a6a 100644
+index 092f61b..7ba355d 100644
 --- a/README.md
 +++ b/README.md
-@@ -32,7 +32,7 @@ npm install -g @agentclientprotocol/codex-acp
+@@ -33,7 +33,7 @@ npm install -g @agentclientprotocol/codex-acp
  codex-acp --version
  ```
  
@@ -24,14 +24,14 @@ index cfd9581..3c8cb3a 100644
    banner: {
      js: "import { createRequire as __createRequire } from 'module'; const require = __createRequire(import.meta.url);",
 diff --git a/package-lock.json b/package-lock.json
-index ed62b3f..2a26290 100644
+index c0851ef..c504670 100644
 --- a/package-lock.json
 +++ b/package-lock.json
 @@ -10,7 +10,6 @@
        "license": "Apache-2.0",
        "dependencies": {
          "@agentclientprotocol/sdk": "^1.4.0",
--        "@openai/codex": "^0.148.0",
+-        "@openai/codex": "^0.152.0",
          "diff": "^9.0.0",
          "open": "^11.0.1",
          "vscode-jsonrpc": "^9.0.1",
@@ -40,9 +40,9 @@ index ed62b3f..2a26290 100644
        }
      },
 -    "node_modules/@openai/codex": {
--      "version": "0.148.0",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0.tgz",
--      "integrity": "sha512-bh5kH9+BMrFaHGmLeoSansPdfRksvr4UXzjQInns/KRO7r8VJ+6AAW+SqUsE8XcG3+OW/mI4EEy8Gpo9UDXGvQ==",
+-      "version": "0.152.0",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0.tgz",
+-      "integrity": "sha512-Vx0tg/J5SbxYYGJazTtL/XySK9Dlqc5KW1MZM71NMwVci/4F1ap+FfSKPFTlrICEtOTuq3KNcWSdv9oMGdPuRw==",
 -      "license": "Apache-2.0",
 -      "bin": {
 -        "codex": "bin/codex.js"
@@ -51,19 +51,19 @@ index ed62b3f..2a26290 100644
 -        "node": ">=16"
 -      },
 -      "optionalDependencies": {
--        "@openai/codex-darwin-arm64": "npm:@openai/codex@0.148.0-darwin-arm64",
--        "@openai/codex-darwin-x64": "npm:@openai/codex@0.148.0-darwin-x64",
--        "@openai/codex-linux-arm64": "npm:@openai/codex@0.148.0-linux-arm64",
--        "@openai/codex-linux-x64": "npm:@openai/codex@0.148.0-linux-x64",
--        "@openai/codex-win32-arm64": "npm:@openai/codex@0.148.0-win32-arm64",
--        "@openai/codex-win32-x64": "npm:@openai/codex@0.148.0-win32-x64"
+-        "@openai/codex-darwin-arm64": "npm:@openai/codex@0.152.0-darwin-arm64",
+-        "@openai/codex-darwin-x64": "npm:@openai/codex@0.152.0-darwin-x64",
+-        "@openai/codex-linux-arm64": "npm:@openai/codex@0.152.0-linux-arm64",
+-        "@openai/codex-linux-x64": "npm:@openai/codex@0.152.0-linux-x64",
+-        "@openai/codex-win32-arm64": "npm:@openai/codex@0.152.0-win32-arm64",
+-        "@openai/codex-win32-x64": "npm:@openai/codex@0.152.0-win32-x64"
 -      }
 -    },
 -    "node_modules/@openai/codex-darwin-arm64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-darwin-arm64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-darwin-arm64.tgz",
--      "integrity": "sha512-xgBPFiF1fHUlRS7HE6wGB56LjBJh16kGD7b4TTbwdVBZNB4QDkTok+vdkAGrfpVkfKcwGNhPSKDgCw+KMZOVug==",
+-      "version": "0.152.0-darwin-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-darwin-arm64.tgz",
+-      "integrity": "sha512-DOnDA6EKOs+aRytYH4ffIuUutok9ovpvCNax8aaTZvBB2bKUPjUleLrP1pk+hGarddqU1ySuvXMOfp6ufXyOVQ==",
 -      "cpu": [
 -        "arm64"
 -      ],
@@ -78,9 +78,9 @@ index ed62b3f..2a26290 100644
 -    },
 -    "node_modules/@openai/codex-darwin-x64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-darwin-x64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-darwin-x64.tgz",
--      "integrity": "sha512-qepQolhJutfOp+e9i7L3xsi8aoWeCUiiRq274WMWqRj50rKTrXxsuAgkAwDbqEfT3G5VynhYZuQvDsW37JgdNQ==",
+-      "version": "0.152.0-darwin-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-darwin-x64.tgz",
+-      "integrity": "sha512-p2XLFWU+Lflke89zNK67ad2/yaFndUIZkyk+gjl35NCDz+LncvAUOeiTFB2MtmC2kxvudcYo6/yezQqwM29Gnw==",
 -      "cpu": [
 -        "x64"
 -      ],
@@ -95,9 +95,9 @@ index ed62b3f..2a26290 100644
 -    },
 -    "node_modules/@openai/codex-linux-arm64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-linux-arm64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-linux-arm64.tgz",
--      "integrity": "sha512-51DCd+izzk6n4mMh4w2utWj3lTLhSTnCOEJQfRh0LS9nBDkcYZcK3iSKOST6fByRIlLSXuLO33LlYYA1VPot6A==",
+-      "version": "0.152.0-linux-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-linux-arm64.tgz",
+-      "integrity": "sha512-OTmO6y5gCpcjzybwzgK/nSM8VI68Pw+T2ohBK+8cwVM+7PCRqSqtNo7qTLG0bgv9ff6QtwiZ9sl0KtY42H0Wqg==",
 -      "cpu": [
 -        "arm64"
 -      ],
@@ -112,9 +112,9 @@ index ed62b3f..2a26290 100644
 -    },
 -    "node_modules/@openai/codex-linux-x64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-linux-x64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-linux-x64.tgz",
--      "integrity": "sha512-uDT9s7AfMr9xLuJX3ZLVWHgHkUpCnZ33CZjZEdVQhrYCIErkDHsCW5TG290nNjaKngK0WxGt5uCcxeUHv9MWWA==",
+-      "version": "0.152.0-linux-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-linux-x64.tgz",
+-      "integrity": "sha512-Isn/g5EZTaNbwZtaIuz67U1FNDEVVeMpS4xiR+c1dpOPL2xxrGNtdAothOW2YKsb96OsS+QfClziFb4qxesWDA==",
 -      "cpu": [
 -        "x64"
 -      ],
@@ -129,9 +129,9 @@ index ed62b3f..2a26290 100644
 -    },
 -    "node_modules/@openai/codex-win32-arm64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-win32-arm64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-win32-arm64.tgz",
--      "integrity": "sha512-a8iOwLzs8UdnlWDHjgK3W/YSBBsUImG8X5XLBjengp3XGJRruhiIsQtUDUOYimCmotKPM4aX7Ub6zjl/KPxMQQ==",
+-      "version": "0.152.0-win32-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-win32-arm64.tgz",
+-      "integrity": "sha512-1aMFMFvhSru5IT3hRstBjTmLPkhi+FKlu05bKKsKY+Pmx3a0sZBiK8WYFkROUynsM6ZVgNApfDv8zVUbX5crLA==",
 -      "cpu": [
 -        "arm64"
 -      ],
@@ -146,9 +146,9 @@ index ed62b3f..2a26290 100644
 -    },
 -    "node_modules/@openai/codex-win32-x64": {
 -      "name": "@openai/codex",
--      "version": "0.148.0-win32-x64",
--      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-win32-x64.tgz",
--      "integrity": "sha512-/Jg8eYw0BqTGNUpnrzzWlK2kbu29NWg7t6pnUDEfxqpTUf+mK8r3okXQn60Zjbk9InYZ4d8SwSjrtOa+i5hSPw==",
+-      "version": "0.152.0-win32-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.152.0-win32-x64.tgz",
+-      "integrity": "sha512-vy67ua+QeOHKqT5ovLOkINncuaknldUkOfwcGdxQwPbSxgnCoiHnAO/rieWQt3ncM2pRzygtPVoLOFiovcRlaQ==",
 -      "cpu": [
 -        "x64"
 -      ],
@@ -165,23 +165,14 @@ index ed62b3f..2a26290 100644
        "version": "0.146.0",
        "resolved": "https://registry.npmjs.org/@oxc-project/types/-/types-0.146.0.tgz",
 diff --git a/package.json b/package.json
-index 8506aea..5415d62 100644
+index 8367fef..d4f360f 100644
 --- a/package.json
 +++ b/package.json
-@@ -35,7 +35,7 @@
-     "start": "node --import tsx src/index.ts",
-     "example:steering": "node --import tsx examples/steering.ts",
-     "example:steering:multistep": "node --import tsx examples/steering.ts",
--    "generate-types": "./node_modules/.bin/codex app-server generate-ts --out src/app-server",
-+    "generate-types": "codex app-server generate-ts --out src/app-server",
-     "release:preflight": "bash scripts/release-preflight.sh",
-     "test": "vitest run --no-file-parallelism --retry=2",
-     "test:e2e": "npm run build && RUN_E2E_TESTS=true vitest run --no-file-parallelism --retry=2 src/__tests__/CodexACPAgent/e2e",
-@@ -65,7 +65,6 @@
+@@ -66,7 +66,6 @@
    },
    "dependencies": {
      "@agentclientprotocol/sdk": "^1.4.0",
--    "@openai/codex": "^0.148.0",
+-    "@openai/codex": "^0.152.0",
      "diff": "^9.0.0",
      "open": "^11.0.1",
      "vscode-jsonrpc": "^9.0.1",
@@ -212,6 +203,451 @@ index bc14780..e70c264 100644
 +1. Install the Codex CLI version to support on the host `PATH`.
  2. Regenerate Codex types in `src/app-server/`: `npm run generate-types`
  3. Ensure there are no type errors or failed tests: `npm run typecheck` and `npm run test`
+diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
+index a5590ce..3d85f3d 100644
+--- a/src/CodexAcpClient.ts
++++ b/src/CodexAcpClient.ts
+@@ -488,6 +488,7 @@ export class CodexAcpClient {
+         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
+         return {
+             sessionId: request.sessionId,
++            threadId: response.thread.id,
+             currentModelId: currentModelId,
+             models: codexModels,
+             collaborationMode: this.getCollaborationMode(response.thread.id),
+@@ -531,6 +532,7 @@ export class CodexAcpClient {
+         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
+         return {
+             sessionId: request.sessionId,
++            threadId: response.thread.id,
+             currentModelId: currentModelId,
+             models: codexModels,
+             collaborationMode: this.getCollaborationMode(response.thread.id),
+@@ -565,6 +567,7 @@ export class CodexAcpClient {
+         const currentModelId = this.createModelId(codexModels, response.model, response.reasoningEffort).toString();
+         return {
+             sessionId: response.thread.id,
++            threadId: response.thread.id,
+             currentModelId: currentModelId,
+             models: codexModels,
+             collaborationMode: this.getCollaborationMode(response.thread.id),
+@@ -594,7 +597,7 @@ export class CodexAcpClient {
+     async runReview(
+         sessionId: string,
+         target: ReviewTarget,
+-        onTurnStarted?: (turnId: string, threadId: string) => void,
++        onTurnStarted?: (turnId: string, threadId: string) => void | Promise<void>,
+     ): Promise<TurnCompletedNotification> {
+         return await this.codexClient.runReview({
+             threadId: sessionId,
+@@ -615,7 +618,7 @@ export class CodexAcpClient {
+     async setGoal(
+         sessionId: string,
+         objective: string,
+-        onTurnStarted?: (turnId: string) => void,
++        onTurnStarted?: (turnId: string) => void | Promise<void>,
+         onGoalSet?: (goal: ThreadGoal) => void,
+     ): Promise<TurnCompletedNotification | null> {
+         const params = {
+@@ -645,7 +648,7 @@ export class CodexAcpClient {
+ 
+     async resumeGoal(
+         sessionId: string,
+-        onTurnStarted?: (turnId: string) => void,
++        onTurnStarted?: (turnId: string) => void | Promise<void>,
+         onGoalSet?: (goal: ThreadGoal) => void,
+     ): Promise<TurnCompletedNotification | null> {
+         const params = {
+@@ -882,7 +885,7 @@ export class CodexAcpClient {
+         disableSummary: boolean,
+         cwd: string,
+         additionalDirectories: string[],
+-        onTurnStarted?: (turnId: string) => void,
++        onTurnStarted?: (turnId: string) => void | Promise<void>,
+         shouldCancel?: () => boolean,
+     ): Promise<TurnCompletedNotification | null> {
+         const input = buildPromptItems(request.prompt);
+diff --git a/src/CodexAcpServer.ts b/src/CodexAcpServer.ts
+index 234e1cd..4e1f668 100644
+--- a/src/CodexAcpServer.ts
++++ b/src/CodexAcpServer.ts
+@@ -107,7 +107,6 @@ import {
+ import {CodexSubagentEventRouter} from "./subagents/CodexSubagentEventRouter";
+ import {nameFromAgentPath} from "./subagents/CodexAgentPath";
+ import {randomUUID} from "node:crypto";
+-import {TitleGenerator} from "./TitleGenerator";
+ import {once} from "node:events";
+ import {
+     AIR_AGENT_FILE_CHANGE_REPORT_KEY,
+@@ -131,6 +130,11 @@ import {
+ 
+ export interface SessionState {
+     sessionId: string,
++    /**
++     * The thread id the app server confirmed for this session, reported to clients as
++     * `_meta.agentSessionId` so they can address the conversation natively without guessing.
++     */
++    threadId: string,
+     currentModelId: string,
+     availableModels: Array<Model>,
+     supportedReasoningEfforts: Array<ReasoningEffortOption>,
+@@ -157,7 +161,6 @@ export interface SessionState {
+     sessionTitle: string | null;
+     sessionTitleSource: "unset" | "fallback" | "explicit" | "unknown";
+     sessionFailure?: SessionFailure;
+-    titleGen?: TitleGenerator;
+     subagents: CodexSubagentEventRouter;
+ }
+ 
+@@ -184,6 +187,15 @@ export interface SessionFailure {
+ 
+ const CODEX_PROCESS_EXITED_ERROR_CODE = 1001;
+ 
++/**
++ * The metadata key naming a backend's acceptance of a turn.
++ *
++ * Versioned, because a client reads it to decide whether a conversation now
++ * exists, and a changed meaning under an unchanged key would be read as the
++ * old one.
++ */
++const SESSION_MATERIALIZATION_META = "executablemd.session-materialization/v1";
++
+ function clientSupportsTypedSessionFailures(capabilities: acp.ClientCapabilities | null): boolean {
+     return clientSupportsAirCapability(capabilities, AIR_SESSION_FAILURE_KEY);
+ }
+@@ -617,6 +629,7 @@ export class CodexAcpServer {
+         const currentModelSupportsFast = modelSupportsFast(currentModel);
+         const sessionState: SessionState = {
+             sessionId: sessionId,
++            threadId: sessionMetadata.threadId,
+             currentModelId: currentModelId,
+             availableModels: models,
+             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
+@@ -647,12 +660,6 @@ export class CodexAcpServer {
+                 new ACPSessionConnection(this.connection, sessionId),
+             ),
+         };
+-        sessionState.titleGen = new TitleGenerator(
+-            this.codexAcpClient.appServerClient,
+-            sessionId,
+-            sessionState.cwd,
+-            () => sessionState.sessionTitleSource,
+-        );
+         this.sessions.set(sessionId, sessionState);
+         resumeSubscribed = false;
+ 
+@@ -732,6 +739,7 @@ export class CodexAcpServer {
+             models: modelState,
+             modes: modeState,
+             ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId)),
++            ...this.createNativeSessionIdentityResponse(sessionId),
+         };
+     }
+ 
+@@ -751,6 +759,7 @@ export class CodexAcpServer {
+             models: modelState,
+             modes: modeState,
+             ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId)),
++            ...this.createNativeSessionIdentityResponse(sessionId),
+         };
+     }
+ 
+@@ -884,6 +893,7 @@ export class CodexAcpServer {
+             models: modelState,
+             modes: modeState,
+             ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId)),
++            ...this.createNativeSessionIdentityResponse(sessionId),
+         };
+     }
+ 
+@@ -1515,6 +1525,19 @@ export class CodexAcpServer {
+         };
+     }
+ 
++    /**
++     * Reports the app-server thread id a client needs to address this conversation with the Codex
++     * CLI directly. Clients read native identity from `_meta`, so a top-level `sessionId` alone
++     * leaves them unable to distinguish a real identity from one they invented.
++     */
++    private createNativeSessionIdentityResponse(sessionId: SessionId): { _meta?: { agentSessionId: string } } {
++        const threadId = this.sessions.get(sessionId)?.threadId;
++        if (threadId === undefined) {
++            return {};
++        }
++        return {_meta: {agentSessionId: threadId}};
++    }
++
+     private isSessionConfigEnabled(): boolean {
+         // Temporarily disabled for JB IDEs 2026.1 due to issues in session_config (LLM-28118)
+         return !isJetBrains2026_1Client(this.clientInfo);
+@@ -1668,6 +1691,7 @@ export class CodexAcpServer {
+         const currentModelSupportsFast = modelSupportsFast(currentModel);
+         const sessionState: SessionState = {
+             sessionId: sessionId,
++            threadId: sessionMetadata.threadId,
+             currentModelId: currentModelId,
+             availableModels: models,
+             supportedReasoningEfforts: currentModel?.supportedReasoningEfforts ?? [],
+@@ -1698,12 +1722,6 @@ export class CodexAcpServer {
+                 new ACPSessionConnection(this.connection, sessionId),
+             ),
+         };
+-        sessionState.titleGen = new TitleGenerator(
+-            this.codexAcpClient.appServerClient,
+-            sessionId,
+-            sessionState.cwd,
+-            () => sessionState.sessionTitleSource,
+-        );
+         this.sessions.set(sessionId, sessionState);
+         subscribed = false;
+ 
+@@ -1870,7 +1888,6 @@ export class CodexAcpServer {
+         if (explicitTitle) {
+             sessionState.sessionTitle = explicitTitle;
+             sessionState.sessionTitleSource = "explicit";
+-            sessionState.titleGen?.markExistingTitle();
+             await session.update({
+                 sessionUpdate: "session_info_update",
+                 title: explicitTitle,
+@@ -2473,6 +2490,25 @@ export class CodexAcpServer {
+         return turnId;
+     }
+ 
++    /**
++     * Tell the client this thread's backend accepted a turn.
++     *
++     * A client that defers durable session state until a conversation really
++     * exists cannot learn that from what a turn produces: text, a stop reason
++     * and a terminal response each say the adapter is talking, not that the
++     * backend took the turn. This says exactly that and nothing else, on the
++     * session it happened on.
++     */
++    private async publishSessionMaterialization(sessionId: string): Promise<void> {
++        const session = new ACPSessionConnection(this.connection, sessionId);
++        await session.update({
++            sessionUpdate: "session_info_update",
++            _meta: {
++                [SESSION_MATERIALIZATION_META]: {state: "accepted"},
++            },
++        });
++    }
++
+     async prompt(
+         params: acp.PromptRequest,
+         signal?: AbortSignal,
+@@ -2492,6 +2528,12 @@ export class CodexAcpServer {
+         let agentFileChangeReportTurnId: string | null = null;
+         let agentFileChangeReportUnavailableReason: AgentFileChangeReportUnavailableReason = "providerError";
+         let promptWasCancelled = false;
++        // The App Server turn that produced this prompt's terminal response, so a
++        // client can name the exact point this conversation reached. Request-local
++        // and assigned only where a turn actually completed: `currentTurnId` is
++        // session state that a concurrent prompt on the same session moves, and
++        // reading it here would report another prompt's turn as this one's.
++        let checkpointTurnId: string | null = null;
+         let recoverableSessionFailure = sessionState.sessionFailure;
+         sessionState.currentTurnId = null;
+         sessionState.lastTokenUsage = null;
+@@ -2582,7 +2624,7 @@ export class CodexAcpServer {
+                 onTurnStartPending: () => {
+                     ensurePendingTurnStart();
+                 },
+-                onTurnStarted: (turnId, threadId) => {
++                onTurnStarted: async (turnId, threadId) => {
+                     const turn = {threadId, turnId};
+                     activePrompt.currentTurn = turn;
+                     if (this.promptShouldStop(params.sessionId, activePrompt)) {
+@@ -2591,6 +2633,10 @@ export class CodexAcpServer {
+                     }
+                     sessionState.currentTurnId = turnId;
+                     pendingTurnStart?.resolve(turnId);
++                    // A command that starts a turn is a turn the backend
++                    // accepted, exactly as an ordinary prompt is. A command that
++                    // starts none never reaches here and publishes nothing.
++                    await this.publishSessionMaterialization(params.sessionId);
+                     onTurnStarted?.();
+                 },
+                 setConfigOption: async (configId, value) => {
+@@ -2646,6 +2692,7 @@ export class CodexAcpServer {
+                 }
+                 if (commandResult.turnCompleted?.turn.status === "completed") {
+                     agentFileChangeReportTurnId = commandResult.turnCompleted.turn.id;
++                    checkpointTurnId = commandResult.turnCompleted.turn.id;
+                 } else if (commandResult.turnCompleted === undefined) {
+                     agentFileChangeReportUnavailableReason = "notReported";
+                 }
+@@ -2653,7 +2700,10 @@ export class CodexAcpServer {
+                 return {
+                     stopReason: "end_turn",
+                     usage: this.buildPromptUsage(sessionState.lastTokenUsage),
+-                    _meta: this.buildQuotaMeta(sessionState),
++                    _meta: {
++                        ...this.buildQuotaMeta(sessionState),
++                        ...this.buildCheckpointMeta(checkpointTurnId),
++                    },
+                 };
+             }
+ 
+@@ -2695,7 +2745,7 @@ export class CodexAcpServer {
+                     disableSummary,
+                     sessionState.cwd,
+                     sessionState.additionalDirectories,
+-                    (turnId) => {
++                    async (turnId) => {
+                         const turn = {threadId: params.sessionId, turnId};
+                         activePrompt.currentTurn = turn;
+                         if (this.promptShouldStop(params.sessionId, activePrompt)) {
+@@ -2704,6 +2754,7 @@ export class CodexAcpServer {
+                         }
+                         sessionState.currentTurnId = turnId;
+                         pendingTurnStart?.resolve(turnId);
++                        await this.publishSessionMaterialization(params.sessionId);
+                         onTurnStarted?.();
+                     },
+                     () => this.promptShouldStop(params.sessionId, activePrompt),
+@@ -2861,23 +2912,14 @@ export class CodexAcpServer {
+             }
+             if (turnCompleted.turn.status === "completed") {
+                 agentFileChangeReportTurnId = turnCompleted.turn.id;
++                // `turnCompleted` has already been reassigned if a plan
++                // implementation turn ran, so this is the final turn — the one
++                // that produced the response being returned.
++                checkpointTurnId = turnCompleted.turn.id;
+             }
+ 
+             await clearRecoveredSessionFailure(eventHandler);
+ 
+-            // Fire-and-forget: generate an AI title from the first turn.
+-            // Never await — must not block the prompt response.
+-            // Note: turn.items contains only agent output, not the user message —
+-            // extract prompt text from params instead.
+-            if (sessionState.titleGen) {
+-                const promptText = params.prompt
+-                    .filter((b): b is Extract<acp.ContentBlock, { type: "text" }> => b.type === "text")
+-                    .map(b => b.text)
+-                    .join(" ")
+-                    .trim();
+-                sessionState.titleGen.onTurnCompleted(promptText);
+-            }
+-
+             await this.publishFallbackSessionTitle(
+                 sessionState,
+                 this.createPromptFallbackTitle(params.prompt),
+@@ -2886,7 +2928,10 @@ export class CodexAcpServer {
+             return {
+                 stopReason: "end_turn",
+                 usage: this.buildPromptUsage(sessionState.lastTokenUsage),
+-                _meta: this.buildQuotaMeta(sessionState),
++                _meta: {
++                    ...this.buildQuotaMeta(sessionState),
++                    ...this.buildCheckpointMeta(checkpointTurnId),
++                },
+             };
+         } catch (err) {
+             logger.error(`Prompt for session ${params.sessionId} failed`, err);
+@@ -3011,6 +3056,21 @@ export class CodexAcpServer {
+         };
+     }
+ 
++    /**
++     * Which App Server turn this response is, when one completed.
++     *
++     * A client that keeps this can later say exactly where a conversation had
++     * reached, rather than "wherever that session is now". The value is the App
++     * Server's own turn id, carried out unchanged.
++     *
++     * Empty for a cancelled prompt, for a failed one, and for a command this
++     * adapter answered itself without ever starting a provider turn — none of
++     * those is a point anything could resume from.
++     */
++    private buildCheckpointMeta(turnId: string | null): { codex?: { turnId: string } } {
++        return turnId === null ? {} : { codex: { turnId } };
++    }
++
+     private buildQuotaMeta(sessionState: SessionState): { quota: QuotaMeta } {
+         const lastTokenUsage = sessionState.lastTokenUsage;
+ 
+diff --git a/src/CodexAppServerClient.ts b/src/CodexAppServerClient.ts
+index 5152192..a3c1c73 100644
+--- a/src/CodexAppServerClient.ts
++++ b/src/CodexAppServerClient.ts
+@@ -282,7 +282,7 @@ export class CodexAppServerClient {
+         return await this.sendRequest({ method: "turn/start", params: params });
+     }
+ 
+-    async runTurn(params: TurnStartParams, onTurnStarted?: (turnId: string) => void): Promise<TurnCompletedNotification> {
++    async runTurn(params: TurnStartParams, onTurnStarted?: (turnId: string) => void | Promise<void>): Promise<TurnCompletedNotification> {
+         const capturedCompletions: Array<TurnCompletedNotification> = [];
+         const releaseCapture = this.captureTurnCompletions(params.threadId, (event) => {
+             capturedCompletions.push(event);
+@@ -290,7 +290,9 @@ export class CodexAppServerClient {
+ 
+         try {
+             const turnStarted = await this.turnStart(params);
+-            onTurnStarted?.(turnStarted.turn.id);
++            // Awaited: a caller that publishes the acceptance of this turn has to
++            // publish it before anything the turn produces reaches the client.
++            await onTurnStarted?.(turnStarted.turn.id);
+             const earlyCompletion = capturedCompletions.find(event => event.turn.id === turnStarted.turn.id);
+             releaseCapture();
+             if (earlyCompletion) {
+@@ -306,7 +308,7 @@ export class CodexAppServerClient {
+ 
+     async runReview(
+         params: ReviewStartParams,
+-        onTurnStarted?: (turnId: string, threadId: string) => void,
++        onTurnStarted?: (turnId: string, threadId: string) => void | Promise<void>,
+     ): Promise<TurnCompletedNotification> {
+         const capturedCompletions: Array<TurnCompletedNotification> = [];
+         const releaseCapture = this.captureTurnCompletions(params.threadId, (event) => {
+@@ -315,7 +317,10 @@ export class CodexAppServerClient {
+ 
+         try {
+             const reviewStarted = await this.reviewStart(params);
+-            onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);
++            // Awaited for the same reason `runTurn` awaits it: a caller that
++            // publishes this turn's acceptance has to publish it before
++            // anything the turn produces reaches the client.
++            await onTurnStarted?.(reviewStarted.turn.id, reviewStarted.reviewThreadId);
+             const earlyCompletion = capturedCompletions.find(event => event.turn.id === reviewStarted.turn.id);
+             releaseCapture();
+             if (earlyCompletion) {
+@@ -329,7 +334,7 @@ export class CodexAppServerClient {
+ 
+     async runGoalSet(
+         params: ThreadGoalSetParams,
+-        onTurnStarted?: (turnId: string) => void,
++        onTurnStarted?: (turnId: string) => void | Promise<void>,
+         runtimeEffectsGraceMs = GOAL_RUNTIME_EFFECTS_GRACE_MS,
+         onGoalSet?: (goal: ThreadGoal) => void,
+     ): Promise<TurnCompletedNotification | null> {
+@@ -357,12 +362,17 @@ export class CodexAppServerClient {
+         let expectedGoal: ThreadGoal | null = null;
+         const noGoalTurnStarted = this.createNoGoalTurnStartedPromise(runtimeEffectsGraceMs);
+         const capturedGoalUpdates: Array<ThreadGoalUpdatedNotification> = [];
++        // A goal turn is routed to us on a notification, so the callback runs
++        // where nothing can be awaited. What it starts is kept instead, and
++        // waited for below — before this returns, and therefore before the
++        // prompt it belongs to answers.
++        let turnStartedPublication: Promise<void> | undefined;
+         const releaseRoutingCapture = this.captureTurnRoutings(params.threadId, (turnId) => {
+             if (!goalUpdateHandled || goalTurnId !== null) {
+                 return;
+             }
+             goalTurnId = turnId;
+-            onTurnStarted?.(turnId);
++            turnStartedPublication = Promise.resolve(onTurnStarted?.(turnId)).then(() => {});
+             resolveGoalTurnStarted(turnId);
+         });
+         const releaseGoalUpdateCapture = this.captureThreadGoalUpdates(params.threadId, (event) => {
+@@ -394,6 +404,7 @@ export class CodexAppServerClient {
+                 return null;
+             }
+             const turnId = goalTurnId ?? await Promise.race([goalTurnStarted, noGoalTurnStarted.promise]);
++            await turnStartedPublication;
+             noGoalTurnStarted.release();
+             releaseRoutingCapture();
+             releaseStatusCapture();
 diff --git a/src/CodexCli.ts b/src/CodexCli.ts
 index 4998ed1..dac2ff4 100644
 --- a/src/CodexCli.ts
@@ -234,6 +670,71 @@ index 4998ed1..dac2ff4 100644
 -    return spawn(process.execPath, [bundledCodexPath, ...args], options);
 +    return spawn(codexPath || "codex", args, {...options, shell: process.platform === "win32"});
  }
+diff --git a/src/CodexCommands.ts b/src/CodexCommands.ts
+index 002cfae..c0bafbf 100644
+--- a/src/CodexCommands.ts
++++ b/src/CodexCommands.ts
+@@ -30,7 +30,7 @@ export const GOAL_CONTINUATION_PROMPT: acp.ContentBlock[] = [{
+ 
+ export type CommandHandleOptions = {
+     onTurnStartPending?: () => void;
+-    onTurnStarted?: (turnId: string, threadId: string) => void;
++    onTurnStarted?: (turnId: string, threadId: string) => void | Promise<void>;
+     setConfigOption?: (configId: string, value: string) => Promise<void>;
+ };
+ 
+@@ -328,8 +328,8 @@ export class CodexCommands {
+         return await this.runWithProcessCheck(() => this.codexAcpClient.runReview(
+             sessionState.sessionId,
+             target,
+-            (turnId, threadId) => {
+-                this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
++            async (turnId, threadId) => {
++                await this.handleCommandTurnStarted(sessionState, options, turnId, threadId);
+             },
+         ));
+     }
+@@ -354,8 +354,8 @@ export class CodexCommands {
+                 options.onTurnStartPending?.();
+                 return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.resumeGoal(
+                     sessionId,
+-                    (turnId) => {
+-                        this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
++                    async (turnId) => {
++                        await this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+                     },
+                 )));
+             case "clear":
+@@ -373,20 +373,24 @@ export class CodexCommands {
+         return this.createGoalCommandResult(await this.runWithProcessCheck(() => this.codexAcpClient.setGoal(
+             sessionId,
+             argument,
+-            (turnId) => {
+-                this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
++            async (turnId) => {
++                await this.handleCommandTurnStarted(sessionState, options, turnId, sessionId);
+             },
+         )));
+     }
+ 
+-    private handleCommandTurnStarted(
++    private async handleCommandTurnStarted(
+         sessionState: SessionState,
+         options: CommandHandleOptions,
+         turnId: string,
+         threadId: string,
+-    ): void {
++    ): Promise<void> {
+         if (options.onTurnStarted) {
+-            options.onTurnStarted(turnId, threadId);
++            // Awaited, so a caller that publishes this turn's acceptance
++            // publishes it before the command goes on — every path that starts
++            // a turn reports it the same way, and a command that starts none
++            // never arrives here.
++            await options.onTurnStarted(turnId, threadId);
+         } else {
+             sessionState.currentTurnId = turnId;
+         }
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
 index 0f79117..aa6173c 100644
 --- a/src/CodexJsonRpcConnection.ts
@@ -267,3 +768,28 @@ index 0f79117..aa6173c 100644
  
      attachLogs(codex);
  
+diff --git a/src/SessionFork.ts b/src/SessionFork.ts
+index b52b7ca..5d4bd9b 100644
+--- a/src/SessionFork.ts
++++ b/src/SessionFork.ts
+@@ -44,6 +44,7 @@ export async function forkSession(
+     const models = await dependencies.fetchAvailableModels();
+     return {
+         sessionId: response.thread.id,
++        threadId: response.thread.id,
+         currentModelId: dependencies.createCurrentModelId(models, response.model, response.reasoningEffort),
+         models,
+         collaborationMode: dependencies.getCollaborationMode(response.thread.id),
+diff --git a/src/SessionMetadata.ts b/src/SessionMetadata.ts
+index 5056205..82b327b 100644
+--- a/src/SessionMetadata.ts
++++ b/src/SessionMetadata.ts
+@@ -4,6 +4,8 @@ import type {Model, Thread} from "./app-server/v2";
+ 
+ export type SessionMetadata = {
+     sessionId: string,
++    /** The thread id confirmed by the App Server. */
++    threadId: string,
+     currentModelId: string,
+     models: Model[],
+     collaborationMode: ModeKind,
