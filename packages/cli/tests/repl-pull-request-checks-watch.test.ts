@@ -1327,7 +1327,9 @@ describe("failed job logs in a REPL entry", () => {
         return fetch(input, options);
       }
       storageRequests += 1;
-      expect([...new Headers(options?.headers)]).toEqual([]);
+      new Headers(options?.headers).forEach((_value, name) => {
+        throw new Error(`Redirected log request sent an unexpected header: ${name}`);
+      });
       return Promise.resolve(new Response(body));
     };
     const source = watching(null).replace(" watch ", ' watch logs="evidence" ');
