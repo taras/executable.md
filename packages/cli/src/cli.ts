@@ -3714,7 +3714,7 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      const commandLine = yield* ReplHost.operations.reopenCommand(ran.value.location);
+      const commandLine = yield* ReplHost.operations.command(ran.value.location);
       const reopen = describeReopen(ran.value.location, commandLine);
       const written = yield* deliverWhole(`${reopen}\n`, process.stdout);
       if (!written.ok) {
