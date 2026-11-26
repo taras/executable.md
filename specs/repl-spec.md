@@ -2228,10 +2228,13 @@ waiting phrase with its label, including `Working` when supplied. The REPL
 uses receipt time on its frame clock. Another update with the same current
 call ID replaces the label and keeps the start time. A different ID resets
 the start time. Overlapping Prompts track these values independently.
+The REPL schedules timer redraws while the conversation window is visible.
 
 `Completed`, `Failed`, and `Stopped` replace the current label and freeze
-its elapsed seconds, including when that stage was waiting. Entry Stop
-freezes interrupted Prompt rows when it begins stopping the entry. The
+its elapsed seconds, including when that stage was waiting. Publication supplies
+the canonical outcome and keeps the duration frozen at the provider's terminal
+event when one arrived. Entry Stop freezes unfinished Prompt rows when it begins
+stopping the entry. A sibling already terminal keeps its outcome and duration. The
 open REPL keeps each frozen row beside the originating entry through the
 entry's cleanup and subsequent submissions. The cancelled-entry Close
 and the absence of an interrupted Prompt publication are unchanged.

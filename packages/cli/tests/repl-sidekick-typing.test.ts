@@ -28,6 +28,7 @@ import type { ReplLiveTurn } from "../src/repl/agent.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import {
   createChatPreparationStore,
+  nextChatActivitySecond,
   SIDEKICK_WINDOW,
   SESSIONS_WINDOW,
 } from "../src/repl/application.ts";
@@ -133,6 +134,83 @@ describe("1048 — prepare only admitted chat descriptions", () => {
 
 describe("1048 — selected chat preparation", () => {
   beforeEach(journalBeforeEach(OWNER));
+  it("measures only the changing Prompt row at 72×20 regardless of frozen history", function* () {
+    const size = { columns: 72, rows: 20 };
+    const page = yield* useReplPage({ size: WIDE });
+    const read = yield* generateTypingHistory(page, 1, 1);
+    const state = initialState(read.execution);
+    const view = typingView(read, size, { ...state, route: { ...state.route, view: "sidekick" } });
+    const renderer = yield* useReplRenderer(size);
+    const originalMeasure = renderer.measure;
+    let measured = 0;
+    renderer.measure = (ops, dimensions) => {
+      measured++;
+      return originalMeasure(ops, dimensions);
+    };
+    const results: number[] = [];
+    for (const frozen of [0, 499]) {
+      const slots = Array.from({ length: frozen + 1 }, (_, order) => ({
+        key: `probe-${order}`,
+        entry: read.model.entries[0].key,
+        order,
+        last: undefined,
+        durable: undefined,
+        activity:
+          order === frozen
+            ? { agent: "Reviewer", label: "Running focused tests", started: 1000 }
+            : { agent: "Reviewer", label: "Completed", started: 0, finished: order },
+      }));
+      const sample = {
+        ...view,
+        live: { ...view.live, agent: { ...view.live.agent, slots } },
+        frameAt: 1000,
+      };
+      const store = createChatPreparationStore(createPlainFitStore());
+      const warm = yield* store.prepare(sample, renderer, 68);
+      if (!warm.ok) {
+        throw warm.error;
+      }
+      measured = 0;
+      const start = performance.now();
+      const tick = yield* store.prepare({ ...sample, frameAt: 1001 }, renderer, 68);
+      console.log(
+        JSON.stringify({
+          viewport: "72x20",
+          frozen,
+          measurements: measured,
+          milliseconds: performance.now() - start,
+        }),
+      );
+      results.push(measured);
+      if (!tick.ok) {
+        throw tick.error;
+      }
+      expect(
+        tick.value.rows.some(
+          (row) =>
+            row.kind === "text" && row.label.includes("Reviewer · Running focused tests · 1s"),
+        ),
+      ).toBe(true);
+      if (frozen === 0) {
+        const visible = yield* prepareFrame(renderer, sample, undefined, store);
+        if (!visible.ok) {
+          throw visible.error;
+        }
+        expect(nextChatActivitySecond(sample, visible.value.admission)).toBe(1001);
+        const hidden = {
+          ...sample,
+          state: { ...sample.state, route: { ...sample.state.route, view: undefined } },
+        };
+        const offscreen = yield* prepareFrame(renderer, hidden, undefined, store);
+        if (!offscreen.ok) {
+          throw offscreen.error;
+        }
+        expect(nextChatActivitySecond(hidden, offscreen.value.admission)).toBeUndefined();
+      }
+    }
+    expect(results[1]).toBe(results[0]);
+  });
+
   it("draws a new streamed and then acknowledged reply after warming the retained rows", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* generateTypingHistory(page, 2, 32);

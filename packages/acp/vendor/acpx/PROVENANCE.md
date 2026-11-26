@@ -226,6 +226,16 @@ the old writer and passes on this writer, preserving the second publication.
 Injected I/O failures still fail. This establishes the demonstrated collision
 defect, not the cause of the historical live incident. No writer patch is added.
 
+## Tool activity identity (#1500)
+
+The tool event parser forwards nonempty string IDs without trimming for both
+`tool_call` and `tool_call_update`. Direct and queue-backed turns share this
+parser. The ACP provider validates the exact ID when it produces live Prompt
+activity or remembers an XMD notice presentation. Permission callbacks keep
+their existing path. The wire regression in `prompt-usage.test.ts` covers
+same-call updates, distinct IDs that trim alike, and an ordinary call whose
+trimmed ID collides with an XMD notice.
+
 ## Packaging adaptations and maintenance
 
 Sibling declaration imports name their colocated `.d.ts` files; source-map

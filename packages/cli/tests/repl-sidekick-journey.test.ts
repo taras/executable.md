@@ -1347,6 +1347,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
   it("shows the originating Prompt's current activity at 72×20", function* () {
     let time = 10;
+    const withheld = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
     const nextSecond = withResolvers<void>();
     yield* ReplClock.around({
       *now() {
@@ -1398,7 +1399,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
           },
         },
         { type: "tool_call", toolCallId: "marked", text: "" },
-        { type: "tool_call", toolCallId: " ".repeat(513), title: "Invalid ID", text: "" },
+        { type: "tool_call", toolCallId: "x".repeat(513), title: "Invalid ID", text: "" },
+        { type: "tool_call", toolCallId: "next", title: withheld, text: "" },
         { type: "tool_call", toolCallId: "next", title: "unsafe\nline", text: "" },
         { type: "tool_call", toolCallId: "next", title: "界".repeat(95), text: "" },
       ],
@@ -1447,8 +1449,15 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
     time = 20;
     fake.releaseDeltas();
-    yield* page.until("a new tool with an unusable title", (screen) =>
+    yield* page.until("a valid single-line title withheld by policy", (screen) =>
       screen.shows(identity + "Working · 0s"),
+    );
+    expect(page.screen().shows(withheld)).toBe(false);
+    yield* fake.streamingTurns(1);
+    time = 21;
+    fake.releaseDeltas();
+    yield* page.until("a separate unusable newline title", (screen) =>
+      screen.shows(identity + "Working · 1s"),
     );
     yield* fake.streamingTurns(1);
     time = 22;

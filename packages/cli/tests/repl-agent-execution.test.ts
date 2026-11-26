@@ -62,6 +62,7 @@ import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
+import { ReplClock } from "../src/repl/frame.ts";
 import { useReplAgent } from "../src/repl/agent.ts";
 import type { ReplAgentKernel, ReplAgentReading } from "../src/repl/agent.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -165,6 +166,7 @@ interface Scripted {
    * while its sibling can still settle and append first.
    */
   readonly settle?: "each";
+  readonly finalReadError?: string;
 }
 
 const ALL_KINDS: readonly PermissionOption[] = [
@@ -443,6 +445,9 @@ function turn(
               `the turn on ${where} being allowed to finish`,
               slot(releases, `!${where}`).published,
             );
+          }
+          if (scripted.finalReadError !== undefined) {
+            throw new Error(scripted.finalReadError);
           }
           return { done: true, value: deltas.join("") };
         },
@@ -2307,6 +2312,77 @@ function* useStopping(stop: Signal): Operation<void> {
 describe("EL2 — an entry's live Agent state is retired with its execution", () => {
   beforeAll(() => useTempFileCompiler());
   beforeEach(journalBeforeEach(OWNER));
+
+  it("reconciles a final stream read failure without moving the terminal timer", function* () {
+    let time = 10;
+    yield* ReplClock.around({
+      *now() {
+        return time;
+      },
+    });
+    const stub = createStub({
+      review: { gated: true, settle: "each", finalReadError: "stream failed" },
+    });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = opened(yield* start(holder, onePromptIn("review")));
+    yield* stub.arrival("review");
+    time = 13;
+    stub.release("review");
+    yield* reported(session, "terminal Prompt before final read", (reading) =>
+      reading.turns.some((turn) => turn.state === "terminal"),
+    );
+    expect(session.agent.slots[0]?.activity).toMatchObject({
+      label: "Completed",
+      started: 10,
+      finished: 13,
+    });
+    time = 20;
+    stub.settle("root");
+    yield* session.join();
+    expect(session.model.turns.map((turn) => turn.status)).toEqual(["failed"]);
+    expect(session.agent.slots[0]?.activity).toMatchObject({
+      label: "Failed",
+      started: 10,
+      finished: 13,
+    });
+  });
+
+  it("Entry Stop freezes an unfinished turn and preserves its unpublished terminal sibling", function* () {
+    let time = 10;
+    yield* ReplClock.around({
+      *now() {
+        return time;
+      },
+    });
+    const stub = createStub({ same: { gated: "each", settle: "each" } });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = opened(yield* start(holder, TWO_SPAWNS));
+    yield* stub.reached("root.0");
+    yield* stub.reached("root.1");
+    time = 13;
+    stub.let_("root.0");
+    yield* reported(session, "first Prompt terminal, still attached", (reading) =>
+      reading.turns.some((turn) => turn.state === "terminal"),
+    );
+    const terminal = session.agent.turns.find((turn) => turn.state === "terminal")?.key;
+    expect(terminal).toBeDefined();
+    expect(session.agent.slots.every((slot) => slot.durable === undefined)).toBe(true);
+    time = 20;
+    expect((yield* session.stopEntry("entry-1")).ok).toBe(true);
+    expect(session.agent.slots.find((slot) => slot.key === terminal)?.activity).toMatchObject({
+      label: "Completed",
+      finished: 13,
+    });
+    expect(session.agent.slots.find((slot) => slot.key !== terminal)?.activity).toMatchObject({
+      label: "Stopped",
+      finished: 20,
+    });
+    expect(session.agent.slots).toHaveLength(2);
+    expect(session.model.entries[0]?.terminal?.status).toBe("cancelled");
+    expect(appends(yield* holder.stream.readAll())).toEqual([]);
+  });
 
   it("EL2: a cancelled turn is retired with its entry, and the next entry runs clean", function* () {
     const holder: ReplExecution = {
