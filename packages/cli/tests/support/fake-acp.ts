@@ -162,6 +162,7 @@ export interface ScriptedTurn {
    * in the script.
    */
   readonly deltas?: readonly string[];
+  readonly activity?: readonly Extract<AcpRuntimeEvent, { type: "tool_call" }>[];
   /**
    * Hold this turn once it has streamed this many pieces.
    *
@@ -898,11 +899,12 @@ export function createFakeAcp(): FakeAcp {
             // before it says anything, so a manual turn reports it too.
             accept();
           }
-          const events: AcpRuntimeEvent[] = (turn.deltas ?? [turn.reply ?? ""]).map((text) => ({
-            type: "text_delta",
-            text,
-            stream: "output",
-          }));
+          const events: AcpRuntimeEvent[] = [
+            ...(turn.activity ?? []),
+            ...(turn.deltas ?? [turn.reply ?? ""]).map(
+              (text): AcpRuntimeEvent => ({ type: "text_delta", text, stream: "output" }),
+            ),
+          ];
 
           // The permission request happens before the reply streams, the way an
           // adapter reaching for a tool mid-turn does. Promise chaining rather

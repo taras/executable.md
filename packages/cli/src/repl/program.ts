@@ -73,6 +73,7 @@ import {
   admissionFor,
   admitsSubmission,
   admitted,
+  nextChatActivitySecond,
   answered,
   applied,
   askingFor,
@@ -3397,9 +3398,20 @@ function* drive(
     }
 
     let formQuestion = current.overlay.question;
+    let activitySecond = first === undefined ? undefined : nextChatActivitySecond(first.view);
     while (true) {
-      const taken = yield* wakes.take();
-      if (taken.length === 0) {
+      const second = activitySecond;
+      const taken = yield* second === undefined
+        ? wakes.take()
+        : race([
+            wakes.take(),
+            (function* () {
+              const now = yield* ReplClock.operations.now();
+              yield* ReplClock.operations.wait(Math.max(0, second - now));
+              return undefined;
+            })(),
+          ]);
+      if (taken?.length === 0) {
         return Ok({ location: exitLocation(state), refusal: undefined });
       }
       if (observer !== undefined) {
@@ -3416,7 +3428,7 @@ function* drive(
         presenting = undefined;
         wheelGeometry = undefined;
       }
-      if (taken.some((wake) => wake.kind !== "screen" || wake.event.kind !== "wheel")) {
+      if (taken?.some((wake) => wake.kind !== "screen" || wake.event.kind !== "wheel")) {
         // Whatever woke beside the wheel has already changed what a tick would
         // measure, even when its wake is queued after the tick.
         wheelGeometry = undefined;
@@ -3427,7 +3439,7 @@ function* drive(
       let ended = false;
       /** Whether the person asked to leave, as opposed to input having ended. */
       let departing = false;
-      for (const wake of taken) {
+      for (const wake of taken ?? []) {
         // Leaving was decided earlier in this batch, and everything after it is
         // input that arrived before the decision. A wake reader hands over
         // everything the terminal had, so a submission typed ahead of the
@@ -3623,6 +3635,7 @@ function* drive(
 
       if (departing && liveScreen !== undefined) {
         liveScreen.detach();
+        activitySecond = undefined;
         yield* releaseRenderer();
         rendered = undefined;
         presenting = undefined;
@@ -3674,6 +3687,7 @@ function* drive(
         yield* releaseRenderer();
         rendered = undefined;
         presenting = undefined;
+        activitySecond = undefined;
         continue;
       }
 
@@ -3790,6 +3804,7 @@ function* drive(
         committed = again;
       }
       keepCommitted(committed);
+      activitySecond = nextChatActivitySecond(committed.view);
       if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
         observePass("complete");
       }
@@ -4036,7 +4051,7 @@ function projectSidekickRows(
   live: SidekickLiveTurn | undefined,
 ) {
   return {
-    chat: sidekickChatRows(known, preview),
+    chat: sidekickChatRows(known, preview, live),
     // What the replies of this history actually did to this execution's
     // entries, as the coordinates their records hold. Detached from the chat
     // beside it: a row is what a conversation said, and these are what one of
@@ -4269,6 +4284,7 @@ export function sidekickChatRows(
   known: SidekickReading,
   /** What the response in flight is saying, where one is saying anything. */
   previewing: SidekickPreview | undefined,
+  live?: SidekickLiveTurn,
 ): readonly ReplSidekickChatRow[] {
   const active = known.active;
   /**
@@ -4389,6 +4405,26 @@ export function sidekickChatRows(
         ...(item.kind === "reply" ? requestOf(known, item.conversation, item.turn) : {}),
       });
     });
+  if (
+    previewing === undefined &&
+    live?.phase === "evaluating" &&
+    known.submits.some(
+      (submit) => submit.conversation === live.conversation && submit.response === live.response,
+    )
+  ) {
+    const key = itemKey(live.conversation, live.response);
+    if (!chat.some((row) => row.key === key)) {
+      chat.push({
+        key,
+        conversation: live.conversation,
+        turn: live.turn,
+        kind: "preview",
+        text: "",
+        hasOutput: false,
+        failure: undefined,
+      });
+    }
+  }
   // What the response in flight is saying, where the acknowledged history does
   // not already hold the item it belongs to. One item either way: a live row
   // carries the key its acknowledged counterpart will, so the two are never
@@ -5321,7 +5357,13 @@ function* prepared(
       // anything is measured against it.
       const size = yield* screen.size();
       renderer.resize(size);
-      const view = yield* compose(size);
+      let view = yield* compose(size);
+      if (
+        view.live.agent.slots.some((slot) => slot.activity && slot.activity.finished === undefined)
+      ) {
+        // A new subscriber can reuse the last acknowledged animation tick.
+        view = { ...view, frameAt: yield* ReplClock.operations.now() };
+      }
 
       // 1. Measure. 2. Admit. 3. Reconcile exactly what was admitted. 4. Draw.
       //

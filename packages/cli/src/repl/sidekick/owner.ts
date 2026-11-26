@@ -2493,12 +2493,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       let pairs = 0;
       let importFailure: Error | undefined;
       const imports = new Set<number>();
+      let submitOrder: number | undefined;
       const journal: ControlJournal = {
         *began(occurrence, reserved): Operation<number> {
           pairs += 1;
           let order: number;
           try {
             order = yield* written.began(occurrence, reserved);
+            if (reserved !== undefined) {
+              submitOrder = order;
+              yield* refresh();
+            }
           } catch (error) {
             if (occurrence.component === "REPL.ImportAsset") {
               importFailure = error instanceof Error ? error : new Error(String(error));
@@ -2513,6 +2518,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         *settled(order, outcome, observed): Operation<void> {
           try {
             yield* written.settled(order, outcome, observed);
+            if (order === submitOrder) {
+              yield* refresh();
+            }
           } catch (error) {
             if (imports.has(order)) {
               importFailure = error instanceof Error ? error : new Error(String(error));

@@ -158,7 +158,7 @@ interface AgentApi {
 - `Agent` is a resolvable agent name (a string). `Session` is
   `{ sessionKey; cwd; agentSessionId?; readonly identity? }`.
   `PromptOptions` is `{ agent?; session?: string | Session; timeout? }`.
-- `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
+- `AgentPromptEvent` is `started` → zero or more live events → one `terminal`
   (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
 
 **Base behavior:** with no provider installed, `agent()`, `session()`,
@@ -1152,6 +1152,32 @@ document's `<Prompt>` never withholds. A `withheld` that is not `true`, or that
 accompanies a status other than `completed` or nonempty text, does not read
 back.
 
+### Live tool activity
+
+ACP maps normalized `tool_call` and `tool_call_update` events to
+`{ type: "tool_activity", toolCallId, label }`. The call ID is the runtime's
+normalized string, copied exactly. It must contain non-whitespace text, fit
+within 512 UTF-16 code units, and contain no control characters, lone
+surrogates, Unicode line or paragraph separators, or bidirectional controls.
+An invalid ID yields no activity.
+
+The label comes from the tool title alone. A missing, blank, default
+`tool call`, or unusable title yields `Working`. A title is usable when
+it fits within 160 UTF-16 code units, passes the same character checks as
+the ID, and clears the execution's live-output secret policy. The emitted
+label is trimmed. The event contains no arguments, tool content, paths
+from locations, raw output, or receipt time.
+
+A tool event carrying the XMD response marker or a reserved XMD question or
+permission title produces no activity. The title match is case-insensitive
+and accepts whitespace, colon, underscore, or hyphen between XMD and the
+kind. Other tool updates with an ID already identified as an XMD
+presentation are also excluded for the rest of that turn. XMD input
+responses and retirements continue through their own event handling.
+
+Activity is transient. Prompt reply concatenation, durable publication and
+replay use the same text and results as a turn without activity.
+
 ### Saved Prompt failure details
 
 A failed owning stream release is terminal before ordinary failure
@@ -2113,9 +2139,9 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   history unchanged. A later successful reopen sends only the new request.
 
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
-  owned by the subscriber. Events are normalized to one `started`, `text_delta`
-  for output-stream deltas only (thought/status/tool/usage stay private), and
-  one `terminal`, then the stream closes with the full concatenated text
+  owned by the subscriber. One `started` precedes output-stream `text_delta`
+  events, tool activity and XMD input outcomes. One `terminal` ends the events,
+  then the stream closes with the full concatenated reply text
   (including partial text on failure). A completed turn with an absent stop
   reason is treated as `end_turn`; any other stop reason is a failure. The
   completing response carries its own opaque `_meta`, including a real response

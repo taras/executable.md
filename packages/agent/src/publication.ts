@@ -134,7 +134,7 @@ export interface AgentPromptPublisher {
    * the public `Agent.prompt()` itself is not journal-owned work: it begins
    * nothing, publishes nothing, and appends no record.
    */
-  begin?(input: string): Operation<AgentPromptHandle>;
+  begin?(input: string, agent?: string): Operation<AgentPromptHandle>;
   /**
    * This turn has said something more; nothing is durable yet.
    *
