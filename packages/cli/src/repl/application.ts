@@ -4722,6 +4722,7 @@ export function createChatPreparationStore(
         readonly columns: number;
         readonly rows: number;
         readonly sequence: ReplChatSequence;
+        readonly statusFits: ReadonlyMap<string, { text: string; tail: string; fitted: string }>;
       }
     | undefined;
   return {
@@ -4729,15 +4730,16 @@ export function createChatPreparationStore(
     materialize: materializeChatRow,
     *prepare(view, renderer, room) {
       const facts = chatFacts(view);
+      const previous =
+        held?.room === room && held.columns === view.size.columns && held.rows === view.size.rows
+          ? held
+          : undefined;
       if (
-        held !== undefined &&
-        held.room === room &&
-        held.columns === view.size.columns &&
-        held.rows === view.size.rows &&
-        facts.length === held.facts.length &&
-        facts.every((one, at) => one === held?.facts[at])
+        previous !== undefined &&
+        facts.length === previous.facts.length &&
+        facts.every((one, at) => one === previous.facts[at])
       ) {
-        return Ok(held.sequence);
+        return Ok(previous.sequence);
       }
       const chat = sidekickComposedRows(
         view.live.sidekick,
@@ -4760,13 +4762,19 @@ export function createChatPreparationStore(
               },
             ];
       const fittedChat: ReplChatComposed[] = [];
+      const statusFits = new Map<string, { text: string; tail: string; fitted: string }>();
       for (const one of composed) {
         if (one.kind === "text" && one.tail !== undefined) {
-          const fitted = yield* fitCells(renderer, view.size, one.text, one.tail, room);
-          if (!fitted.ok) {
-            return fitted;
+          let retained = previous?.statusFits.get(one.key);
+          if (retained?.text !== one.text || retained.tail !== one.tail) {
+            const fitted = yield* fitCells(renderer, view.size, one.text, one.tail, room);
+            if (!fitted.ok) {
+              return fitted;
+            }
+            retained = { text: one.text, tail: one.tail, fitted: fitted.value.text };
           }
-          fittedChat.push({ ...one, text: fitted.value.text, tail: undefined });
+          statusFits.set(one.key, retained);
+          fittedChat.push({ ...one, text: retained.fitted, tail: undefined });
         } else {
           fittedChat.push(one);
         }
@@ -4785,7 +4793,14 @@ export function createChatPreparationStore(
           return fitted;
         }
         const sequence = chatSequence(fittedChat, fitted.value);
-        held = { facts, room, columns: view.size.columns, rows: view.size.rows, sequence };
+        held = {
+          facts,
+          room,
+          columns: view.size.columns,
+          rows: view.size.rows,
+          sequence,
+          statusFits,
+        };
         complete = true;
         return Ok(sequence);
       } finally {
@@ -12788,9 +12803,16 @@ function chatActivity(view: ReplView, workspace: ReplWorkspace) {
   );
 }
 
-export function nextChatActivitySecond(view: ReplView): number | undefined {
+export function nextChatActivitySecond(
+  view: ReplView,
+  admission: ReplAdmission,
+): number | undefined {
   const workspace = staged(view);
-  if (workspace === undefined || view.frameAt === undefined) {
+  if (
+    workspace === undefined ||
+    view.frameAt === undefined ||
+    (admission.windows.get(SIDEKICK_WINDOW)?.count ?? 0) === 0
+  ) {
     return undefined;
   }
   let next = Infinity;

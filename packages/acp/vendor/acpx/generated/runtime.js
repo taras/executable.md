@@ -320,7 +320,8 @@ function createToolCallEvent(params) {
 	const status = asTrimmedString(params.payload.status);
 	const inputSummary = summarizeToolInput(params.payload.rawInput);
 	const outputSummary = summarizeToolContent(params.payload.content) ?? summarizeToolOutput(params.payload.rawOutput);
-	const toolCallId = asOptionalString(params.payload.toolCallId);
+	// XMD tool activity identity: ACP tool-call IDs are opaque.
+	const toolCallId = asString(params.payload.toolCallId);
 	const kind = readToolKind(params.payload.kind);
 	const summaryText = status ? `${title} (${status})` : title;
 	const detailSummary = params.tag === "tool_call_update" ? outputSummary ?? inputSummary : inputSummary ?? outputSummary;

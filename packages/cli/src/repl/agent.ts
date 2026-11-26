@@ -953,8 +953,7 @@ export function useReplAgent(
         if (attached?.entry === entry) {
           attached.stopping = true;
           for (const turn of attached.turns) {
-            const { agent, started } = turn.slot.activity;
-            turn.slot.activity = { agent, label: "Stopped", started, finished: at };
+            finish(turn.slot, "Stopped", at);
           }
           announce();
         }
@@ -987,10 +986,13 @@ export function useReplAgent(
           const slot = live.slots[at];
           live.slots.splice(at, 1);
           slot.durable = event.description.name;
-          if (slot.activity.agent === undefined && event.result.status === "ok") {
+          const record =
+            event.result.status === "ok" ? parsePromptRecord(event.result.value) : undefined;
+          if (record !== undefined) {
             slot.activity = {
               ...slot.activity,
-              agent: parsePromptRecord(event.result.value)?.agent,
+              agent: record.agent || slot.activity.agent,
+              label: promptOutcome(record.status),
             };
           }
           slot.last = frozenTurn(turn);

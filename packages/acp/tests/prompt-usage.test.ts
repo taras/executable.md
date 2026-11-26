@@ -11,13 +11,15 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, until } from "effection";
+import { createChannel, ensure, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentPromptEvent } from "@executablemd/agent/api";
+import { consumeTurn } from "../src/events.ts";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
 import type {
   AcpRuntime,
@@ -95,6 +97,9 @@ function handle(request) {
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ok" } },
       },
     });
+    for (const update of step.updates ?? []) {
+      send({ method: "session/update", params: { sessionId, update } });
+    }
     const result = { stopReason: "end_turn" };
     if (step.usage !== undefined) {
       result.usage = step.usage;
@@ -200,6 +205,53 @@ describe(
   "Tier RU — vendored runtime usage",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    it("preserves exact ACP wire tool identity through the Prompt event boundary", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, [
+        {
+          updates: [
+            { sessionUpdate: "tool_call", toolCallId: "notice ", title: "XMD question" },
+            { sessionUpdate: "tool_call_update", toolCallId: "notice " },
+            { sessionUpdate: "tool_call", toolCallId: "notice", title: "Ordinary call" },
+            { sessionUpdate: "tool_call", toolCallId: "call ", title: "First call" },
+            { sessionUpdate: "tool_call_update", toolCallId: "call " },
+            { sessionUpdate: "tool_call", toolCallId: "call", title: "Different call" },
+            { sessionUpdate: "tool_call", toolCallId: "x".repeat(513), title: "Over limit" },
+          ],
+        },
+      ]);
+      const handle = yield* ensureHandle(world, runtime, "ru-tool");
+      yield* ensure(() => until(runtime.close({ handle, reason: "test" })));
+      const channel = createChannel<AgentPromptEvent, string>();
+      const subscription = yield* channel;
+      const turn = runtime.startTurn({
+        handle,
+        mode: "prompt",
+        text: "review",
+        requestId: randomUUID(),
+        timeoutMs: 20_000,
+      });
+      const task = yield* spawn(() =>
+        consumeTurn(
+          turn,
+          { agent: "fake", session: { sessionKey: "ru-tool", cwd: world.dir } },
+          channel,
+          () => {},
+        ),
+      );
+      const ids: string[] = [];
+      let event = yield* subscription.next();
+      while (!event.done) {
+        if (event.value.type === "tool_activity") {
+          ids.push(event.value.toolCallId);
+        }
+        event = yield* subscription.next();
+      }
+      yield* task;
+      expect(event.value).toBe("ok");
+      expect(ids).toEqual(["notice", "call ", "call ", "call"]);
+    });
+
     it("RU1: two turns with equal counters keep their own generated message and saved entry", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, [

@@ -3398,7 +3398,8 @@ function* drive(
     }
 
     let formQuestion = current.overlay.question;
-    let activitySecond = first === undefined ? undefined : nextChatActivitySecond(first.view);
+    let activitySecond =
+      first === undefined ? undefined : nextChatActivitySecond(first.view, first.admission);
     while (true) {
       const second = activitySecond;
       const taken = yield* second === undefined
@@ -3804,7 +3805,7 @@ function* drive(
         committed = again;
       }
       keepCommitted(committed);
-      activitySecond = nextChatActivitySecond(committed.view);
+      activitySecond = nextChatActivitySecond(committed.view, committed.admission);
       if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
         observePass("complete");
       }

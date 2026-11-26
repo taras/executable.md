@@ -1155,8 +1155,8 @@ back.
 ### Live tool activity
 
 ACP maps normalized `tool_call` and `tool_call_update` events to
-`{ type: "tool_activity", toolCallId, label }`. The call ID is the runtime's
-normalized string, copied exactly. It must contain non-whitespace text, fit
+`{ type: "tool_activity", toolCallId, label }`. The call ID is the exact ACP wire
+string, including surrounding whitespace. It must contain non-whitespace text, fit
 within 512 UTF-16 code units, and contain no control characters, lone
 surrogates, Unicode line or paragraph separators, or bidirectional controls.
 An invalid ID yields no activity.
