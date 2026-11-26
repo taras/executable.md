@@ -166,9 +166,10 @@ The example installs `xmd-dev` in `~/.local/xmd-dev/bin` and prints the PATH
 step if your shell needs it. Add that export to your shell startup file if you
 want it in later terminals. The dedicated directory lets you select this
 launcher while keeping an older installation in place. To change the default
-checkout, move the installed link aside and run the example from the new
-checkout. To select another prepared checkout for one invocation, set
-`XMD_DEV_ROOT`. Run `xmd-dev` from your project directory.
+checkout, move the installed command aside and run the example from the new
+checkout. If you previously installed a symlink at that destination, move it
+aside before running the example. To select another prepared checkout for one
+invocation, set `XMD_DEV_ROOT`. Run `xmd-dev` from your project directory.
 
 Compile the standalone `xmd` binary: prepare the checkout and then build,
 yielding `dist/xmd`, a self-contained executable for this host.
