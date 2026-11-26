@@ -5834,7 +5834,8 @@ export function* prepareFrame(
     return first;
   }
   const widths = widthsOf(probe.manifest, first.value);
-  const workspace = stagedWorkspace(view) !== undefined;
+  const staged = stagedWorkspace(view);
+  const workspace = staged !== undefined;
   const reasonInHeader = workspace ? executionRefusal(view) : undefined;
   const header =
     reasonInHeader === undefined || widths.surfaceBody < 1
@@ -6059,14 +6060,20 @@ export function* prepareFrame(
     refused.value === undefined
       ? undefined
       : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
-  // The width probe. Its only question is how wide a fitted control is, so it
-  // is the one pass that puts a queued row in the tray — and it is deliberately
-  // not the pass anything is admitted from.
-  const probed = presentationFor(view, {
-    ...queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
-    queueProbe: true,
-  });
-  const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
+
+  // An empty staged queue has no row to probe, and the staged layout has
+  // neither the Entries column nor the guidance block. Its first measured
+  // presentation already answers the fitted-control widths.
+  const reuseTrial = staged?.queued.length === 0;
+  const probed = reuseTrial
+    ? trial
+    : presentationFor(view, {
+        ...queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
+        queueProbe: true,
+      });
+  const fitted = reuseTrial
+    ? second
+    : yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
   if (!fitted.ok) {
     return fitted;
   }
