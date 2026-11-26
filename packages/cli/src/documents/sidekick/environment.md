@@ -127,7 +127,8 @@ answer.
   for the host's installation. Equal release versions do not establish equal
   component vocabularies. A reported Git revision names HEAD at launch, and the
   local-change fact tells you what Git saw separately. Reading the launch facts
-  grants no permission to use them.
+  grants no permission to use them. When launch arguments are unknown, ask
+  for a verified invocation before starting a child.
 - Component documentation is not permission. `<REPL.Syntax />` describes what
   the entry vocabulary *is*; whether a particular execution admits a particular
   capability is a separate question, answered when the entry runs.

@@ -32,14 +32,19 @@ import {
   cliRuntime,
   cliShellCommand,
   shellQuote,
+  runShell,
 } from "@executablemd/test-support/launch";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { realpath } from "node:fs/promises";
+import { allocate as allocateFullPty, showing as showingFullPty } from "./support/pty.ts";
+import { click, ended as terminalExit } from "./support/repl-files-journey.ts";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { execFile, spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import { randomBytes } from "node:crypto";
-import { ensure, type Operation, scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, type Operation, scoped, sleep, spawn, until, withResolvers } from "effection";
 
 /** Let every ready task run, so "still unwinding" is an observation about turns. */
 function* settled(turns = 8): Operation<void> {
@@ -719,9 +724,14 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
-      expect(after).toContain("Reopen this view with:");
-      expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
-      expect(after).toMatch(/repl 'xmd:\/\/repl\/[^']+'/);
+      if (cliRuntime() === "deno") {
+        expect(after).toContain("Reopen command unavailable. Saved view location:");
+        expect(after).not.toContain("--allow-all");
+      } else {
+        expect(after).toContain("Reopen this view with:");
+        expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      }
+      expect(after).toMatch(/'xmd:\/\/repl\/[^']+'/);
     });
   });
 
@@ -773,9 +783,52 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
-      expect(after).toContain("Reopen this view with:");
-      expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
-      expect(after).toMatch(/repl 'xmd:\/\/repl\/[^']+'/);
+      if (cliRuntime() === "deno") {
+        expect(after).toContain("Reopen command unavailable. Saved view location:");
+        expect(after).not.toContain("--allow-all");
+      } else {
+        expect(after).toContain("Reopen this view with:");
+        expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      }
+      expect(after).toMatch(/'xmd:\/\/repl\/[^']+'/);
     });
   });
 });
+
+if (cliRuntime() !== "deno") {
+  describe("1440: native loader launch context", () => {
+    it("keeps the child's cwd for conditions and retains the launch cwd for a relative loader", function* () {
+      const home = yield* until(realpath(yield* useTempDirectory("xmd-1440-cwd-")));
+      const project = join(home, "project");
+      const nested = join(project, "nested");
+      yield* ensureDir(nested);
+      yield* writeTextFile(join(project, "local loader.cjs"), "module.exports = {};\n");
+      const flag = cliRuntime() === "node" ? "--require" : "--preload";
+      const base = cliBase();
+      const entry = base.pop();
+      if (entry === undefined) {
+        throw new Error("Missing source entrypoint.");
+      }
+      for (const options of [["--conditions=example"], [flag, "./local loader.cjs"]]) {
+        yield* scoped(function* () {
+          const line = [...base, ...options, entry, "repl", "--deny-all"].map(shellQuote).join(" ");
+          const pty = yield* allocateFullPty(`cd ${shellQuote(project)} && ${line}`, home);
+          yield* showingFullPty(pty, "[exit]", 60_000);
+          yield* click(pty, "[exit]");
+          expect(yield* terminalExit(pty)).toBe(0);
+          const launch = /^  (.+) repl 'xmd:\/\/repl\/[^']+'\r?$/m.exec(
+            yield* pty.finalOutput(),
+          )?.[1];
+          if (launch === undefined) {
+            throw new Error("The terminal printed no complete launch command.");
+          }
+          expect(launch).toContain(options.at(-1));
+          const cwd = (yield* runShell(`${launch} run --eval ${shellQuote("<Cwd />")}`, {
+            cwd: nested,
+          }).expect()).stdout.trim();
+          expect(cwd).toBe(options.length === 1 ? nested : project);
+        });
+      }
+    });
+  });
+}

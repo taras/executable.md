@@ -142,7 +142,7 @@ deno task xmd run README.md#Setup
 
 Select it after changing a dependency, or whenever you want the checkout
 restored on its own without building or testing. It executes `deno task setup`,
-the preamble block above and the only thing in this repository that installs.
+the preamble block above and the only command that installs dependencies.
 Setup owns both dependency layouts — `node_modules/` and Deno's global cache —
 and prepares them in the order their union resolves in: the pinned Markdown
 boundary module, Deno's frozen install
@@ -155,11 +155,26 @@ and checks read what setup prepared and leave tracked files, `node_modules` and
 
 ## Build
 
-Run the prepared source CLI from your project directory with the checkout's
-`scripts/xmd-dev` launcher. Add the checkout's `scripts` directory to PATH to
-invoke it as `xmd-dev`. Set `XMD_DEV_ROOT` to select a different prepared
-checkout. The launcher keeps the caller's project directory and identifies
-itself to the REPL so the printed reopen command can use it again.
+Install the development launcher from a prepared checkout. Run these commands
+from the checkout root in a POSIX shell.
+
+```sh
+mkdir -p "$HOME/.local/xmd-dev/bin"
+ln -s "$PWD/scripts/xmd-dev" "$HOME/.local/xmd-dev/bin/xmd-dev"
+export PATH="$HOME/.local/xmd-dev/bin:$PATH"
+command -v xmd-dev
+xmd-dev --version
+```
+
+Add the PATH export to your shell startup file to use this installation in
+later terminals. The dedicated directory lets you migrate from an older
+`xmd-dev` by putting the new launcher first on PATH while keeping the old
+file in place. To change the default checkout, update this symlink. For a
+single invocation, set `XMD_DEV_ROOT` to another prepared checkout. Run from
+your project directory. The launcher follows its installation symlink to
+find its default checkout and supplies the invocation details the REPL
+uses to reopen a saved view.
+
 
 Compile the standalone `xmd` binary: prepare the checkout and then build,
 yielding `dist/xmd`, a self-contained executable for this host.

@@ -14,7 +14,7 @@ import { installTodoSource } from "./node-todo-source.ts";
 import { randomBytes } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
@@ -22,25 +22,25 @@ import { readSourceCheckout } from "./node-repl-build.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useDenoReplTerminal } from "./deno-repl-terminal.ts";
 
-export function* useDenoRepl(
-  command: readonly string[],
-  entrypoint: string,
-  launcher: string | undefined,
-): Operation<void> {
+export function* useDenoRepl(entrypoint?: string, launcher?: string): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
-  const checkout = yield* readSourceCheckout(entrypoint);
+  const checkout = entrypoint === undefined ? undefined : yield* readSourceCheckout(entrypoint);
+  const launch =
+    launcher === undefined || entrypoint === undefined
+      ? undefined
+      : { command: [process.execPath, "run", "--allow-all", entrypoint] };
   const reopen =
-    launcher !== undefined && isAbsolute(launcher)
-      ? {
+    launcher === undefined || entrypoint === undefined
+      ? null
+      : {
           command: [launcher],
           assignments: {
             XMD_DEV_ROOT: resolve(entrypoint, "../../../.."),
             XMD_DEV_DENO: process.execPath,
           },
-        }
-      : { command };
+        };
   yield* installReplHost({
     reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
@@ -51,7 +51,7 @@ export function* useDenoRepl(
       replHostFacts({
         runtime: `deno ${process.versions.deno ?? "unknown"} from source`,
         version: XMD_VERSION,
-        launch: { command },
+        launch,
         checkout,
         platform: process.platform,
         architecture: process.arch,

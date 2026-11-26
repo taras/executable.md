@@ -30,7 +30,7 @@ import { releaseTargetFor } from "./release-targets.ts";
 export interface ReplHostCapabilities {
   /** This platform's per-user data directory. */
   dataRoot(): string;
-  reopen?: ReplLaunch;
+  reopen?: ReplLaunch | null;
   /**
    * What this process is standing on, for a reply that asks.
    *
@@ -77,10 +77,11 @@ export function* installReplHost(host: ReplHostCapabilities): Operation<void> {
               return described();
             },
           }),
-      *reopenCommand([location], next): Operation<string> {
-        return host.reopen === undefined
-          ? yield* next(location)
-          : formatReopenCommand(host.reopen, location);
+      *reopenCommand([location], next): Operation<string | undefined> {
+        if (host.reopen === undefined) {
+          return yield* next(location);
+        }
+        return host.reopen === null ? undefined : formatReopenCommand(host.reopen, location);
       },
       // deno-lint-ignore require-yield
       *identify(): Operation<string> {
@@ -120,13 +121,15 @@ export function replHostFacts(host: {
   readonly platform: string;
   /** Node's `process.arch` for the machine this is running on. */
   readonly architecture: string;
-  readonly launch: ReplLaunch;
+  readonly launch: ReplLaunch | undefined;
   readonly binary?: string;
-  readonly checkout?: {
-    readonly root?: string;
-    readonly revision?: string;
-    readonly changes?: string;
-  };
+  readonly checkout?:
+    | {
+        readonly root?: string;
+        readonly revision?: string;
+        readonly changes?: string;
+      }
+    | undefined;
 }): readonly ReplHostFact[] {
   return Object.freeze([
     Object.freeze({ label: "runtime", value: host.runtime }),
@@ -135,15 +138,18 @@ export function replHostFacts(host: {
     { label: "source revision", value: host.checkout?.revision },
     { label: "source local changes at launch", value: host.checkout?.changes },
     { label: "compiled executable", value: host.binary },
-    { label: "launch arguments (JSON)", value: JSON.stringify(host.launch.command) },
+    { label: "launch arguments (JSON)", value: JSON.stringify(host.launch?.command) },
     {
       label: "launch environment overrides (JSON)",
-      value: JSON.stringify(host.launch.assignments ?? {}),
+      value: host.launch === undefined ? undefined : JSON.stringify(host.launch.assignments ?? {}),
     },
-    { label: "required launch working directory", value: host.launch.directory ?? "none" },
+    {
+      label: "required launch working directory",
+      value: host.launch === undefined ? undefined : (host.launch.directory ?? "none"),
+    },
     {
       label: "launch command (POSIX shell)",
-      value: formatLaunchCommand(host.launch),
+      value: host.launch === undefined ? undefined : formatLaunchCommand(host.launch),
     },
     Object.freeze({
       label: "release target",

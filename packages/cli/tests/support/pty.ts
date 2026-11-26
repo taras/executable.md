@@ -219,6 +219,7 @@ function* ownedChild<T extends ChildLike>(start: () => T): Operation<Owned<T>> {
 
 /** One terminal a test owns: what it shows, and how it ended. */
 interface Pty {
+  finalOutput(): Operation<string>;
   /** The screen, one string per row. */
   shows(): Operation<string[]>;
   /** Type these bytes. Nothing closes the input. */
@@ -338,10 +339,10 @@ function* tmuxPty(inside: string, home: string): Operation<Pty> {
     );
   }
   /** The screen, or the reason there is no reading it — never a blank one. */
-  function* captured(): Operation<string> {
+  function* captured(joinWrapped = false): Operation<string> {
     const pane = yield* attempted(
       "tmux",
-      control("capture-pane", "-p", "-N", "-S", "0", "-t", name),
+      control("capture-pane", "-p", joinWrapped ? "-J" : "-N", "-S", "0", "-t", name),
     );
     if (!pane.ok) {
       // An unreadable screen used to read as an empty one, which this file then
@@ -352,6 +353,7 @@ function* tmuxPty(inside: string, home: string): Operation<Pty> {
     return pane.output;
   }
   return {
+    finalOutput: () => captured(true),
     *shows(): Operation<string[]> {
       return (yield* captured()).split("\n");
     },
@@ -383,6 +385,10 @@ function* scriptPty(inside: string): Operation<Pty> {
     }),
   );
   return {
+    // deno-lint-ignore require-yield
+    *finalOutput(): Operation<string> {
+      return owned.written().split("\x1b[?1049l").at(-1) ?? "";
+    },
     // deno-lint-ignore require-yield
     *shows(): Operation<string[]> {
       return replayed(owned.written());

@@ -46,7 +46,7 @@ Deno.test("driver reports the final CLI hint and ignores the cold restore comman
         );
         const { dispatch, close } = yield* connectDriver(launch);
         if (refused) {
-          yield* dispatch({ action: "wait", text: `repl '${location}'` });
+          yield* dispatch({ action: "wait", text: location });
           yield* dispatch({ action: "wait", text: "Restoring rounds · 118 / 155 · stopped" });
           yield* dispatch({ action: "key", key: "Escape" });
         } else {

@@ -581,7 +581,8 @@ function* restoreScreen(
     let maximum = 0;
     let page = 1;
     const fits = createPlainFitStore();
-    const command = yield* ReplHost.operations.reopenCommand(encodeLocation(state.route));
+    const location = encodeLocation(state.route);
+    const command = (yield* ReplHost.operations.reopenCommand(location)) ?? location;
     const compose: ReplCompose = function* (size) {
       const view = reading();
       const stopped = view.failure !== undefined;

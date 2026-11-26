@@ -112,6 +112,7 @@ import { useAcpxProvider } from "@executablemd/acp";
 import { API, command as hostCommand, cwd, env, Permissions } from "@executablemd/runtime";
 import { runReplProgram, withColdReplStartup } from "./repl/program.ts";
 import { ReplTerminal } from "./repl/terminal.ts";
+import { describeReopen } from "./repl/reopen-command.ts";
 import { ReplHost } from "./repl/host.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
@@ -984,11 +985,10 @@ const REPL_HELP = [
   "  Repeat them in search order; explicit values replace the default list [components, .].",
   "  Relative directories resolve from the invocation working directory.",
   "",
-  "  The screen always shows a location of the form",
-  "  xmd://repl/<execution>/<surface>..., and when the command ends it prints the",
-  "  whole shell command that reopens the one it ended at. Running it",
-  "  reopens the same retained history and selects the same view — in this",
-  "  process or another one, from the history file alone.",
+  "  On exit, prints the shell command that reopens the saved view, or the",
+  "  saved location when the launch options are unknown.",
+  "  A location has the form xmd://repl/<execution>/<surface>... and selects",
+  "  the same view in another process from the retained history.",
 ].join("\n");
 
 /**
@@ -3715,7 +3715,7 @@ function* dispatch(
         break;
       }
       const commandLine = yield* ReplHost.operations.reopenCommand(ran.value.location);
-      const reopen = `Reopen this view with:\n  ${commandLine}`;
+      const reopen = describeReopen(ran.value.location, commandLine);
       const written = yield* deliverWhole(`${reopen}\n`, process.stdout);
       if (!written.ok) {
         console.error(

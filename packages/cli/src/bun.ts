@@ -58,7 +58,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       try {
         process.on("SIGINT", onInterrupt);
         yield* usePosixSidekickTransport(process.platform);
-        yield* useBunRepl(COMMAND);
+        yield* useBunRepl(COMMAND, false);
         return yield* runReplSubmit(
           process.argv.slice(2),
           (options) => readInputStream(process.stdin, options),
