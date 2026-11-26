@@ -124,8 +124,9 @@ answer.
   the same entrypoint as the current REPL. Use `working directory` to locate
   project files. When running XMD from source, `source checkout` identifies the
   repository containing the XMD code this REPL uses.
-  A reported Git revision names HEAD at launch, and the
-  local-change fact tells you what Git saw separately. Reading the launch facts
+  The Git revision identifies the checked-out commit when the REPL started.
+  The local-change field reports whether the checkout had uncommitted changes
+  at that time. Reading the launch facts
   grants no permission to use them. When launch arguments are unknown, ask
   for a verified invocation before starting a child.
 - Component documentation is not permission. `<REPL.Syntax />` describes what
