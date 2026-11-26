@@ -299,7 +299,7 @@ export interface FakeAcp {
    */
   unavailable(agent: string, reason: Error): void;
   missingSession(sessionKey: string): void;
-  refuseSessionResume(sessionKey: string, details?: string): void;
+  refuseSessionResume(sessionKey: string, details?: string, retryable?: boolean): void;
   /**
    * Report this native conversation identity instead of a derived one.
    *
@@ -621,7 +621,7 @@ export function createFakeAcp(): FakeAcp {
     missingSession(sessionKey) {
       missingSessions.add(sessionKey);
     },
-    refuseSessionResume(sessionKey, details) {
+    refuseSessionResume(sessionKey, details, retryable) {
       const rpc = Object.assign(new Error("Internal error"), {
         code: -32041,
         data: { details, unrelated: "unrelated synthetic RPC payload" },
@@ -630,6 +630,7 @@ export function createFakeAcp(): FakeAcp {
         sessionKey,
         Object.assign(new Error("Raw load failure", { cause: rpc }), {
           detailCode: "SESSION_RESUME_REQUIRED",
+          ...(retryable === undefined ? {} : { retryable }),
         }),
       );
     },

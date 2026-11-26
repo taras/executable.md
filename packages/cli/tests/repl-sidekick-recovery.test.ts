@@ -283,7 +283,16 @@ describe("resume retention: exact request ownership", () => {
     ]);
     expect(reading.turns.at(-1)).toMatchObject({ asked: "person", title: "new request" });
     expect(reading.delivered).toEqual([]);
+    expect(reading.requests.at(-1)?.payloadUnreconstructable).toBe(true);
     expect(retryable(reading, CHAT, 2).ok).toBe(false);
+    const postBegin = project([
+      ...prefix,
+      next,
+      feedback,
+      turn(2, "", { status: "failed", error: { message: "post-begin failure" } }),
+    ]);
+    expect(postBegin.requests.at(-1)?.payloadUnreconstructable).toBe(undefined);
+    expect(retryable(postBegin, CHAT, 2)).toEqual(Ok(next.text));
     const ordinary = project([
       ...prefix,
       next,
@@ -5183,53 +5192,129 @@ describe("resume retention and mounted retained recovery corrections", () => {
     expect(held.host.fake.prompts).toHaveLength(2);
   });
 
-  it("keeps Start new chat and no Retry after a classified eager original refusal is saved", function* () {
+  it("retries the correct request after two unknown pre-send resume failures", function* () {
     const held = yield* retained();
-    held.host.fake.refuseSessionResume(held.session, "Release the active writer.");
-    const before = yield* readSidekickRecords(held.chat.location.sidekick);
+    yield* decision(held, false);
     yield* scoped(function* () {
       const page = yield* useReplPage({
         host: { ...held.host, profile: held.profile },
         location: held.location,
       });
-      yield* sendMessage(page, savedText);
-      yield* page.until(
-        "the saved fallback and new chat action",
-        (one) => one.shows("could not be resumed") && one.shows("[Start new chat]"),
-      );
-      expect(page.screen().shows("Release the active writer.")).toBe(true);
-      expect(page.screen().shows("[Retry]")).toBe(false);
+      yield* page.press("[Use saved instruction]");
+      held.host.fake.script({ reply: "<Output>Recovery settled.</Output>" });
+      yield* intoComposer(page);
+      yield* page.key("Enter");
+      yield* page.until("the settled recovery", (one) => one.shows("Recovery settled."));
       page.repl.terminal.end();
       yield* awaited("the REPL joining", () => page.repl.outcome() !== undefined);
     });
-    const after = yield* readSidekickRecords(held.chat.location.sidekick);
-    const reading = project(after);
-    expect(held.host.fake.prompts).toHaveLength(2);
-    expect(reading.active).toBe(held.conversation);
-    expect(reading.turns.at(-1)).toMatchObject({
-      status: "failed",
-      sessionKey: undefined,
-      asked: "person",
-      title: savedText,
-    });
-    expect(after.slice(before.length).filter((record) => record.kind === "feedback")).toEqual([]);
-    expect(JSON.stringify(after)).not.toContain("unrelated synthetic RPC payload");
-    const attempt = reading.requests.at(-1);
-    expect(attempt?.resumeRefused).toBe(true);
-    if (attempt?.message === undefined) {
-      throw new Error("The eager attempt has no durable message");
-    }
-    expect(retryable(reading, held.conversation, attempt.message).ok).toBe(false);
-    const reopened = yield* useReplPage({
+    const text = "Retry this exact request.";
+    const secondText = "Deliver the second request only.";
+    const prompts = held.host.fake.prompts.length;
+    const ensured = held.host.fake.ensured.length;
+    held.host.fake.refuseSessionResume(held.session, "unknown pre-send fault", true);
+    const page = yield* useReplPage({
       host: { ...held.host, profile: held.profile },
       location: held.location,
     });
-    yield* reopened.until(
-      "the retained local failure",
-      (one) => one.shows("Release the active writer.") && one.shows("could not be resumed"),
+    yield* sendMessage(page, text);
+    yield* page.until("the retryable resume failure", (one) => one.shows("unknown pre-send fault"));
+    expect(page.screen().shows("Name a different <Session>")).toBe(false);
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    expect(held.host.fake.ensured.length).toBeGreaterThan(ensured);
+    expect(
+      held.host.fake.ensured.slice(ensured).every((one) => one.resumeSessionId !== undefined),
+    ).toBe(true);
+    const failed = project(yield* readSidekickRecords(held.chat.location.sidekick));
+    const request = failed.requests.at(-1);
+    expect(request?.payloadUnreconstructable).toBe(undefined);
+    if (request?.message === undefined) {
+      throw new Error("The failed request was not retained");
+    }
+    expect(retryable(failed, held.conversation, request.message)).toEqual(Ok(text));
+    expect(page.screen().shows("[retry]")).toBe(true);
+    held.host.fake.refuseSessionResume(held.session, "unknown pre-send fault", true);
+    yield* page.press("[X]");
+    yield* page.until("the dismissed failure", (one) => one.shows("dismissed"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("the released queue", (one) => !one.shows("[Resume queue]"));
+    yield* sendMessage(page, secondText);
+    yield* awaited("the second failed ensure", () => held.host.fake.ensured.length > ensured + 1);
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    const twice = project(yield* readSidekickRecords(held.chat.location.sidekick));
+    const second = twice.requests.at(-1);
+    if (second?.message === undefined) {
+      throw new Error("Second request was not retained");
+    }
+    expect(retryable(twice, held.conversation, second.message)).toEqual(Ok(secondText));
+    held.host.fake.script({ reply: "<Output>Retried once.</Output>" });
+    yield* page.until(
+      "the second failure notice",
+      (one) => one.shows(secondText) && one.shows("Click X or press Esc"),
     );
-    expect(reopened.screen().shows("[Retry]")).toBe(false);
-    expect(yield* readSidekickRecords(held.chat.location.sidekick)).toEqual(after);
+    yield* page.key("Escape");
+    yield* page.until(
+      "the closed second failure notice",
+      (one) => !one.shows("Click X or press Esc"),
+    );
+    yield* page.press("[Resume queue]");
+    yield* page.until("the released second queue", (one) => !one.shows("[Resume queue]"));
+    yield* page.press("[retry]", { after: secondText });
+    yield* page.until("the retry's reply", (one) => one.shows("Retried once."));
+    expect(held.host.fake.prompts).toHaveLength(prompts + 1);
+    expect(held.host.fake.prompts.at(-1)).toContain(secondText);
+    expect(held.host.fake.prompts.at(-1)).not.toContain(text);
+    expect(held.host.fake.turns.at(-1)?.handle.sessionKey).toBe(held.session);
+    expect(
+      held.host.fake.ensured.slice(ensured).every((one) => one.resumeSessionId !== undefined),
+    ).toBe(true);
+  });
+
+  it("keeps the saved recovery instruction and Start new chat after a pre-send failure", function* () {
+    const held = yield* retained();
+    yield* decision(held, false);
+    const prompts = held.host.fake.prompts.length;
+    held.host.fake.refuseSessionResume(held.session, "unknown recovery fault", true);
+    const page = yield* useReplPage({
+      host: { ...held.host, profile: held.profile },
+      location: held.location,
+    });
+    yield* page.press("[Use saved instruction]");
+    yield* intoComposer(page);
+    yield* page.key("Enter");
+    yield* page.until("saved recovery failure", (one) => one.shows("unknown recovery fault"));
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    expect(page.screen().shows(savedText)).toBe(true);
+    expect(page.screen().shows("[Start new chat]")).toBe(true);
+  });
+
+  it("refuses Retry when the resumed native identity differs", function* () {
+    const held = yield* retained();
+    yield* decision(held, false);
+    const page = yield* useReplPage({
+      host: { ...held.host, profile: held.profile },
+      location: held.location,
+    });
+    yield* page.press("[Use saved instruction]");
+    yield* intoComposer(page);
+    held.host.fake.script({ reply: "<Output>Recovered.</Output>" });
+    yield* page.key("Enter");
+    yield* page.until("the completed recovery", (one) => one.shows("Recovered."));
+    held.host.fake.identity("a different native conversation");
+    const prompts = held.host.fake.prompts.length;
+    yield* sendMessage(page, "Do not send to a different conversation.");
+    yield* page.until("the identity refusal", (one) =>
+      one.shows("reopened a different native conversation"),
+    );
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    const reading = project(yield* readSidekickRecords(held.chat.location.sidekick));
+    const request = reading.requests.at(-1);
+    if (request?.message === undefined) {
+      throw new Error("The refused request was not retained");
+    }
+    expect(reading.recoveryPending).toBe(false);
+    expect(request.payloadUnreconstructable).toBe(undefined);
+    expect(retryable(reading, held.conversation, request.message).ok).toBe(false);
   });
 
   for (const mode of ["prepared", "missing load"] as const) {
