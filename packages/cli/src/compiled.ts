@@ -61,6 +61,8 @@ const UPGRADE = compiledUpgradeAssembly({
 const USAGE: PromptUsageHost = { host: "compiled", xmd: { version: XMD_VERSION } };
 
 // Before anything public is parsed, and absent from every public surface.
+const COMMAND = [process.execPath];
+
 if (isReplSubmit(process.argv.slice(2))) {
   try {
     process.exitCode = await run(function* () {
@@ -75,7 +77,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       try {
         process.on("SIGINT", onInterrupt);
         yield* usePosixSidekickTransport(process.platform);
-        yield* useCompiledRepl();
+        yield* useCompiledRepl(COMMAND, false);
         return yield* runReplSubmit(
           process.argv.slice(2),
           (options) => readInputStream(process.stdin, options),
@@ -112,7 +114,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     yield* API.Env.around(
       {
         *command([xmdArgs = []]) {
-          return [process.execPath, ...xmdArgs];
+          return [...COMMAND, ...xmdArgs];
         },
 
         *compile([source, options]) {
@@ -157,7 +159,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       // supply neither half.
       {
         select: () => selectReplEntryHost(HELPER),
-        install: () => useCompiledRepl(),
+        install: () => useCompiledRepl(COMMAND),
       },
     );
   });

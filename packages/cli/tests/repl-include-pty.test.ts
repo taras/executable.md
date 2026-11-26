@@ -19,6 +19,7 @@ import { platform } from "node:os";
 import { platformDataRoot } from "../src/repl-assembly.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import { allocate, focusPtyDraft, showing, showingAcross } from "./support/pty.ts";
+import { printedLocation } from "./support/repl-files-journey.ts";
 import type { Pty } from "./support/pty.ts";
 
 const ACT_MS = 30_000;
@@ -110,12 +111,7 @@ function* leave(pty: Pty): Operation<string> {
     yield* sleep(150);
   }
   expect(yield* pty.status()).toBe(0);
-  const screen = (yield* pty.shows()).join("\n");
-  const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
-  if (found?.[1] === undefined) {
-    throw new Error(`no printed location. screen=${screen}`);
-  }
-  return found[1];
+  return printedLocation(yield* pty.finalOutput());
 }
 
 function* refused(pty: Pty, history: string, name: string): Operation<void> {
@@ -402,12 +398,7 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
         yield* sleep(150);
       }
       expect(yield* pty.status()).toBe(0);
-      const screen = (yield* pty.shows()).join("\n");
-      const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
-      if (found?.[1] === undefined) {
-        throw new Error(`no printed location: ${screen}`);
-      }
-      return found[1];
+      return printedLocation(yield* pty.finalOutput());
     }
     yield* scoped(function* () {
       const pty = yield* allocate(line([]), home);

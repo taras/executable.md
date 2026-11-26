@@ -14,26 +14,50 @@ import { installTodoSource } from "./node-todo-source.ts";
 import { randomBytes } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { sep } from "node:path";
+import { resolve, sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
+import { readSourceCheckout, requiredRuntimeDirectory } from "./node-repl-build.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useNodeReplTerminal } from "./node-repl-terminal.ts";
 
-export function* useNodeRepl(): Operation<void> {
+function inheritedNodeOptions(value: string): string[] {
+  // NODE_OPTIONS splits on spaces outside double quotes and escapes only inside them.
+  return Array.from(value.matchAll(/(?:[^ "]+|"(?:[^"\\]|\\[\s\S])*")+/g), ([word]) =>
+    word.replace(/"((?:[^"\\]|\\[\s\S])*)"/g, (_quote, quoted: string) =>
+      quoted.replace(/\\([\s\S])/g, "$1"),
+    ),
+  );
+}
+
+export function* useNodeRepl(command: readonly string[], interactive = true): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
+  const checkout = interactive ? yield* readSourceCheckout(command.at(-1)) : undefined;
+  const config = process.env["TSX_TSCONFIG_PATH"];
+  const directory = requiredRuntimeDirectory(
+    [...command.slice(1, -1), ...inheritedNodeOptions(process.env["NODE_OPTIONS"] ?? "")],
+    process.cwd(),
+  );
+  const reopen = {
+    command,
+    directory,
+    ...(config === undefined ? {} : { assignments: { TSX_TSCONFIG_PATH: resolve(config) } }),
+  };
   yield* installReplHost({
+    reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.
     // A reply reads these as the host's own facts; nothing downstream sniffs
     // for a runtime global to work them out again.
     environment: () =>
       replHostFacts({
-        runtime: `node ${process.versions.node} from its npm package`,
+        runtime: `node ${process.versions.node}`,
         version: XMD_VERSION,
+        launch: reopen,
+        checkout,
         platform: process.platform,
         architecture: process.arch,
       }),

@@ -1,3 +1,4 @@
+import { printedLocation } from "./repl-files-journey.ts";
 /**
  * The one real-terminal journey an entry's issues rest on.
  *
@@ -122,15 +123,6 @@ export function* ended(pty: Pty): Operation<number> {
 }
 
 /** The one location this command printed for a caller to come back with. */
-export function printedLocation(screen: string): string {
-  const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
-  if (found === null || found[1] === undefined) {
-    throw new Error(
-      `this command printed no reopenable location. screen=${JSON.stringify(screen)}`,
-    );
-  }
-  return found[1];
-}
 
 /** How a process reaches this tracker: the operator's two variables. */
 function configured(server: IssueTrackerServer, token: string): readonly string[] {
@@ -186,7 +178,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
 
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     const probe = "xmd://repl/kf39sla2/entries";
     yield* writeTextFile(
@@ -308,7 +300,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     // command still prints the location it ended at.
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
     release.resolve();
 
     const second = yield* allocate(inside(["repl", location, "--deny-all"]), home);

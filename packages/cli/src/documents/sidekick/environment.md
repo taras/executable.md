@@ -120,6 +120,14 @@ answer.
   snapshot retained with your operation, not a cache you can rely on later.
 - What it does not report, you do not know. An absent fact is an explicit
   unknown, not a default — do not substitute a guess for it.
+- Use the launch command from `REPL.Environment` to start an XMD process using
+  the same entrypoint as the current REPL. Use `working directory` to locate
+  project files. When running XMD from source, `source checkout` identifies the
+  repository containing the XMD code this REPL uses.
+  The Git revision identifies the checked-out commit when the REPL started.
+  The local-change field reports whether the checkout had uncommitted changes
+  at that time. If the launch command is unknown and you need to use the same
+  XMD entrypoint, ask the person which command started this REPL.
 - Component documentation is not permission. `<REPL.Syntax />` describes what
   the entry vocabulary *is*; whether a particular execution admits a particular
   capability is a separate question, answered when the entry runs.

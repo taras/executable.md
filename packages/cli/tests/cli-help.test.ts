@@ -9,7 +9,13 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { cliRuntime, runCli, runShell, shellQuote } from "@executablemd/test-support/launch";
+import {
+  cliBase,
+  cliRuntime,
+  runCli,
+  runShell,
+  shellQuote,
+} from "@executablemd/test-support/launch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
@@ -572,3 +578,31 @@ describe("Retained workflow help exposure", () => {
     }
   });
 });
+
+if (cliRuntime() === "deno") {
+  describe("1440: optional Deno launch evidence", () => {
+    it("does not require either marker for version or an unrelated command", function* () {
+      const [executable, ...flags] = cliBase();
+      const entry = flags.pop();
+      if (entry === undefined) {
+        throw new Error("Missing Deno entrypoint.");
+      }
+      const command = [
+        executable,
+        ...flags,
+        "--deny-env=XMD_REPL_LAUNCHER,XMD_REPL_DENO_PROFILE",
+        entry,
+      ]
+        .map(shellQuote)
+        .join(" ");
+      const env = {
+        XMD_REPL_LAUNCHER: "/a stale launcher",
+        XMD_REPL_DENO_PROFILE: "allow-all",
+      };
+      const version = yield* runShell(`${command} --version`, { env }).expect();
+      expect(version.stdout).toBe((yield* runCli(["--version"]).expect()).stdout);
+      const syntax = yield* runShell(`${command} syntax If`, { env }).expect();
+      expect(syntax.stdout).toContain("If");
+    });
+  });
+}

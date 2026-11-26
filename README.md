@@ -142,7 +142,7 @@ deno task xmd run README.md#Setup
 
 Select it after changing a dependency, or whenever you want the checkout
 restored on its own without building or testing. It executes `deno task setup`,
-the preamble block above and the only thing in this repository that installs.
+the preamble block above and the only command that installs dependencies.
 Setup owns both dependency layouts — `node_modules/` and Deno's global cache —
 and prepares them in the order their union resolves in: the pinned Markdown
 boundary module, Deno's frozen install
@@ -154,6 +154,22 @@ and checks read what setup prepared and leave tracked files, `node_modules` and
 `deno.lock` as they found them, so they compose with one another.
 
 ## Build
+
+Install the development launcher from the root of a prepared checkout.
+Run the [installation example](examples/install-xmd-dev.md) with an existing `xmd`.
+
+```sh
+xmd run examples/install-xmd-dev.md
+```
+
+The example installs `xmd-dev` in `~/.local/xmd-dev/bin` and prints the PATH
+step if your shell needs it. Add that export to your shell startup file if you
+want it in later terminals. The dedicated directory lets you select this
+launcher while keeping an older installation in place. To change the default
+checkout, move the installed command aside and run the example from the new
+checkout. If you previously installed a symlink at that destination, move it
+aside before running the example. To select another prepared checkout for one
+invocation, set `XMD_DEV_ROOT`. Run `xmd-dev` from your project directory.
 
 Compile the standalone `xmd` binary: prepare the checkout and then build,
 yielding `dist/xmd`, a self-contained executable for this host.
@@ -275,11 +291,11 @@ deno task xmd run README.md#Bootstrap --props-package packages/<name>
 
 <If condition={props.package === undefined}>
 
-No package was named, so nothing was reserved. Name one with `--props-package`
-to run the reservation; it explains each step as it takes it, previews the
-placeholder before publishing anything, and refuses rather than touch a package
-that already carries versions.
-[`specs/release-process-spec.md`](specs/release-process-spec.md) §6 carries the
-whole procedure, including the JSR half.
+  No package was named, so nothing was reserved. Name one with `--props-package`
+  to run the reservation; it explains each step as it takes it, previews the
+  placeholder before publishing anything, and refuses rather than touch a package
+  that already carries versions.
+  [`specs/release-process-spec.md`](specs/release-process-spec.md) §6 carries the
+  whole procedure, including the JSR half.
 
 </If>

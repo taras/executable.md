@@ -19,6 +19,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import { Err, type Operation, type Result } from "effection";
+import { formatReopenCommand } from "./reopen-command.ts";
 import type { JournalAppend } from "./record-file.ts";
 
 /** No host installed this operation, so the REPL cannot perform it. */
@@ -67,6 +68,7 @@ export interface ReplHostApi {
    * text that is rendered and never parsed.
    */
   environment(): Operation<readonly ReplHostFact[]>;
+  command(location: string): Operation<string | undefined>;
   /**
    * An opaque, URL-safe name for one new execution.
    *
@@ -109,6 +111,10 @@ export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
   // deno-lint-ignore require-yield
   *environment(): Operation<readonly ReplHostFact[]> {
     throw new ReplHostError("describing this host");
+  },
+  // deno-lint-ignore require-yield
+  *command(location: string): Operation<string | undefined> {
+    return formatReopenCommand({ command: ["xmd"] }, location);
   },
   // deno-lint-ignore require-yield
   *identify(): Operation<string> {

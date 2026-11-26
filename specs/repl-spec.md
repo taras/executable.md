@@ -189,8 +189,26 @@ The Sidekick's native conversation keeps its recorded identity and configuration
 Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
 `<REPL.Environment />` reports the response's actual cwd and fresh effective
-file read/write/absolute policy. `current response policy` describes the invoking
-scope. `submitted-entry start policy (session scope; entry content may narrow
+file read/write/absolute policy. Build facts identify the running runtime and
+version, the source checkout and its Git revision and local changes observed at
+launch, or the compiled executable path. Unavailable facts are explicit
+unknowns. The revision names the checkout's HEAD, and the change observation
+describes what Git reports at launch. Neither is a fingerprint of the loaded
+program.
+
+The launch arguments are an ordered JSON array with the runtime executable and
+source entrypoint where applicable. The POSIX command renders the same argument
+boundaries and includes required launch directory and environment overrides.
+The child inherits the caller's environment along with any stated overrides.
+For Node, inherited `NODE_OPTIONS` with a cwd-relative runtime operand also
+requires the host's launch directory. The report states the directory and
+leaves the inherited option values in the caller's environment.
+When the launch command is available, append the desired XMD subcommand and options to start a child. The required launch directory, when
+present, belongs to the runtime invocation. The response's working directory
+still belongs to the user's project. Reading these facts performs no launch
+and grants no execution permission.
+
+`current response policy` describes the invoking scope. `submitted-entry start policy (session scope; entry content may narrow
 it)` is observed afresh through a joined read in the actual session entry-task
 owner, not copied from CLI flags or response policy. `approved import` separately
 states eligibility under current response read/write plus required individual
@@ -856,7 +874,7 @@ is written.
 ## One cold journey
 
 The command prints what reopens where it ended: a line saying so, and under it
-the whole `xmd repl <location>`. Run that — on this machine, in a new process,
+the whole shell command with the retained location. Run that — on this machine, in a new process,
 with nothing carried over — and the same view comes back: the same catalog of entries in the same order with the
 same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
@@ -1825,18 +1843,31 @@ can see, and the catalog moves as far as it has to for that entry to be showing.
 Which entry and which scope you had selected does not change, and a wider window
 shows the record itself again.
 
-The location is not on the screen. It is the longest thing this command could
-draw and the one thing a reader never has to act on while they are reading, so no
-row carries it and none is kept for it at any size. When the command ends it
-prints the whole `xmd repl <location>`, under one line saying that is what
-reopens this view: a person who has just had their terminal handed back wants
-something they can run, and the screen that would have explained it has gone. The
-command is indented rather than marked, so the line stays exactly what can be
-pasted. The location is quoted, because it carries `?`, `&` and `=` structurally
-and a shell would read them — and single-quoted safely, because every character
-outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
-the quote that would close it. Source text, provider output and
-an event's own origin are content and are shown as written, URLs included.
+The live screen reserves no row for the location. The restoration screen
+previews the reopen command when available and otherwise shows the location.
+On exit the CLI prints the full command on an indented line beneath the reopen
+label. It supplies the final saved location as one single-quoted shell
+argument, preserving the `?`, `&` and `=` used in the route. When the launch
+options are unknown, it prints the quoted saved location and states that the
+reopen command is unavailable.
+
+An explicitly invoked compiled executable reopens through its absolute
+executable path. A bare `xmd` invocation retains the `xmd repl '<location>'`
+form when the first executable on the host's absolute PATH search resolves to
+the running binary. This form uses the caller's PATH when pasted.
+
+The installed `xmd-dev` launcher supplies its absolute invocation path and
+fixed Deno launch profile. The installation example records the default
+checkout in the launcher. `XMD_DEV_ROOT` selects another checkout. The reopen
+command pins the checkout and Deno executable used for the original launch. The
+repository's `deno task xmd` declares its fixed Deno profile in the task
+definition. Its reopen command preserves the task's runtime flags and
+launch directory. A direct
+Deno invocation whose flags are unknown reports no launch command. Missing or
+inaccessible launcher evidence has the same result.
+
+Source text, provider output and event origins are shown as written, URLs
+included.
 
 History is one compact row at every size: one leading `[History]` button,
 one mark for each entry in

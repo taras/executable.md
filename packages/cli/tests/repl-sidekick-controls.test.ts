@@ -1,3 +1,5 @@
+import { runShell, shellQuote } from "@executablemd/test-support/launch";
+import { readSourceCheckout, requiredRuntimeDirectory } from "../src/node-repl-build.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 /**
@@ -32,6 +34,7 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
  * covered here.
  */
 
+import { replHostFacts } from "../src/repl-assembly.ts";
 import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
@@ -2335,6 +2338,34 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(answer.value).toContain("stop rather than assume a value for it");
   });
 
+  it("1440: host invocation retains argv and cwd apart from the response project", function* () {
+    const command = ["/runtime with spaces/node", "--import", "./loader's file.js", "/host/xmd.js"];
+    const directory = "/launcher context";
+    yield* ReplHost.around({
+      *environment() {
+        return replHostFacts({
+          runtime: "node source",
+          version: "0.14.1",
+          platform: "darwin",
+          architecture: "arm64",
+          launch: { command, directory },
+        });
+      },
+    });
+    const session = yield* opened("launch-facts", new InMemoryStream());
+    const answer = yield* sidekickRequests(reading(session), noSubmission).environment();
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(answer.value).toContain(`- working directory: ${yield* cwd()}`);
+    expect(answer.value).toContain(`- required launch working directory: ${directory}`);
+    expect(answer.value).toContain(`- launch arguments (JSON): ${JSON.stringify(command)}`);
+    expect(answer.value).toContain(
+      "cd '/launcher context' && '/runtime with spaces/node' --import './loader'\\''s file.js' /host/xmd.js",
+    );
+    expect(answer.value).toContain("- source revision: not known to this host");
+  });
+
   it("1075: environment distinguishes fresh response, session-start and import policies without work", function* () {
     yield* ReplHost.around(
       {
@@ -4537,5 +4568,41 @@ describe("1113: response Cwd is ordinary text", () => {
     expect(responseSurface(ceilingFor(asked)).filter((entry) => entry.name === "Cwd")).toEqual([
       { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
     ]);
+  });
+});
+
+describe("1440: source launch context", () => {
+  it("requires the original directory only for a cwd-relative runtime operand", function* () {
+    const launch = "/original launch";
+    expect(requiredRuntimeDirectory(["--conditions=example"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--require=fs"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--import", "node:fs/promises"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--experimental-config-file=fs"], launch)).toBe(launch);
+    expect(
+      requiredRuntimeDirectory(["--require", "/absolute host/loader.cjs"], launch),
+    ).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--import=./relative loader.mjs"], launch)).toBe(launch);
+    expect(requiredRuntimeDirectory(["--preload", "./relative loader.ts"], launch)).toBe(launch);
+  });
+
+  it("retains a trailing space in a source checkout and reports its revision and changes", function* () {
+    const temp = yield* useTempDirectory("1440-git-root-");
+    const checkout = temp + "/source checkout ";
+    const git = (args: string) => runShell(`git -C ${shellQuote(checkout)} ${args}`).expect();
+    yield* runShell(`mkdir ${shellQuote(checkout)}`).expect();
+    yield* git("init");
+    const entrypoint = checkout + "/entry.ts";
+    yield* runShell(`touch ${shellQuote(entrypoint)}`).expect();
+    yield* git("add entry.ts");
+    yield* git("-c user.name=Fixture -c user.email=fixture@example.com commit -m seed");
+    const revision = (yield* git("rev-parse HEAD")).stdout.trim();
+    const root = (yield* git("rev-parse --show-toplevel")).stdout.replace(/\n$/, "");
+    expect(root.endsWith("/source checkout ")).toBe(true);
+    yield* runShell(`touch ${shellQuote(checkout + "/untracked")}`).expect();
+    expect(yield* readSourceCheckout(entrypoint)).toEqual({
+      root,
+      revision,
+      changes: "present",
+    });
   });
 });

@@ -68,7 +68,7 @@ function reopenLocation(raw: string): string | null {
   const restoredAt = raw.lastIndexOf(restoreBuffer);
   const output = restoredAt === -1 ? raw : raw.slice(restoredAt + restoreBuffer.length);
   const hint =
-    /(?:^|\n)Reopen this view with:\r?\n  xmd repl '(xmd:\/\/repl\/[^'\r\n]+)'(?:\r?\n)?$/u;
+    /(?:^|\n)(?:Reopen this view with:\r?\n  .+ repl |Reopen command unavailable\. Saved view location:\r?\n  )'(xmd:\/\/repl\/[^'\r\n]+)'(?:\r?\n)?$/u;
   const location = hint.exec(output)?.[1];
   return location !== undefined && decodeLocation(location).ok ? location : null;
 }

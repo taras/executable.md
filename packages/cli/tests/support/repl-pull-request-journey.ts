@@ -76,13 +76,13 @@ import {
   holding,
   logged,
   managedCheckout,
-  printedLocation,
   pushes,
   REACH_MS,
   remoteHolding,
   remoteRef,
   click,
 } from "./repl-push-journey.ts";
+import { printedLocation } from "./repl-files-journey.ts";
 import type { ReplCommand } from "./repl-push-journey.ts";
 import { usePullRequestServer } from "./pull-request-server.ts";
 import type { PullRequestServer } from "./pull-request-server.ts";
@@ -326,7 +326,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
 
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
     // The screen never showed the credential.
     expect((yield* first.shows()).join("\n")).not.toContain(TOKEN);
 

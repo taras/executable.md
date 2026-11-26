@@ -27,14 +27,24 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { cliRuntime, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
+import {
+  cliBase,
+  cliRuntime,
+  cliShellCommand,
+  shellQuote,
+  runShell,
+} from "@executablemd/test-support/launch";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { realpath } from "node:fs/promises";
+import { allocate as allocateFullPty, showing as showingFullPty } from "./support/pty.ts";
+import { click, ended as terminalExit } from "./support/repl-files-journey.ts";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { execFile, spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import { randomBytes } from "node:crypto";
-import { ensure, type Operation, scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, type Operation, scoped, sleep, spawn, until, withResolvers } from "effection";
 
 /** Let every ready task run, so "still unwinding" is an observation about turns. */
 function* settled(turns = 8): Operation<void> {
@@ -710,12 +720,18 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       expect(printed).toHaveLength(1);
 
       // And runnable exactly as printed: the location is one quoted argument of
-      // an `xmd repl` command, so somebody who has just been handed their
+      // the running host's command, so somebody who has just been handed their
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
-      expect(after).toContain("Reopen this view with:");
-      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
+      if (cliRuntime() === "deno") {
+        expect(after).toContain("Reopen command unavailable. Saved view location:");
+        expect(after).not.toContain("--allow-all");
+      } else {
+        expect(after).toContain("Reopen this view with:");
+        expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      }
+      expect(after).toMatch(/'xmd:\/\/repl\/[^']+'/);
     });
   });
 
@@ -763,12 +779,93 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       expect(printed).toHaveLength(1);
 
       // And runnable exactly as printed: the location is one quoted argument of
-      // an `xmd repl` command, so somebody who has just been handed their
+      // the running host's command, so somebody who has just been handed their
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
-      expect(after).toContain("Reopen this view with:");
-      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
+      if (cliRuntime() === "deno") {
+        expect(after).toContain("Reopen command unavailable. Saved view location:");
+        expect(after).not.toContain("--allow-all");
+      } else {
+        expect(after).toContain("Reopen this view with:");
+        expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      }
+      expect(after).toMatch(/'xmd:\/\/repl\/[^']+'/);
     });
   });
 });
+
+if (cliRuntime() !== "deno") {
+  describe("1440: native loader launch context", () => {
+    it("keeps the child's cwd for conditions and retains the launch cwd for a relative loader", function* () {
+      const home = yield* until(realpath(yield* useTempDirectory("xmd-1440-cwd-")));
+      const project = join(home, "project");
+      const nested = join(project, "nested");
+      yield* ensureDir(nested);
+      yield* writeTextFile(join(project, "local loader.cjs"), "module.exports = {};\n");
+      const flag = cliRuntime() === "node" ? "--require" : "--preload";
+      const base = cliBase();
+      const entry = base.pop();
+      if (entry === undefined) {
+        throw new Error("Missing source entrypoint.");
+      }
+      const cases: { options: string[]; expectedCwd: string; nodeOptions?: string }[] = [
+        { options: ["--conditions=example"], expectedCwd: nested },
+        { options: [flag, "./local loader.cjs"], expectedCwd: project },
+      ];
+      if (cliRuntime() === "node") {
+        yield* writeTextFile(join(project, "options.json"), "{}\n");
+        yield* writeTextFile(join(project, "project-loader.cjs"), "module.exports = {};\n");
+        cases.push(
+          { options: ["--experimental-config-file=options.json"], expectedCwd: project },
+          {
+            options: [],
+            nodeOptions: "--require=./project-loader.cjs --conditions=private-condition-witness",
+            expectedCwd: project,
+          },
+          { options: [], nodeOptions: '--require "./local loader.cjs"', expectedCwd: project },
+          { options: [], nodeOptions: "--require=fs", expectedCwd: nested },
+          {
+            options: [],
+            nodeOptions: "--conditions=private-condition-witness",
+            expectedCwd: nested,
+          },
+        );
+      }
+      for (const { options, expectedCwd, nodeOptions } of cases) {
+        yield* scoped(function* () {
+          const line = [...base, ...options, entry, "repl", "--deny-all"].map(shellQuote).join(" ");
+          const inherited =
+            nodeOptions === undefined ? "" : `NODE_OPTIONS=${shellQuote(nodeOptions)} `;
+          const pty = yield* allocateFullPty(
+            `cd ${shellQuote(project)} && ${inherited}${line}`,
+            home,
+          );
+          yield* showingFullPty(pty, "[exit]", 60_000);
+          yield* click(pty, "[exit]");
+          expect(yield* terminalExit(pty)).toBe(0);
+          const launch = /^  (.+) repl 'xmd:\/\/repl\/[^']+'\r?$/m.exec(
+            yield* pty.finalOutput(),
+          )?.[1];
+          if (launch === undefined) {
+            throw new Error("The terminal printed no complete launch command.");
+          }
+          const option = options.at(-1);
+          if (option !== undefined) {
+            expect(launch).toContain(option);
+          }
+          if (nodeOptions !== undefined) {
+            expect(launch).not.toContain("NODE_OPTIONS");
+            expect(launch).not.toContain("private-condition-witness");
+            expect(launch).not.toContain("loader.cjs");
+          }
+          const cwd = (yield* runShell(`${launch} run --eval ${shellQuote("<Cwd />")}`, {
+            cwd: nested,
+            ...(nodeOptions === undefined ? {} : { env: { NODE_OPTIONS: nodeOptions } }),
+          }).expect()).stdout.trim();
+          expect(cwd).toBe(expectedCwd);
+        });
+      }
+    });
+  });
+}

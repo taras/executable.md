@@ -1,3 +1,4 @@
+import { printedLocation, projectGitLog } from "./repl-files-journey.ts";
 /**
  * The one real-terminal journey an entry's publications rest on.
  *
@@ -138,7 +139,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
 
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     // Changed from outside: the branch this entry published advances while the
     // person is away, which is exactly what this execution model allows.
@@ -390,14 +391,14 @@ export function* gitShim(
     shim,
     // Logged before the delegation, so a reopening that ran a command which
     // then failed is still observed as having run one.
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shellQuote(log)}\nexec ${shellQuote(real)}${mapped} "$@"\n`,
+    `#!/bin/sh\n${yield* projectGitLog(log)}\nexec ${shellQuote(real)}${mapped} "$@"\n`,
   );
   yield* until(chmod(shim, 0o755));
   yield* writeTextFile(log, "");
   return { prefix: `PATH=${shellQuote(directory)}:$PATH`, log };
 }
 
-/** Every `git` the shim has seen since it was last forgotten. */
+/** Every project Git command the shim has seen since the log was cleared. */
 export function* logged(log: string): Operation<string[]> {
   const held = (yield* exists(log)) ? yield* readTextFile(log) : "";
   return held.split("\n").filter((line) => line !== "");
@@ -544,12 +545,3 @@ export function* ended(pty: Pty): Operation<number> {
 }
 
 /** The one location this command printed for a caller to come back with. */
-export function printedLocation(screen: string): string {
-  const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
-  if (found === null || found[1] === undefined) {
-    throw new Error(
-      `this command printed no reopenable location. screen=${JSON.stringify(screen)}`,
-    );
-  }
-  return found[1];
-}

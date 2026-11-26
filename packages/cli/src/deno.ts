@@ -10,6 +10,7 @@ import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 
 import { action, createSignal, main, run, spawn, withResolvers } from "effection";
 import { isReplSubmit, runReplSubmit } from "./sidekick-acp/submit.ts";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -74,6 +75,31 @@ const UPGRADE: UpgradeAssembly = {
  */
 const USAGE: PromptUsageHost = { host: "deno-source", xmd: { version: XMD_VERSION } };
 
+const INTERNAL_COMMAND = [process.execPath, "run", "--allow-all", ENTRYPOINT];
+function launcherEvidence(): string | undefined {
+  try {
+    const profile = process.env["XMD_REPL_DENO_PROFILE"];
+    const launcher = process.env["XMD_REPL_LAUNCHER"];
+    if (profile !== undefined) {
+      delete process.env["XMD_REPL_DENO_PROFILE"];
+    }
+    if (launcher !== undefined) {
+      delete process.env["XMD_REPL_LAUNCHER"];
+    }
+    if (profile === "repository-task") {
+      return "repository-task";
+    }
+    if (profile !== "allow-all" || launcher === undefined || !isAbsolute(launcher)) {
+      return undefined;
+    }
+    return launcher;
+  } catch {
+    return undefined;
+  }
+}
+
+const LAUNCHER = launcherEvidence();
+
 // The internal helper mode runs before anything public is parsed. It is not a
 // command: it appears in no help and in no public grammar, and a caller who did
 // not select it gets the ordinary command line unchanged.
@@ -128,7 +154,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     yield* API.Env.around(
       {
         *command([xmdArgs = []]) {
-          return [process.execPath, "run", "--allow-all", ENTRYPOINT, ...xmdArgs];
+          return [...INTERNAL_COMMAND, ...xmdArgs];
         },
 
         *compile([source, options]) {
@@ -176,7 +202,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       // supply neither half.
       {
         select: () => selectReplEntryHost(HELPER),
-        install: () => useDenoRepl(),
+        install: () => useDenoRepl(ENTRYPOINT, LAUNCHER),
       },
     );
   });
