@@ -32,11 +32,8 @@ import {
   settledEntry,
   showing,
 } from "../../packages/cli/tests/support/pty.ts";
-import {
-  click,
-  ended,
-  printedLocation,
-} from "../../packages/cli/tests/support/repl-issues-journey.ts";
+import { click, ended } from "../../packages/cli/tests/support/repl-issues-journey.ts";
+import { printedLocation } from "../../packages/cli/tests/support/repl-files-journey.ts";
 
 const REPO = new URL("../../", import.meta.url);
 const RUNTIME = "packages/cli/generated/tty";
@@ -182,7 +179,7 @@ describe("the prepared terminal runtime in the canonical host binary", () => {
     yield* showing(first, "01fda4", 60_000);
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     const second = yield* allocate(repl([location]), home);
     yield* showing(second, "[exit]", 180_000);

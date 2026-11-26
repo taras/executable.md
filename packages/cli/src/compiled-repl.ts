@@ -34,7 +34,7 @@ function* canUseBareXmd(): Operation<boolean> {
     }
     const candidate = join(directory, "xmd");
     try {
-      if (!(yield* stat(candidate)).isFile) {
+      if (!(yield* stat(candidate)).isFile()) {
         continue;
       }
       yield* until(access(candidate, constants.X_OK));

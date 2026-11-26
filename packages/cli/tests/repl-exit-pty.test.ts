@@ -809,7 +809,18 @@ if (cliRuntime() !== "deno") {
       if (entry === undefined) {
         throw new Error("Missing source entrypoint.");
       }
-      for (const options of [["--conditions=example"], [flag, "./local loader.cjs"]]) {
+      const cases = [
+        { options: ["--conditions=example"], expectedCwd: nested },
+        { options: [flag, "./local loader.cjs"], expectedCwd: project },
+      ];
+      if (cliRuntime() === "node") {
+        yield* writeTextFile(join(project, "options.json"), "{}\n");
+        cases.push({
+          options: ["--experimental-config-file=options.json"],
+          expectedCwd: project,
+        });
+      }
+      for (const { options, expectedCwd } of cases) {
         yield* scoped(function* () {
           const line = [...base, ...options, entry, "repl", "--deny-all"].map(shellQuote).join(" ");
           const pty = yield* allocateFullPty(`cd ${shellQuote(project)} && ${line}`, home);
@@ -826,7 +837,7 @@ if (cliRuntime() !== "deno") {
           const cwd = (yield* runShell(`${launch} run --eval ${shellQuote("<Cwd />")}`, {
             cwd: nested,
           }).expect()).stdout.trim();
-          expect(cwd).toBe(options.length === 1 ? nested : project);
+          expect(cwd).toBe(expectedCwd);
         });
       }
     });

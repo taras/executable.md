@@ -86,6 +86,9 @@ function launcherEvidence(): string | undefined {
     if (launcher !== undefined) {
       delete process.env["XMD_REPL_LAUNCHER"];
     }
+    if (profile === "repository-task") {
+      return "repository-task";
+    }
     if (profile !== "allow-all" || launcher === undefined || !isAbsolute(launcher)) {
       return undefined;
     }
