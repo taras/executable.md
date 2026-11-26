@@ -32,7 +32,7 @@ import {
   showingAcross,
 } from "../../packages/cli/tests/support/pty.ts";
 import { fileURLToPath as fromFileUrl } from "node:url";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   click,
   ended,
@@ -121,6 +121,34 @@ describe("1440: installed development and explicit compiled launchers", () => {
     }).expect();
     expect(selectedInstall.stdout).not.toContain("export PATH=");
 
+    const checkoutAlias = join(home, "checkout alias");
+    yield* until(symlink(ROOT, checkoutAlias));
+    const priorHome = join(home, "prior README home");
+    const priorLink = join(priorHome, ".local", "xmd-dev", "bin", "xmd-dev");
+    yield* runShell(
+      `cd ${shellQuote(checkoutAlias)} &&
+        mkdir -p "$HOME/.local/xmd-dev/bin" &&
+        ln -s "$PWD/scripts/xmd-dev" "$HOME/.local/xmd-dev/bin/xmd-dev"`,
+      { cwd: ROOT, env: { HOME: priorHome } },
+    ).expect();
+    const priorTarget = join(checkoutAlias, "scripts", "xmd-dev");
+    expect(yield* until(readlink(priorLink))).toBe(priorTarget);
+    expect((yield* install(priorHome).expect()).stdout).toContain(
+      "already points to this checkout",
+    );
+    expect(yield* until(readlink(priorLink))).toBe(priorTarget);
+
+    const relativeHome = join(home, "relative link home");
+    const relativeBin = join(relativeHome, ".local", "xmd-dev", "bin");
+    const relativeLink = join(relativeBin, "xmd-dev");
+    const relativeTarget = relative(relativeBin, source);
+    yield* ensureDir(relativeBin);
+    yield* until(symlink(relativeTarget, relativeLink));
+    expect((yield* install(relativeHome).expect()).stdout).toContain(
+      "already points to this checkout",
+    );
+    expect(yield* until(readlink(relativeLink))).toBe(relativeTarget);
+
     const conflictHome = join(home, "conflicting home");
     const conflictBin = join(conflictHome, ".local", "xmd-dev", "bin");
     const conflict = join(conflictBin, "xmd-dev");
@@ -133,6 +161,13 @@ describe("1440: installed development and explicit compiled launchers", () => {
     expect(refused.stderr).toContain(`Could not install ${conflict}.`);
     expect(yield* readTextFile(conflict)).toBe(conflictContents);
     yield* until(unlink(conflict));
+    yield* writeTextFile(join(conflictBin, "other-launcher"), conflictContents);
+    for (const target of ["other-launcher", "missing-launcher"]) {
+      yield* until(symlink(target, conflict));
+      expect((yield* install(conflictHome).join()).code).toBe(1);
+      expect(yield* until(readlink(conflict))).toBe(target);
+      yield* until(unlink(conflict));
+    }
     yield* ensureDir(conflict);
     expect((yield* install(conflictHome).join()).code).toBe(1);
     expect(yield* exists(join(conflict, "xmd-dev"))).toBe(false);
