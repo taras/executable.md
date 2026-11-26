@@ -1630,6 +1630,8 @@ function associatedWork(
     return Object.freeze([]);
   }
   const found: ReplAssociatedWork[] = [];
+  let chatKeys: Set<string> | undefined;
+  const entriesByMessage = new Map<string, Set<string>>();
   for (const submit of sidekick.submits) {
     // What this history says became of the control itself, before anything is
     // asked about the slot. A settled Submit that observed no entry admitted
@@ -1660,12 +1662,19 @@ function associatedWork(
     // response this reading composed no row for is a response nothing on this
     // screen could put the work after.
     const message = `chat:${submit.conversation}:${submit.response}`;
-    if (!sidekick.chat.some((row) => row.key === message)) {
+    chatKeys ??= new Set(sidekick.chat.map((row) => row.key));
+    if (!chatKeys.has(message)) {
       continue;
     }
-    if (found.some((one) => one.message === message && one.entry === admitted.key)) {
+    let entries = entriesByMessage.get(message);
+    if (entries === undefined) {
+      entries = new Set();
+      entriesByMessage.set(message, entries);
+    }
+    if (entries.has(admitted.key)) {
       continue;
     }
+    entries.add(admitted.key);
     found.push(
       Object.freeze({
         message,
