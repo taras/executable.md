@@ -200,7 +200,7 @@ The launch arguments are an ordered JSON array with the runtime executable and
 source entrypoint where applicable. The POSIX command renders the same argument
 boundaries and includes required launch directory and environment overrides.
 The child inherits the caller's environment along with any stated overrides.
-Append the desired XMD subcommand and options to start a child. The required launch directory, when
+When the launch command is available, append the desired XMD subcommand and options to start a child. The required launch directory, when
 present, belongs to the runtime invocation. The response's working directory
 still belongs to the user's project. Reading these facts performs no launch
 and grants no execution permission.
@@ -1826,21 +1826,24 @@ Which entry and which scope you had selected does not change, and a wider window
 shows the record itself again.
 
 The live screen reserves no row for the location. The restoration screen
-previews the reopen command. On exit the CLI prints the full command on an
-indented line beneath the reopen label. It supplies the final saved location
-as one single-quoted shell argument, preserving the `?`, `&` and `=` used
-in the route.
+previews the reopen command when available and otherwise shows the location.
+On exit the CLI prints the full command on an indented line beneath the reopen
+label. It supplies the final saved location as one single-quoted shell
+argument, preserving the `?`, `&` and `=` used in the route. When the launch
+options are unknown, it prints the quoted saved location and states that the
+reopen command is unavailable.
 
-The ordinary compiled `xmd` launcher keeps the `xmd repl '<location>'` form.
-The repository's `scripts/xmd-dev` passes its absolute launcher path to the
-Deno entrypoint. Its reopen command uses that path and pins the source
-checkout and Deno executable for the wrapper. An external wrapper that
-replaces itself can supply its absolute path through `XMD_REPL_LAUNCHER`
-when it accepts the same `XMD_DEV_ROOT` and `XMD_DEV_DENO` overrides. When no
-launcher is reported, the source host prints its runtime and entrypoint.
-The standard Deno source command uses the repository's all-permissions
-invocation. Deno exposes neither wrapper identity nor arbitrary original
-runtime flags to the entrypoint.
+An explicitly invoked compiled executable reopens through its absolute
+executable path. A bare `xmd` invocation retains the `xmd repl '<location>'`
+form when the first executable on the host's absolute PATH search resolves to
+the running binary. This form uses the caller's PATH when pasted.
+
+The installed `xmd-dev` launcher supplies its absolute invocation path and
+fixed Deno launch profile. It resolves the installation symlink for its
+default checkout and accepts `XMD_DEV_ROOT` as an override. The reopen command
+pins the checkout and Deno executable used for the original launch. A direct
+Deno invocation whose flags are unknown reports no launch command. Missing or
+inaccessible launcher evidence has the same result.
 
 Source text, provider output and event origins are shown as written, URLs
 included.

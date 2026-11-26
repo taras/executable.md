@@ -1,3 +1,5 @@
+import { runShell, shellQuote } from "@executablemd/test-support/launch";
+import { readSourceCheckout, requiredRuntimeDirectory } from "../src/node-repl-build.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
 /**
@@ -4566,5 +4568,38 @@ describe("1113: response Cwd is ordinary text", () => {
     expect(responseSurface(ceilingFor(asked)).filter((entry) => entry.name === "Cwd")).toEqual([
       { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
     ]);
+  });
+});
+
+describe("1440: source launch context", () => {
+  it("requires the original directory only for a cwd-relative runtime operand", function* () {
+    const launch = "/original launch";
+    expect(requiredRuntimeDirectory(["--conditions=example"], launch)).toBeUndefined();
+    expect(
+      requiredRuntimeDirectory(["--require", "/absolute host/loader.cjs"], launch),
+    ).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--import=./relative loader.mjs"], launch)).toBe(launch);
+    expect(requiredRuntimeDirectory(["--preload", "./relative loader.ts"], launch)).toBe(launch);
+  });
+
+  it("retains a trailing space in a source checkout and reports its revision and changes", function* () {
+    const temp = yield* useTempDirectory("1440-git-root-");
+    const checkout = temp + "/source checkout ";
+    const git = (args: string) => runShell(`git -C ${shellQuote(checkout)} ${args}`).expect();
+    yield* runShell(`mkdir ${shellQuote(checkout)}`).expect();
+    yield* git("init");
+    const entrypoint = checkout + "/entry.ts";
+    yield* runShell(`touch ${shellQuote(entrypoint)}`).expect();
+    yield* git("add entry.ts");
+    yield* git("-c user.name=Fixture -c user.email=fixture@example.com commit -m seed");
+    const revision = (yield* git("rev-parse HEAD")).stdout.trim();
+    const root = (yield* git("rev-parse --show-toplevel")).stdout.replace(/\n$/, "");
+    expect(root.endsWith("/source checkout ")).toBe(true);
+    yield* runShell(`touch ${shellQuote(checkout + "/untracked")}`).expect();
+    expect(yield* readSourceCheckout(entrypoint)).toEqual({
+      root,
+      revision,
+      changes: "present",
+    });
   });
 });

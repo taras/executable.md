@@ -2,7 +2,17 @@
 set -eu
 
 launcher=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
-root=${XMD_DEV_ROOT:-$(dirname "$launcher")/..}
+source=$launcher
+if [ -z "${XMD_DEV_ROOT:-}" ]; then
+  while [ -L "$source" ]; do
+    target=$(readlink "$source")
+    case $target in
+      /*) source=$target ;;
+      *) source=$(dirname "$source")/$target ;;
+    esac
+  done
+fi
+root=${XMD_DEV_ROOT:-$(dirname "$source")/..}
 root=$(cd "$root" && pwd -P)
 entry=$root/packages/cli/src/deno.ts
 
@@ -11,4 +21,4 @@ if [ ! -f "$entry" ]; then
   exit 1
 fi
 
-XMD_REPL_LAUNCHER=$launcher exec "${XMD_DEV_DENO:-deno}" run --allow-all "$entry" "$@"
+XMD_REPL_LAUNCHER=$launcher XMD_REPL_DENO_PROFILE=allow-all exec "${XMD_DEV_DENO:-deno}" run --allow-all "$entry" "$@"

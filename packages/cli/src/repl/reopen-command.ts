@@ -22,3 +22,9 @@ export function formatLaunchCommand(launch: ReplLaunch): string {
 export function formatReopenCommand(launch: ReplLaunch, location: string): string {
   return `${formatLaunchCommand(launch)} repl ${quote(location)}`;
 }
+
+export function describeReopen(location: string, command: string | undefined): string {
+  return command === undefined
+    ? `Reopen command unavailable. Saved view location:\n  ${quote(location)}`
+    : `Reopen this view with:\n  ${command}`;
+}

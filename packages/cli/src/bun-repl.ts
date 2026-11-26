@@ -18,16 +18,16 @@ import { sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
-import { readSourceCheckout } from "./node-repl-build.ts";
+import { readSourceCheckout, requiredRuntimeDirectory } from "./node-repl-build.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useBunReplTerminal } from "./bun-repl-terminal.ts";
 
-export function* useBunRepl(command: readonly string[]): Operation<void> {
+export function* useBunRepl(command: readonly string[], interactive = true): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
-  const checkout = yield* readSourceCheckout(command.at(-1));
-  const directory = command.length > 2 ? process.cwd() : undefined;
+  const checkout = interactive ? yield* readSourceCheckout(command.at(-1)) : undefined;
+  const directory = requiredRuntimeDirectory(command.slice(1, -1), process.cwd());
   const reopen = { command, directory };
   yield* installReplHost({
     reopen,
