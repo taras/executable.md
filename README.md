@@ -290,11 +290,11 @@ deno task xmd run README.md#Bootstrap --props-package packages/<name>
 
 <If condition={props.package === undefined}>
 
-No package was named, so nothing was reserved. Name one with `--props-package`
-to run the reservation; it explains each step as it takes it, previews the
-placeholder before publishing anything, and refuses rather than touch a package
-that already carries versions.
-[`specs/release-process-spec.md`](specs/release-process-spec.md) §6 carries the
-whole procedure, including the JSR half.
+  No package was named, so nothing was reserved. Name one with `--props-package`
+  to run the reservation; it explains each step as it takes it, previews the
+  placeholder before publishing anything, and refuses rather than touch a package
+  that already carries versions.
+  [`specs/release-process-spec.md`](specs/release-process-spec.md) §6 carries the
+  whole procedure, including the JSR half.
 
 </If>

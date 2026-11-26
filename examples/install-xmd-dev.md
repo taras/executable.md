@@ -17,7 +17,7 @@ test -f scripts/xmd-dev && test -x scripts/xmd-dev
 ```
 
 <If condition={source.exitCode !== 0}>
-<Fail message="No executable scripts/xmd-dev was found here. Go to the root of your prepared checkout and run xmd run examples/install-xmd-dev.md again." />
+  <Fail message="No executable scripts/xmd-dev was found here. Go to the root of your prepared checkout and run xmd run examples/install-xmd-dev.md again." />
 </If>
 
 ```sh exec as="destination"
@@ -25,7 +25,7 @@ test -n "${HOME:-}" && printf '%s/.local/xmd-dev/bin/xmd-dev\n' "$HOME"
 ```
 
 <If condition={!destination.stdout.startsWith("/")}>
-<Fail message="Set HOME to the absolute path of your home directory, then run xmd run examples/install-xmd-dev.md again." />
+  <Fail message="Set HOME to the absolute path of your home directory, then run xmd run examples/install-xmd-dev.md again." />
 </If>
 
 <Let as="installedPath" value={destination.stdout.trimEnd()} />
@@ -42,28 +42,28 @@ mkdir -p "$HOME/.local/xmd-dev/bin" &&
 
 <If condition={install.exitCode !== 0}>
 
-```sh exec as="expected"
-realpath scripts/xmd-dev
-```
+  ```sh exec as="expected"
+  realpath scripts/xmd-dev
+  ```
 
-<If condition={expected.exitCode !== 0}>
-<Fail message={expected.stderr.trim()} />
-</If>
+  <If condition={expected.exitCode !== 0}>
+    <Fail message={expected.stderr.trim()} />
+  </If>
 
-```sh exec as="existing"
-link="$HOME/.local/xmd-dev/bin/xmd-dev"
-test -L "$link" && test -f "$link" && realpath "$link"
-```
+  ```sh exec as="existing"
+  link="$HOME/.local/xmd-dev/bin/xmd-dev"
+  test -L "$link" && test -f "$link" && realpath "$link"
+  ```
 
-<If condition={existing.exitCode !== 0 || existing.stdout !== expected.stdout}>
-<Let as="refusal">
+  <If condition={existing.exitCode !== 0 || existing.stdout !== expected.stdout}>
+    <Let as="refusal">
 
-Could not install {installedPath}. Move a conflicting command aside before
-retrying.
+      Could not install {installedPath}. Move a conflicting command aside before
+      retrying.
 
-</Let>
-<Fail message={refusal.trim() + " " + install.stderr.trim()} />
-</If>
+    </Let>
+    <Fail message={refusal.trim() + " " + install.stderr.trim()} />
+  </If>
 
 </If>
 
@@ -73,32 +73,32 @@ command -v xmd-dev
 
 <Output>
 
-<If condition={install.exitCode === 0}>
+  <If condition={install.exitCode === 0}>
 
-Installed the launcher at {installedPath}.
+    Installed the launcher at {installedPath}.
 
-<Else>
+    <Else>
 
-The launcher at {installedPath} already points to this checkout.
+      The launcher at {installedPath} already points to this checkout.
 
-</Else>
-</If>
+    </Else>
+  </If>
 
-<If condition={selected.stdout !== destination.stdout}>
+  <If condition={selected.stdout !== destination.stdout}>
 
-Run this in your current shell to select this launcher.
+    Run this in your current shell to select this launcher.
 
-```sh
-export PATH="$HOME/.local/xmd-dev/bin:$PATH"
-```
+    ```sh
+    export PATH="$HOME/.local/xmd-dev/bin:$PATH"
+    ```
 
-</If>
+  </If>
 
-Confirm which launcher your shell selects and check its version.
+  Confirm which launcher your shell selects and check its version.
 
-```sh
-command -v xmd-dev
-xmd-dev --version
-```
+  ```sh
+  command -v xmd-dev
+  xmd-dev --version
+  ```
 
 </Output>
