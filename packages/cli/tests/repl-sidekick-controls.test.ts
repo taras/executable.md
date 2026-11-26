@@ -4575,6 +4575,9 @@ describe("1440: source launch context", () => {
   it("requires the original directory only for a cwd-relative runtime operand", function* () {
     const launch = "/original launch";
     expect(requiredRuntimeDirectory(["--conditions=example"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--require=fs"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--import", "node:fs/promises"], launch)).toBeUndefined();
+    expect(requiredRuntimeDirectory(["--experimental-config-file=fs"], launch)).toBe(launch);
     expect(
       requiredRuntimeDirectory(["--require", "/absolute host/loader.cjs"], launch),
     ).toBeUndefined();

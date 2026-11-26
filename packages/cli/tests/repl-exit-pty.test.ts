@@ -824,6 +824,7 @@ if (cliRuntime() !== "deno") {
             expectedCwd: project,
           },
           { options: [], nodeOptions: '--require "./local loader.cjs"', expectedCwd: project },
+          { options: [], nodeOptions: "--require=fs", expectedCwd: nested },
           {
             options: [],
             nodeOptions: "--conditions=private-condition-witness",

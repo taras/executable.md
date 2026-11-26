@@ -1,5 +1,6 @@
 import { exec, Stdio } from "@effectionx/process";
 import { scoped, until } from "effection";
+import { isBuiltin } from "node:module";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative } from "node:path";
 import process from "node:process";
@@ -78,14 +79,17 @@ function* inspectCheckout(entrypoint: string | undefined) {
   }
 }
 
-const cwdRelativeOptions = new Set([
+const moduleOptions = new Set([
   "-r",
   "--require",
   "--import",
   "--loader",
   "--experimental-loader",
-  "--experimental-config-file",
   "--preload",
+]);
+
+const fileOptions = new Set([
+  "--experimental-config-file",
   "--config",
   "--env-file",
   "--env-file-if-exists",
@@ -96,11 +100,17 @@ export function requiredRuntimeDirectory(options: readonly string[], directory: 
     const option = options[index] ?? "";
     const equals = option.indexOf("=");
     const name = equals === -1 ? option : option.slice(0, equals);
-    if (cwdRelativeOptions.has(name)) {
-      const value = equals === -1 ? options[++index] : option.slice(equals + 1);
-      if (value !== undefined && !isAbsolute(value) && !URL.canParse(value)) {
-        return directory;
-      }
+    const takesModule = moduleOptions.has(name);
+    if (!takesModule && !fileOptions.has(name)) {
+      continue;
+    }
+    const value = equals === -1 ? options[++index] : option.slice(equals + 1);
+    if (
+      value !== undefined &&
+      !isAbsolute(value) &&
+      !(takesModule && (isBuiltin(value) || URL.canParse(value)))
+    ) {
+      return directory;
     }
   }
   return undefined;
