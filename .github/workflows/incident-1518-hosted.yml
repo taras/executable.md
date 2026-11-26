@@ -15,12 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ee06f33e09c4843da6f8dff9786355716dbcd84c
+          ref: 4f0d6be4493b80df795616352b42b4ec9cec38cb
           path: repl bench checkout
 
       - name: Verify the exact source revision
         working-directory: repl bench checkout
-        run: test "$(git rev-parse HEAD)" = ee06f33e09c4843da6f8dff9786355716dbcd84c
+        run: test "$(git rev-parse HEAD)" = 4f0d6be4493b80df795616352b42b4ec9cec38cb
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
