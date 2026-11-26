@@ -136,6 +136,7 @@ import {
   entrySettles,
   intoComposer,
   sendMessage,
+  sidekickIdle,
   SIDEKICK,
   typed,
 } from "./support/screen-journeys.ts";
@@ -5301,7 +5302,10 @@ describe("resume retention and mounted retained recovery corrections", () => {
     yield* intoComposer(page);
     held.host.fake.script({ reply: "<Output>Recovered.</Output>" });
     yield* page.key("Enter");
-    yield* page.until("the completed recovery", (one) => one.shows("Recovered."));
+    yield* page.until(
+      "the settled recovery",
+      (one) => one.shows("Recovered.") && sidekickIdle(one),
+    );
     held.host.fake.identity("a different native conversation");
     const prompts = held.host.fake.prompts.length;
     yield* sendMessage(page, "Do not send to a different conversation.");
