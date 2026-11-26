@@ -14,18 +14,35 @@ import { installTodoSource } from "./node-todo-source.ts";
 import { randomBytes } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { sep } from "node:path";
+import { isAbsolute, resolve, sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
+import { readSourceCheckout } from "./node-repl-build.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useDenoReplTerminal } from "./deno-repl-terminal.ts";
 
-export function* useDenoRepl(): Operation<void> {
+export function* useDenoRepl(
+  command: readonly string[],
+  entrypoint: string,
+  launcher: string | undefined,
+): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
+  const checkout = yield* readSourceCheckout(entrypoint);
+  const reopen =
+    launcher !== undefined && isAbsolute(launcher)
+      ? {
+          command: [launcher],
+          assignments: {
+            XMD_DEV_ROOT: resolve(entrypoint, "../../../.."),
+            XMD_DEV_DENO: process.execPath,
+          },
+        }
+      : { command };
   yield* installReplHost({
+    reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.
     // A reply reads these as the host's own facts; nothing downstream sniffs
@@ -34,6 +51,8 @@ export function* useDenoRepl(): Operation<void> {
       replHostFacts({
         runtime: `deno ${process.versions.deno ?? "unknown"} from source`,
         version: XMD_VERSION,
+        launch: { command },
+        checkout,
         platform: process.platform,
         architecture: process.arch,
       }),

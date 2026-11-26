@@ -38,6 +38,12 @@ const UPGRADE: UpgradeAssembly = {
   architecture: process.arch,
 };
 
+const COMMAND = [
+  process.execPath,
+  ...process.execArgv.filter((option) => !/^--inspect(?:-brk|-wait)?(?:=|$)/.test(option)),
+  ENTRYPOINT,
+];
+
 if (isReplSubmit(process.argv.slice(2))) {
   try {
     process.exitCode = await run(function* () {
@@ -52,7 +58,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       try {
         process.on("SIGINT", onInterrupt);
         yield* usePosixSidekickTransport(process.platform);
-        yield* useBunRepl();
+        yield* useBunRepl(COMMAND);
         return yield* runReplSubmit(
           process.argv.slice(2),
           (options) => readInputStream(process.stdin, options),
@@ -87,7 +93,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     yield* API.Env.around(
       {
         *command([xmdArgs = []]) {
-          return [process.execPath, ENTRYPOINT, ...xmdArgs];
+          return [...COMMAND, ...xmdArgs];
         },
 
         *compile([source, options]) {
@@ -124,7 +130,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       // A terminal and a history, and no entry capability: this runtime names
       // no native adapter, so `<Issue>` in an entry reaches its ordinary
       // missing-provider refusal.
-      { install: useBunRepl },
+      { install: () => useBunRepl(COMMAND) },
     );
   });
 }

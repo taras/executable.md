@@ -19,12 +19,18 @@ import { type Operation, until } from "effection";
 import { ReplHost } from "./repl/host.ts";
 import type { ReplHostFact } from "./repl/host.ts";
 import { ReplStorage } from "./repl/storage.ts";
+import {
+  formatLaunchCommand,
+  formatReopenCommand,
+  type ReplLaunch,
+} from "./repl/reopen-command.ts";
 import { releaseTargetFor } from "./release-targets.ts";
 
 /** What a runtime states about itself for the REPL to use. */
 export interface ReplHostCapabilities {
   /** This platform's per-user data directory. */
   dataRoot(): string;
+  reopen?: ReplLaunch;
   /**
    * What this process is standing on, for a reply that asks.
    *
@@ -71,6 +77,11 @@ export function* installReplHost(host: ReplHostCapabilities): Operation<void> {
               return described();
             },
           }),
+      *reopenCommand([location], next): Operation<string> {
+        return host.reopen === undefined
+          ? yield* next(location)
+          : formatReopenCommand(host.reopen, location);
+      },
       // deno-lint-ignore require-yield
       *identify(): Operation<string> {
         return host.identify();
@@ -98,9 +109,7 @@ export function* installReplHost(host: ReplHostCapabilities): Operation<void> {
  * that as two different machines.
  *
  * The release target is derived from the platform triple rather than stated,
- * and it is the one fact here that can be absent: a platform the release matrix
- * does not publish for has no target, and saying so is the truth about it. A
- * host running on one is still a host — it just belongs to no published build.
+ * and is unknown on platforms outside the release matrix.
  */
 export function replHostFacts(host: {
   /** The runtime and its version, as the process names them. */
@@ -111,10 +120,31 @@ export function replHostFacts(host: {
   readonly platform: string;
   /** Node's `process.arch` for the machine this is running on. */
   readonly architecture: string;
+  readonly launch: ReplLaunch;
+  readonly binary?: string;
+  readonly checkout?: {
+    readonly root?: string;
+    readonly revision?: string;
+    readonly changes?: string;
+  };
 }): readonly ReplHostFact[] {
   return Object.freeze([
     Object.freeze({ label: "runtime", value: host.runtime }),
     Object.freeze({ label: "xmd", value: host.version }),
+    { label: "source checkout", value: host.checkout?.root },
+    { label: "source revision", value: host.checkout?.revision },
+    { label: "source local changes at launch", value: host.checkout?.changes },
+    { label: "compiled executable", value: host.binary },
+    { label: "launch arguments (JSON)", value: JSON.stringify(host.launch.command) },
+    {
+      label: "launch environment overrides (JSON)",
+      value: JSON.stringify(host.launch.assignments ?? {}),
+    },
+    { label: "required launch working directory", value: host.launch.directory ?? "none" },
+    {
+      label: "launch command (POSIX shell)",
+      value: formatLaunchCommand(host.launch),
+    },
     Object.freeze({
       label: "release target",
       value: releaseTargetFor(host.platform, host.architecture)?.target,

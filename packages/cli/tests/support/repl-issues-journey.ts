@@ -123,7 +123,7 @@ export function* ended(pty: Pty): Operation<number> {
 
 /** The one location this command printed for a caller to come back with. */
 export function printedLocation(screen: string): string {
-  const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
+  const found = screen.match(/repl '(xmd:\/\/repl\/[^']+)'/);
   if (found === null || found[1] === undefined) {
     throw new Error(
       `this command printed no reopenable location. screen=${JSON.stringify(screen)}`,

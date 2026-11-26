@@ -1,3 +1,4 @@
+import { ReplHost } from "./host.ts";
 import type { EntryRestoreObserver, EntryRestoreProgress } from "./paged-history.ts";
 import { turnUsage, usageDetails, usageSummary } from "./usage.ts";
 import { Repl } from "../repl-api.ts";
@@ -580,6 +581,7 @@ function* restoreScreen(
     let maximum = 0;
     let page = 1;
     const fits = createPlainFitStore();
+    const command = yield* ReplHost.operations.reopenCommand(encodeLocation(state.route));
     const compose: ReplCompose = function* (size) {
       const view = reading();
       const stopped = view.failure !== undefined;
@@ -608,6 +610,7 @@ function* restoreScreen(
       return {
         ...refusedView(state, "", size, keyOfFocus(tree)),
         restore: {
+          command,
           started: view.started,
           at,
           phases: view.phases,

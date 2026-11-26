@@ -112,6 +112,7 @@ import { useAcpxProvider } from "@executablemd/acp";
 import { API, command as hostCommand, cwd, env, Permissions } from "@executablemd/runtime";
 import { runReplProgram, withColdReplStartup } from "./repl/program.ts";
 import { ReplTerminal } from "./repl/terminal.ts";
+import { ReplHost } from "./repl/host.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
@@ -985,7 +986,7 @@ const REPL_HELP = [
   "",
   "  The screen always shows a location of the form",
   "  xmd://repl/<execution>/<surface>..., and when the command ends it prints the",
-  "  whole xmd repl <location> that reopens the one it ended at. Running it",
+  "  whole shell command that reopens the one it ended at. Running it",
   "  reopens the same retained history and selects the same view — in this",
   "  process or another one, from the history file alone.",
 ].join("\n");
@@ -3713,27 +3714,8 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      // The command that reopens this view, not the location on its own. What a
-      // person wants when a full-screen program lets go of their terminal is
-      // something they can run; the location is one argument of it.
-      //
-      // Quoted because a location carries `?`, `&` and `=` structurally — an
-      // unquoted `&` would background the command — and single-quoted in
-      // particular because a location can never contain a `'`: every character
-      // outside `[A-Za-z0-9-._~:@]` is percent-encoded on the way in, so there is
-      // nothing in it that can close the quote.
-      // Said rather than left to be inferred: a bare command line is something a
-      // person has to recognize before it is useful, and this is the moment they
-      // have just stopped looking at the screen that would have explained it.
-      //
-      // "view" and "reopen" are the words `specs/repl-spec.md` already uses for
-      // this. Not "session" — in this product a Session is an Agent conversation,
-      // and the Sessions surface shows its turns, so resuming one would name
-      // something narrower than what the location restores.
-      //
-      // Indented rather than prefixed, so the second line is still exactly what
-      // somebody can paste.
-      const reopen = `Reopen this view with:\n  xmd repl '${ran.value.location}'`;
+      const commandLine = yield* ReplHost.operations.reopenCommand(ran.value.location);
+      const reopen = `Reopen this view with:\n  ${commandLine}`;
       const written = yield* deliverWhole(`${reopen}\n`, process.stdout);
       if (!written.ok) {
         console.error(

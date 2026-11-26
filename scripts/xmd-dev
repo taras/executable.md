@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+set -eu
+
+launcher=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
+root=${XMD_DEV_ROOT:-$(dirname "$launcher")/..}
+root=$(cd "$root" && pwd -P)
+entry=$root/packages/cli/src/deno.ts
+
+if [ ! -f "$entry" ]; then
+  printf 'xmd-dev: no CLI entrypoint at %s\n' "$entry" >&2
+  exit 1
+fi
+
+XMD_REPL_LAUNCHER=$launcher exec "${XMD_DEV_DENO:-deno}" run --allow-all "$entry" "$@"

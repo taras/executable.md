@@ -27,7 +27,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { cliRuntime, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
+import {
+  cliBase,
+  cliRuntime,
+  cliShellCommand,
+  shellQuote,
+} from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { execFile, spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -710,12 +715,13 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       expect(printed).toHaveLength(1);
 
       // And runnable exactly as printed: the location is one quoted argument of
-      // an `xmd repl` command, so somebody who has just been handed their
+      // the running host's command, so somebody who has just been handed their
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
       expect(after).toContain("Reopen this view with:");
-      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
+      expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      expect(after).toMatch(/repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
 
@@ -763,12 +769,13 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       expect(printed).toHaveLength(1);
 
       // And runnable exactly as printed: the location is one quoted argument of
-      // an `xmd repl` command, so somebody who has just been handed their
+      // the running host's command, so somebody who has just been handed their
       // terminal back can paste the line rather than assemble one. Under a line
       // that says what it is for, because the screen that would have explained it
       // has just gone.
       expect(after).toContain("Reopen this view with:");
-      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
+      expect(after.split("Reopen this view with:")[1]).toContain(cliBase()[0]);
+      expect(after).toMatch(/repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
 });

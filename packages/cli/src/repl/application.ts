@@ -1391,6 +1391,7 @@ export interface ReplRestorePhase {
 }
 
 interface ReplRestoreView {
+  readonly command: string;
   readonly started: number;
   readonly at: number;
   readonly phases: readonly ReplRestorePhase[];
@@ -6086,7 +6087,7 @@ function restoreRows(view: ReplView, restore: ReplRestoreView): readonly Describ
     width - time.length - 3,
   );
   write("restore-header", heading.padEnd(width - time.length - 2) + time, "pane-heading");
-  const command = `xmd repl '${encodeLocation(view.state.route)}'`;
+  const command = restore.command;
   const commandWidth = width - 4;
   if (width >= 85) {
     write("before-command", " ", "metadata");
