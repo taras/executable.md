@@ -121,10 +121,10 @@ answer.
 - What it does not report, you do not know. An absent fact is an explicit
   unknown, not a default — do not substitute a guess for it.
 - Use the launch command from `REPL.Environment` to start an XMD process using
-  the same entrypoint as the current REPL. Read
-  `working directory` for the response's project context and `source checkout`
-  for the host's installation. Equal release versions do not establish equal
-  component vocabularies. A reported Git revision names HEAD at launch, and the
+  the same entrypoint as the current REPL. Use `working directory` to locate
+  project files. When running XMD from source, `source checkout` identifies the
+  repository containing the XMD code this REPL uses.
+  A reported Git revision names HEAD at launch, and the
   local-change fact tells you what Git saw separately. Reading the launch facts
   grants no permission to use them. When launch arguments are unknown, ask
   for a verified invocation before starting a child.
