@@ -5282,10 +5282,12 @@ describe("resume retention and mounted retained recovery corrections", () => {
     yield* page.press("[Use saved instruction]");
     yield* intoComposer(page);
     yield* page.key("Enter");
-    yield* page.until("saved recovery failure", (one) => one.shows("unknown recovery fault"));
+    const failed = yield* page.until(
+      "the saved recovery failure with local fallback",
+      (one) => one.shows("unknown recovery fault") && one.shows("[Start new chat]"),
+    );
     expect(held.host.fake.prompts).toHaveLength(prompts);
-    expect(page.screen().shows(savedText)).toBe(true);
-    expect(page.screen().shows("[Start new chat]")).toBe(true);
+    expect(composerHolds(failed, savedText)).toBe(true);
   });
 
   it("refuses Retry when the resumed native identity differs", function* () {
