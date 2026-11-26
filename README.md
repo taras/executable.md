@@ -155,6 +155,12 @@ and checks read what setup prepared and leave tracked files, `node_modules` and
 
 ## Build
 
+Run the prepared source CLI from your project directory with the checkout's
+`scripts/xmd-dev` launcher. Add the checkout's `scripts` directory to PATH to
+invoke it as `xmd-dev`. Set `XMD_DEV_ROOT` to select a different prepared
+checkout. The launcher keeps the caller's project directory and identifies
+itself to the REPL so the printed reopen command can use it again.
+
 Compile the standalone `xmd` binary: prepare the checkout and then build,
 yielding `dist/xmd`, a self-contained executable for this host.
 

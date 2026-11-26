@@ -12,7 +12,7 @@ import {
 } from "../../../packages/cli/tests/support/restore-progress.ts";
 import { useTempDirectory } from "../../../scripts/lib/temp-directory.ts";
 import { connectDriver } from "../lib/driver-client.ts";
-import { exitResult } from "../lib/protocol.ts";
+import { exitResult, point } from "../lib/protocol.ts";
 import { prepareRun, root } from "../lib/run.ts";
 
 Deno.test("driver reports the final CLI hint and ignores the cold restore command on refusal", () =>
@@ -27,7 +27,7 @@ Deno.test("driver reports the final CLI hint and ignores the cold restore comman
     );
     const fixture = yield* savedRestoreFixture(yield* useMountedHost({ dataRoot }), 155);
     const location = `xmd://repl/${fixture.id}/entries/entry-2`;
-    const viewport = { columns: 72, rows: 20 };
+    const viewport = { columns: 240, rows: 20 };
     for (const refused of [false, true]) {
       if (refused) {
         yield* writeTextFile(fixture.files.entries, invalidRestoreEntries(fixture));
@@ -46,12 +46,13 @@ Deno.test("driver reports the final CLI hint and ignores the cold restore comman
         );
         const { dispatch, close } = yield* connectDriver(launch);
         if (refused) {
-          yield* dispatch({ action: "wait", text: `xmd repl '${location}'` });
+          yield* dispatch({ action: "wait", text: `repl '${location}'` });
           yield* dispatch({ action: "wait", text: "Restoring rounds · 118 / 155 · stopped" });
           yield* dispatch({ action: "key", key: "Escape" });
         } else {
           yield* dispatch({ action: "wait", text: "Saved round 2 witness." });
-          yield* dispatch({ action: "key", key: "Ctrl+C" });
+          const exit = point.parse(yield* dispatch({ action: "wait", text: "[exit]" }));
+          yield* dispatch({ action: "click", at: exit });
         }
         const result = exitResult.parse(yield* dispatch({ action: "exit" }));
         assert.equal((yield* close()).code, 0);

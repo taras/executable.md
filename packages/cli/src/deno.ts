@@ -77,6 +77,12 @@ const USAGE: PromptUsageHost = { host: "deno-source", xmd: { version: XMD_VERSIO
 // The internal helper mode runs before anything public is parsed. It is not a
 // command: it appears in no help and in no public grammar, and a caller who did
 // not select it gets the ordinary command line unchanged.
+const COMMAND = [process.execPath, "run", "--allow-all", ENTRYPOINT];
+const LAUNCHER = process.env["XMD_REPL_LAUNCHER"];
+if (LAUNCHER !== undefined) {
+  delete process.env["XMD_REPL_LAUNCHER"];
+}
+
 if (isReplSubmit(process.argv.slice(2))) {
   try {
     process.exitCode = await run(function* () {
@@ -91,7 +97,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       try {
         process.on("SIGINT", onInterrupt);
         yield* usePosixSidekickTransport(process.platform);
-        yield* useDenoRepl();
+        yield* useDenoRepl(COMMAND, ENTRYPOINT, LAUNCHER);
         return yield* runReplSubmit(
           process.argv.slice(2),
           (options) => readInputStream(process.stdin, options),
@@ -128,7 +134,7 @@ if (isReplSubmit(process.argv.slice(2))) {
     yield* API.Env.around(
       {
         *command([xmdArgs = []]) {
-          return [process.execPath, "run", "--allow-all", ENTRYPOINT, ...xmdArgs];
+          return [...COMMAND, ...xmdArgs];
         },
 
         *compile([source, options]) {
@@ -176,7 +182,7 @@ if (isReplSubmit(process.argv.slice(2))) {
       // supply neither half.
       {
         select: () => selectReplEntryHost(HELPER),
-        install: () => useDenoRepl(),
+        install: () => useDenoRepl(COMMAND, ENTRYPOINT, LAUNCHER),
       },
     );
   });

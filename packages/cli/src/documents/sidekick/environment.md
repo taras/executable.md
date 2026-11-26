@@ -120,6 +120,14 @@ answer.
   snapshot retained with your operation, not a cache you can rely on later.
 - What it does not report, you do not know. An absent fact is an explicit
   unknown, not a default — do not substitute a guess for it.
+- To start a child with this build, use the reported launch arguments and
+  required working directory and environment overrides, or append the subcommand and its options
+  to the reported POSIX shell command. Keep the argument boundaries. Read
+  `working directory` for the response's project context and `source checkout`
+  for the host's installation. Equal release versions do not establish equal
+  component vocabularies. A reported Git revision names HEAD at launch, and the
+  local-change fact tells you what Git saw separately. Reading the launch facts
+  grants no permission to use them.
 - Component documentation is not permission. `<REPL.Syntax />` describes what
   the entry vocabulary *is*; whether a particular execution admits a particular
   capability is a separate question, answered when the entry runs.

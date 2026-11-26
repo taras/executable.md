@@ -32,6 +32,7 @@ import { captureReplEntry } from "./fixtures/repl/failure-journal.ts";
  * covered here.
  */
 
+import { replHostFacts } from "../src/repl-assembly.ts";
 import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
@@ -2333,6 +2334,34 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     // The rule is in the snapshot, because the snapshot is what comes back as
     // feedback whether or not the chapter was read.
     expect(answer.value).toContain("stop rather than assume a value for it");
+  });
+
+  it("1440: host invocation retains argv and cwd apart from the response project", function* () {
+    const command = ["/runtime with spaces/node", "--import", "./loader's file.js", "/host/xmd.js"];
+    const directory = "/launcher context";
+    yield* ReplHost.around({
+      *environment() {
+        return replHostFacts({
+          runtime: "node source",
+          version: "0.14.1",
+          platform: "darwin",
+          architecture: "arm64",
+          launch: { command, directory },
+        });
+      },
+    });
+    const session = yield* opened("launch-facts", new InMemoryStream());
+    const answer = yield* sidekickRequests(reading(session), noSubmission).environment();
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(answer.value).toContain(`- working directory: ${yield* cwd()}`);
+    expect(answer.value).toContain(`- required launch working directory: ${directory}`);
+    expect(answer.value).toContain(`- launch arguments (JSON): ${JSON.stringify(command)}`);
+    expect(answer.value).toContain(
+      "cd '/launcher context' && '/runtime with spaces/node' --import './loader'\\''s file.js' /host/xmd.js",
+    );
+    expect(answer.value).toContain("- source revision: not known to this host");
   });
 
   it("1075: environment distinguishes fresh response, session-start and import policies without work", function* () {

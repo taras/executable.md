@@ -14,18 +14,20 @@ import { installTodoSource } from "./node-todo-source.ts";
 import { randomBytes } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { sep } from "node:path";
+import { basename, sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useCompiledReplTerminal } from "./compiled-repl-terminal.ts";
 
-export function* useCompiledRepl(): Operation<void> {
+export function* useCompiledRepl(command: readonly string[]): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
+  const reopen = { command: basename(process.execPath) === "xmd" ? ["xmd"] : command };
   yield* installReplHost({
+    reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.
     // A reply reads these as the host's own facts; nothing downstream sniffs
@@ -34,6 +36,8 @@ export function* useCompiledRepl(): Operation<void> {
       replHostFacts({
         runtime: `a compiled binary built with deno ${process.versions.deno ?? "unknown"}`,
         version: XMD_VERSION,
+        launch: { command },
+        binary: process.execPath,
         platform: process.platform,
         architecture: process.arch,
       }),

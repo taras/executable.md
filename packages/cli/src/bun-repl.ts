@@ -18,22 +18,29 @@ import { sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
+import { readSourceCheckout } from "./node-repl-build.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useBunReplTerminal } from "./bun-repl-terminal.ts";
 
-export function* useBunRepl(): Operation<void> {
+export function* useBunRepl(command: readonly string[]): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
+  const checkout = yield* readSourceCheckout(command.at(-1));
+  const directory = command.length > 2 ? process.cwd() : undefined;
+  const reopen = { command, directory };
   yield* installReplHost({
+    reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.
     // A reply reads these as the host's own facts; nothing downstream sniffs
     // for a runtime global to work them out again.
     environment: () =>
       replHostFacts({
-        runtime: `bun ${process.versions.bun ?? "unknown"} from its npm package`,
+        runtime: `bun ${process.versions.bun ?? "unknown"}`,
         version: XMD_VERSION,
+        launch: reopen,
+        checkout,
         platform: process.platform,
         architecture: process.arch,
       }),
