@@ -5403,7 +5403,10 @@ function sessionResumeFailure(
     error !== null &&
     Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED"
   ) {
-    const failure = new SessionResumeRequiredError(sessionKey);
+    const failure = new SessionResumeRequiredError(
+      sessionKey,
+      source?.stage === "held-session-ensure" ? "held" : "ordinary",
+    );
     if (source === undefined) {
       return failure;
     }
@@ -5453,10 +5456,11 @@ function resumeProtocolFacts(error: unknown, depth = 0): AcpRuntimeTurnResultErr
 }
 
 export class SessionResumeRequiredError extends Error {
-  constructor(sessionKey: string, options?: ErrorOptions) {
+  constructor(sessionKey: string, caller: "held" | "ordinary" = "ordinary") {
     super(
-      `Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`,
-      options,
+      caller === "held"
+        ? `Conversation "${sessionKey}" could not be resumed. Retry the saved request to try the same conversation again.`
+        : `Session "${sessionKey}" could not be resumed. Retry this operation with the same <Session> if its caller permits; a different <Session> starts a new conversation.`,
     );
     this.name = "SessionResumeRequiredError";
   }

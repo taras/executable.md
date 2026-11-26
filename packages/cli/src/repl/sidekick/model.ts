@@ -584,7 +584,7 @@ export interface SidekickRequest {
    * whether this request was the one that ran it.
    */
   readonly turn: number | undefined;
-  readonly resumeRefused?: true;
+  readonly payloadUnreconstructable?: true;
 }
 
 /**
@@ -632,10 +632,10 @@ export function retryable(
   const request = known.requests.find(
     (one) => one.conversation === conversation && one.kind === "message" && one.message === message,
   );
-  if (request?.resumeRefused === true) {
+  if (request?.payloadUnreconstructable === true) {
     return Err(
       new SidekickProjectionError(
-        "This conversation could not be resumed and is not offered for Retry.",
+        "This request carried feedback whose exact payload cannot be reconstructed for Retry.",
       ),
     );
   }
@@ -723,7 +723,8 @@ export function requestsFromHistory(
     message: number | undefined;
     turn: number | undefined;
     outcomes: number;
-    resumeRefused?: true;
+    carriedFeedback?: true;
+    payloadUnreconstructable?: true;
   }[] = [];
   /** The request whose records are still being read, per conversation. */
   const current = new Map<string, (typeof requests)[number]>();
@@ -733,6 +734,7 @@ export function requestsFromHistory(
       // A message carrying recovered feedback retains the final composed input
       // after its original source, before either has reached a canonical turn.
       if (active?.kind === "message" && active.outcomes === 0) {
+        active.carriedFeedback = true;
         continue;
       }
     }
@@ -773,16 +775,15 @@ export function requestsFromHistory(
       continue;
     }
     const outcome = parsed.value.result;
-    if (
-      outcome.status === "ok" &&
-      parsePromptRecord(outcome.value)?.error?.diagnostic?.stage === "held-session-ensure"
-    ) {
-      // Automatic feedback writes its own request in begin, which this attempt
-      // never reached. Only an explicit, still-open message can own it.
+    const saved = outcome.status === "ok" ? parsePromptRecord(outcome.value) : undefined;
+    if (saved?.error?.diagnostic?.stage === "held-session-ensure") {
+      // Automatic feedback has not begun a request at this boundary.
       if (holding.kind !== "message" || holding.outcomes !== 0) {
         continue;
       }
-      holding.resumeRefused = true;
+      if (holding.carriedFeedback === true) {
+        holding.payloadUnreconstructable = true;
+      }
     }
     holding.outcomes += 1;
     if (holding.outcomes > 1) {
@@ -805,7 +806,9 @@ export function requestsFromHistory(
           at: held.at,
           message: held.message,
           turn: held.turn,
-          ...(held.resumeRefused === true ? { resumeRefused: true as const } : {}),
+          ...(held.payloadUnreconstructable === true
+            ? { payloadUnreconstructable: true as const }
+            : {}),
         }),
       ),
     ),
