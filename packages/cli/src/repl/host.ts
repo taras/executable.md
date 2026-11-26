@@ -68,7 +68,7 @@ export interface ReplHostApi {
    * text that is rendered and never parsed.
    */
   environment(): Operation<readonly ReplHostFact[]>;
-  reopenCommand(location: string): Operation<string | undefined>;
+  command(location: string): Operation<string | undefined>;
   /**
    * An opaque, URL-safe name for one new execution.
    *
@@ -113,7 +113,7 @@ export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
     throw new ReplHostError("describing this host");
   },
   // deno-lint-ignore require-yield
-  *reopenCommand(location: string): Operation<string | undefined> {
+  *command(location: string): Operation<string | undefined> {
     return formatReopenCommand({ command: ["xmd"] }, location);
   },
   // deno-lint-ignore require-yield

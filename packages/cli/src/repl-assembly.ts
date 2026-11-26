@@ -77,7 +77,7 @@ export function* installReplHost(host: ReplHostCapabilities): Operation<void> {
               return described();
             },
           }),
-      *reopenCommand([location], next): Operation<string | undefined> {
+      *command([location], next): Operation<string | undefined> {
         if (host.reopen === undefined) {
           return yield* next(location);
         }
