@@ -32,8 +32,8 @@ completion turn can supply the review.
 <Parse schema={{type:"object",properties:{turn:{type:"object",properties:{state:{const:"reply"},reply:{type:"string"}},required:["state","reply"],additionalProperties:false}},required:["turn"]}} as="returned">{outcomeText}</Parse>
 <Dir path={attempt}><Glob include={["raw.txt","receipt.json"]} as="derived" /></Dir>
 <If condition={!derived.includes("raw.txt")}>
-<If condition={!props.publish}><Fail message="The joined review has no saved raw reply. Use the explicit reconcile action; do not repeat the review." /></If>
-<Dir path={attempt}><File path="raw.txt">{returned.turn.reply}</File></Dir>
+  <If condition={!props.publish}><Fail message="The joined review has no saved raw reply. Use the explicit reconcile action; do not repeat the review." /></If>
+  <Dir path={attempt}><File path="raw.txt">{returned.turn.reply}</File></Dir>
 </If>
 <Ticket.Text path={attempt + "/raw.txt"} as="raw" />
 <If condition={raw !== returned.turn.reply}><Fail message="The saved raw reply differs from the joined execution. Preserve both for reconciliation." /></If>
@@ -42,16 +42,16 @@ completion turn can supply the review.
 <If condition={result.revision !== props.revision || result.acceptance.length !== props.delivery.policy.acceptance.length || props.delivery.policy.acceptance.some(clause => !result.acceptance.includes(clause.id)) || result.verdict === "pass" && result.findings.some(finding => finding.blocking)}><Fail message="The joined review must cover every recorded clause on the assigned commit and cannot pass with a blocking finding." /></If>
 <Let as="receipt" value={{...assigned,result,execution:attempt + "/execution.json"}} />
 <If condition={derived.includes("receipt.json")}>
-<Ticket.Text path={attempt + "/receipt.json"} as="receiptText" />
-<Parse schema={{type:"object"}} as="saved">{receiptText}</Parse>
-<If condition={JSON.stringify(saved) !== JSON.stringify(receipt)}><Fail message="The receipt differs from its original joined review. Preserve it for reconciliation." /></If>
-<Else>
-<If condition={!props.publish}><Fail message="The joined review has no completion receipt. Use the explicit reconcile action; do not repeat the review." /></If>
-</Else>
+  <Ticket.Text path={attempt + "/receipt.json"} as="receiptText" />
+  <Parse schema={{type:"object"}} as="saved">{receiptText}</Parse>
+  <If condition={JSON.stringify(saved) !== JSON.stringify(receipt)}><Fail message="The receipt differs from its original joined review. Preserve it for reconciliation." /></If>
+  <Else>
+    <If condition={!props.publish}><Fail message="The joined review has no completion receipt. Use the explicit reconcile action; do not repeat the review." /></If>
+  </Else>
 </If>
 <If condition={props.publish}>
-<Ticket.Checkout repository={props.delivery.repository} as="checkout" />
-<If condition={checkout.head !== props.revision || !checkout.clean}><Fail message="Source changed since the review. Preserve its result; the current source needs its own evidence." /></If>
-<If condition={!derived.includes("receipt.json")}><Dir path={attempt}><File path="receipt.json"><Json value={receipt} /></File></Dir></If>
+  <Ticket.Checkout repository={props.delivery.repository} as="checkout" />
+  <If condition={checkout.head !== props.revision || !checkout.clean}><Fail message="Source changed since the review. Preserve its result; the current source needs its own evidence." /></If>
+  <If condition={!derived.includes("receipt.json")}><Dir path={attempt}><File path="receipt.json"><Json value={receipt} /></File></Dir></If>
 </If>
 <Return value={{...receipt,model:read.state.attempts[read.state.candidate.position].model}} />
