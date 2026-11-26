@@ -1317,7 +1317,8 @@ describe(
         const saved = prompt.error;
         expect(prompt.status).toBe("failed");
         expect(prompt.text).toBe("");
-        expect(saved.message).toContain("Name a different <Session>");
+        expect(saved.message).toContain("could not be resumed");
+        expect(saved.message).not.toContain("Name a different <Session>");
         const sensitive = detail?.startsWith("ghp_") === true;
         expect(saved).toEqual({
           message: saved.message,
@@ -1559,7 +1560,7 @@ describe(
         yield* ensureDir(docs);
 
         const facts = [
-          `Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`,
+          `Session "${sessionKey}" could not be resumed. Retry this operation with the same <Session> if its caller permits; a different <Session> starts a new conversation.`,
           "Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)",
           "Normalization origin: acp",
           'Runtime code: "RUNTIME" (normalizer fallback)',
