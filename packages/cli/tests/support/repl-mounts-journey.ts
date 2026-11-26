@@ -59,7 +59,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       expect(yield* readTextFile(join(old, "process-cwd.txt"))).toBe(old);
       yield* click(first, "[exit]");
       expect(yield* ended(first)).toBe(0);
-      const location = printedLocation((yield* first.shows()).join("\n"));
+      const location = printedLocation(yield* first.finalOutput());
       yield* writeTextFile(join(old, "read.md"), "changed");
       const selected = mode === "unchanged" ? old : mode === "reassigned" ? next : ordinary;
       const flags = mode === "omitted" ? [] : args(selected);
@@ -76,7 +76,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* showing(second, "Ready for Entry 2", 30_000);
       yield* click(second, "[exit]");
       expect(yield* ended(second)).toBe(0);
-      const nextLocation = printedLocation((yield* second.shows()).join("\n"));
+      const nextLocation = printedLocation(yield* second.finalOutput());
       const third = yield* allocate(line([nextLocation, "--allow-absolute", ...flags]), home);
       yield* showing(third, "Ready for Entry 2", 180_000);
       yield* focusPtyDraft(third, 30_000);

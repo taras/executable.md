@@ -30,17 +30,24 @@ export function* useDenoRepl(entrypoint?: string, launcher?: string): Operation<
   const launch =
     launcher === undefined || entrypoint === undefined
       ? undefined
-      : { command: [process.execPath, "run", "--allow-all", entrypoint] };
-  const reopen =
-    launcher === undefined || entrypoint === undefined
-      ? null
       : {
-          command: [launcher],
-          assignments: {
-            XMD_DEV_ROOT: resolve(entrypoint, "../../../.."),
-            XMD_DEV_DENO: process.execPath,
-          },
+          command: [process.execPath, "run", "--allow-all", entrypoint],
+          ...(launcher === "repository-task"
+            ? { assignments: { XMD_REPL_DENO_PROFILE: "repository-task" } }
+            : {}),
         };
+  const reopen =
+    launch === undefined || launcher === undefined || entrypoint === undefined
+      ? null
+      : launcher === "repository-task"
+        ? { ...launch, directory: process.cwd() }
+        : {
+            command: [launcher],
+            assignments: {
+              XMD_DEV_ROOT: resolve(entrypoint, "../../../.."),
+              XMD_DEV_DENO: process.execPath,
+            },
+          };
   yield* installReplHost({
     reopen,
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),

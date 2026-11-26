@@ -97,11 +97,13 @@ describe("1440: installed development and explicit compiled launchers", () => {
     const home = yield* until(realpath(yield* useTempDirectory("xmd-1440-")));
     const bin = join(home, "private bin");
     const project = join(home, "project", "nested");
+    const leading = join(home, "leading PATH directory");
+    yield* ensureDir(join(leading, "xmd"));
     yield* ensureDir(bin);
     yield* ensureDir(project);
     const launcher = join(bin, "xmd-dev");
     yield* until(symlink(join(ROOT, "scripts", "xmd-dev"), launcher));
-    const prefix = `unset XMD_DEV_ROOT XMD_DEV_DENO; export PATH=${shellQuote(bin)}:"$PATH"; cd ${shellQuote(project)} &&`;
+    const prefix = `unset XMD_DEV_ROOT XMD_DEV_DENO; export PATH=${shellQuote(leading)}:${shellQuote(bin)}:"$PATH"; cd ${shellQuote(project)} &&`;
     const version = (yield* runShell(compiled(["--version"])).expect()).stdout.trim();
     const found = yield* runShell(`${prefix} command -v xmd-dev && xmd-dev --version`).expect();
     expect(found.stdout.trim().split("\n")).toEqual([launcher, version]);
@@ -127,7 +129,14 @@ describe("1440: installed development and explicit compiled launchers", () => {
     expect((yield* runShell(`${prefix} xmd --version`).expect()).stdout.trim()).toBe(version);
     expect((yield* runShell(`${prefix} xmd repl`).join()).code).toBe(73);
 
-    for (const command of ["xmd-dev", shellQuote(BINARY), "xmd"]) {
+    const task = `deno task --cwd ${shellQuote(ROOT)} xmd`;
+    expect((yield* runShell(`${prefix} ${task} --version`).expect()).stdout.trim()).toBe(version);
+    const taskOutput = yield* runShell(
+      `${prefix} ${task} run --eval ${shellQuote("<Output>Task argument witness</Output>")}`,
+    ).expect();
+    expect(taskOutput.stdout.trim()).toBe("Task argument witness");
+
+    for (const command of ["xmd-dev", task, shellQuote(BINARY), "xmd"]) {
       if (command === "xmd") {
         yield* until(unlink(decoy));
         yield* until(symlink(BINARY, decoy));
@@ -157,6 +166,10 @@ describe("1440: installed development and explicit compiled launchers", () => {
         }
         if (command === "xmd") {
           expect(printed.startsWith("xmd repl ")).toBe(true);
+        } else if (command === task) {
+          expect(printed).toContain("XMD_REPL_DENO_PROFILE='repository-task'");
+          expect(printed).toContain(" run --allow-all ");
+          expect(printed).toContain(join(ROOT, "packages", "cli", "src", "deno.ts"));
         } else {
           expect(printed).toContain(command === "xmd-dev" ? shellQuote(launcher) : BINARY);
         }

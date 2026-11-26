@@ -84,6 +84,7 @@ const cwdRelativeOptions = new Set([
   "--import",
   "--loader",
   "--experimental-loader",
+  "--experimental-config-file",
   "--preload",
   "--config",
   "--env-file",

@@ -23,9 +23,10 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { type Operation, scoped, sleep, until } from "effection";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readdir } from "node:fs/promises";
+import { chmod, mkdir, readdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { allocate, focusPtyDraft, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
@@ -209,7 +210,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // Left through [exit], with the question still open.
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     // Changed from outside, which is exactly what this execution model allows:
     // a completed result and the environment may disagree.
@@ -468,7 +469,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
 
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     // Changed from outside, which this execution model allows.
     yield* writeTextFile(join(working, "note.md"), "second");
@@ -633,14 +634,30 @@ function* gitShim(home: string): Operation<{ readonly prefix: string; readonly l
   const shim = join(directory, "git");
   yield* writeTextFile(
     shim,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shellQuote(log)}\nexec ${shellQuote(real)} "$@"\n`,
+    `#!/bin/sh\n${yield* projectGitLog(log)}\nexec ${shellQuote(real)} "$@"\n`,
   );
   yield* until(chmod(shim, 0o755));
   yield* writeTextFile(log, "");
   return { prefix: `PATH=${shellQuote(directory)}:$PATH`, log };
 }
 
-/** Every `git` the shim has seen since it was last forgotten. */
+/** Log project Git while forwarding the host's startup observations unchanged. */
+export function* projectGitLog(log: string): Operation<string> {
+  const root = yield* until(realpath(fileURLToPath(new URL("../../../../", import.meta.url))));
+  const probes = [
+    `${join(root, "packages", "cli", "src")}:rev-parse --show-toplevel`,
+    `${root}:--literal-pathspecs ls-files --error-unmatch -- packages/cli/src/${cliRuntime()}.ts`,
+    `${root}:status --porcelain=v2 --branch --untracked-files=normal`,
+  ]
+    .map(shellQuote)
+    .join("|");
+  return `case "$(pwd -P):$*" in
+  ${probes}) ;;
+  *) printf '%s\\n' "$*" >> ${shellQuote(log)} ;;
+esac`;
+}
+
+/** Every project Git command the shim has seen since the log was cleared. */
 function* logged(log: string): Operation<string[]> {
   const held = (yield* exists(log)) ? yield* readTextFile(log) : "";
   return held.split("\n").filter((line) => line !== "");
@@ -831,7 +848,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
 
     yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
-    const location = printedLocation((yield* first.shows()).join("\n"));
+    const location = printedLocation(yield* first.finalOutput());
 
     // Changed from outside: the file, the index and HEAD all move on, which is
     // exactly what this execution model allows.

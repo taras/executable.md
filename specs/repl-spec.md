@@ -1856,7 +1856,10 @@ the running binary. This form uses the caller's PATH when pasted.
 The installed `xmd-dev` launcher supplies its absolute invocation path and
 fixed Deno launch profile. It resolves the installation symlink for its
 default checkout and accepts `XMD_DEV_ROOT` as an override. The reopen command
-pins the checkout and Deno executable used for the original launch. A direct
+pins the checkout and Deno executable used for the original launch. The
+repository's `deno task xmd` declares its fixed Deno profile in the task
+definition. Its reopen command preserves the task's runtime flags and
+launch directory. A direct
 Deno invocation whose flags are unknown reports no launch command. Missing or
 inaccessible launcher evidence has the same result.
 
