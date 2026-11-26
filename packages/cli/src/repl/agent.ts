@@ -65,13 +65,14 @@ import type {
   PermissionOutcome,
   PermissionRequest,
 } from "@executablemd/agent/api";
-import { useAgentPromptPublisher } from "@executablemd/agent/host";
+import { parsePromptRecord, useAgentPromptPublisher } from "@executablemd/agent/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
   AgentPromptHandle,
   AgentPromptPublication,
   AgentPromptPublisher,
 } from "@executablemd/agent/host";
+import { ReplClock } from "./frame.ts";
 import type { ReplWaits } from "./lifecycle.ts";
 import { DurableContext } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -157,7 +158,16 @@ export interface ReplLivePermission {
  * belongs to the same entry the turn did. Everything here is process-local: no
  * slot, key or order reaches a location, the model or the Journal.
  */
+export interface ReplPromptActivity {
+  readonly agent?: string;
+  readonly toolCallId?: string;
+  readonly label: string;
+  readonly started: number;
+  readonly finished?: number;
+}
+
 export interface ReplAgentSlot {
+  readonly activity?: ReplPromptActivity;
   /** The live key this Prompt was observed under, and stays mounted as. */
   readonly key: string;
   /** The admission-order key of the entry whose execution began this Prompt. */
@@ -224,6 +234,7 @@ export interface ReplAgentKernel {
    * entry's execution.
    */
   owning(entry: string): Operation<ExecutionInstallation>;
+  stop(entry: string): Operation<void>;
   /**
    * Account for one appended event, without announcing.
    *
@@ -261,6 +272,7 @@ export class ReplAgentCorrelationError extends Error {
 
 /** Mutable bookkeeping for one observed turn. */
 interface LiveTurn {
+  readonly slot: Slot;
   readonly key: string;
   readonly entry: string;
   readonly coroutine: string;
@@ -281,6 +293,7 @@ interface LiveTurn {
 
 /** Mutable bookkeeping for one observed Prompt's place in the reading. */
 interface Slot {
+  activity: ReplPromptActivity;
   readonly key: string;
   readonly entry: string;
   readonly order: number;
@@ -324,6 +337,7 @@ function frozenSlot(slot: Slot): ReplAgentSlot {
     order: slot.order,
     durable: slot.durable,
     last: slot.last,
+    activity: slot.activity,
   });
 }
 
@@ -381,6 +395,7 @@ function* currentCoroutine(): Operation<string> {
  * it.
  */
 interface Attachment {
+  stopping: boolean;
   readonly entry: string;
   /** The turns this entry is running, none of which a record holds yet. */
   readonly turns: LiveTurn[];
@@ -390,6 +405,17 @@ interface Attachment {
   readonly begun: Map<Scope, LiveTurn>;
   readonly minted: WeakMap<object, LiveTurn>;
   readonly publishing: Map<string, LiveTurn>;
+}
+
+function promptOutcome(status: NonNullable<ReplLiveTurn["status"]>): string {
+  switch (status) {
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Stopped";
+  }
 }
 
 /** Take one live turn down inside the attachment holding it. */
@@ -525,10 +551,9 @@ export function useReplAgent(
     /**
      * Discard what one attachment still holds, because its execution is over.
      *
-     * Whatever is still in it was never transferred — publication is the one thing
-     * that moves a slot out — so this needs no notion of "published" to avoid
-     * taking one down. A request is dropped rather than settled, and nothing is
-     * appended, denied or cancelled on the way out.
+     * An explicit Stop preserves only the interrupted turn's status in its slot.
+     * Other unpublished work is discarded. A request is dropped without a decision,
+     * and teardown appends nothing.
      *
      * One announcement, after every removal, so no reader ever observes half of a
      * teardown.
@@ -538,6 +563,11 @@ export function useReplAgent(
         attachment.turns.length > 0 ||
         attachment.requests.length > 0 ||
         attachment.slots.length > 0;
+      if (attachment.stopping) {
+        transferred.push(
+          ...attachment.slots.filter((slot) => slot.activity.finished !== undefined),
+        );
+      }
       attachment.turns.length = 0;
       attachment.requests.length = 0;
       attachment.slots.length = 0;
@@ -553,9 +583,24 @@ export function useReplAgent(
       }
     }
 
-    function queued(attachment: Attachment, coroutine: string, prompt: string): LiveTurn {
-      const turn: LiveTurn = {
+    function queued(
+      attachment: Attachment,
+      coroutine: string,
+      prompt: string,
+      agent: string | undefined,
+      at: number,
+    ): LiveTurn {
+      const slot: Slot = {
         key: allocate("turn"),
+        entry: attachment.entry,
+        order: ++places,
+        durable: undefined,
+        last: undefined,
+        activity: { agent, label: "Waiting for agent update", started: at },
+      };
+      const turn: LiveTurn = {
+        slot,
+        key: slot.key,
         entry: attachment.entry,
         coroutine,
         prompt,
@@ -569,28 +614,39 @@ export function useReplAgent(
         stopReason: undefined,
         failure: undefined,
       };
-      places += 1;
       attachment.turns.push(turn);
-      // Its place, taken when the Prompt was scheduled rather than when it
-      // finished: a turn that publishes first did not thereby happen first.
-      attachment.slots.push({
-        key: turn.key,
-        entry: attachment.entry,
-        order: places,
-        durable: undefined,
-        last: undefined,
-      });
+      attachment.slots.push(slot);
       announce();
       return turn;
     }
 
     /** Copy one provider event's facts into the reading, changing nothing else. */
-    function observed(turn: LiveTurn, event: AgentPromptEvent): void {
+    function finish(slot: Slot, label: string, at: number): void {
+      const { agent, started, finished } = slot.activity;
+      if (finished === undefined) {
+        slot.activity = { agent, label, started, finished: at };
+      }
+    }
+
+    function* observed(turn: LiveTurn, event: AgentPromptEvent): Operation<void> {
+      const slot = turn.slot;
       if (event.type === "started") {
         turn.state = "active";
         turn.agent = event.agent;
+        slot.activity = { ...slot.activity, agent: event.agent };
         turn.sessionKey = event.session.sessionKey;
         turn.agentSessionId = event.session.agentSessionId;
+      } else if (event.type === "tool_activity") {
+        const at = yield* ReplClock.operations.now();
+        const activity = slot.activity;
+        if (activity.finished === undefined) {
+          slot.activity = {
+            agent: activity.agent,
+            toolCallId: event.toolCallId,
+            label: event.label,
+            started: activity.toolCallId === event.toolCallId ? activity.started : at,
+          };
+        }
       } else if (event.type === "text_delta") {
         turn.state = "active";
         turn.text += event.text;
@@ -604,6 +660,7 @@ export function useReplAgent(
         turn.status = event.status;
         turn.stopReason = event.stopReason;
         turn.failure = event.error?.message;
+        finish(slot, promptOutcome(event.status), yield* ReplClock.operations.now());
       }
       announce();
     }
@@ -627,7 +684,7 @@ export function useReplAgent(
             *next() {
               const next = yield* subscription.next();
               if (!next.done) {
-                observed(turn, next.value);
+                yield* observed(turn, next.value);
               }
               return next;
             },
@@ -772,11 +829,17 @@ export function useReplAgent(
 
     function publisherFor(attachment: Attachment): AgentPromptPublisher {
       return {
-        *begin(input: string): Operation<AgentPromptHandle> {
+        *begin(input: string, agent?: string): Operation<AgentPromptHandle> {
           // Created before the provider is asked for anything at all, and handed
           // back on this turn's own publication — the only thing that will say
           // which live turn that record ended.
-          const turn = queued(attachment, yield* currentCoroutine(), input);
+          const turn = queued(
+            attachment,
+            yield* currentCoroutine(),
+            input,
+            agent,
+            yield* ReplClock.operations.now(),
+          );
           attachment.begun.set(yield* useScope(), turn);
           // An opaque token rather than the turn itself: core carries it back
           // untouched, and only this attachment's map can say what it stood for.
@@ -795,6 +858,9 @@ export function useReplAgent(
               : undefined;
           const where = turn?.coroutine;
           if (turn !== undefined && where !== undefined) {
+            if (turn.slot.activity.finished === undefined) {
+              finish(turn.slot, "Failed", yield* ReplClock.operations.now());
+            }
             attachment.publishing.set(where, turn);
           }
           try {
@@ -857,6 +923,7 @@ export function useReplAgent(
       return resource(function* (attach) {
         const attachment: Attachment = {
           entry,
+          stopping: false,
           turns: [],
           requests: [],
           slots: [],
@@ -881,6 +948,17 @@ export function useReplAgent(
       changes,
       authority,
       owning,
+      *stop(entry) {
+        const at = yield* ReplClock.operations.now();
+        if (attached?.entry === entry) {
+          attached.stopping = true;
+          for (const turn of attached.turns) {
+            const { agent, started } = turn.slot.activity;
+            turn.slot.activity = { agent, label: "Stopped", started, finished: at };
+          }
+          announce();
+        }
+      },
       consume(event: DurableEvent): void {
         if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
           return;
@@ -909,6 +987,12 @@ export function useReplAgent(
           const slot = live.slots[at];
           live.slots.splice(at, 1);
           slot.durable = event.description.name;
+          if (slot.activity.agent === undefined && event.result.status === "ok") {
+            slot.activity = {
+              ...slot.activity,
+              agent: parsePromptRecord(event.result.value)?.agent,
+            };
+          }
           slot.last = frozenTurn(turn);
           transferred.push(slot);
         }

@@ -2214,6 +2214,29 @@ the producer: nothing is matched by name or by sibling order.
 
 Replacing what is displayed rewrites no submitted source and no record.
 
+### Current Prompt status beside submitted work
+
+At the live head, the Sidekick conversation shows a read-only row for
+each observed Prompt beside the entry that submitted it. Each row reads
+`Entry 6 · Reviewer · Waiting for agent update · 3s`, using that entry's
+number and the turn's agent. At 72×20 the row fits on one line and elides
+long text while keeping the entry, agent identity, and elapsed time visible.
+
+Waiting begins when the canonical Prompt begins. The first eligible
+[ACP activity event](acp-client-spec.md#live-tool-activity) replaces the
+waiting phrase with its label, including `Working` when supplied. The REPL
+uses receipt time on its frame clock. Another update with the same current
+call ID replaces the label and keeps the start time. A different ID resets
+the start time. Overlapping Prompts track these values independently.
+
+`Completed`, `Failed`, and `Stopped` replace the current label and freeze
+its elapsed seconds, including when that stage was waiting. Entry Stop
+freezes interrupted Prompt rows when it begins stopping the entry. The
+open REPL keeps each frozen row beside the originating entry through the
+entry's cleanup and subsequent submissions. The cancelled-entry Close
+and the absence of an interrupted Prompt publication are unchanged.
+Status has no history position or focus target and is absent on cold reopen.
+
 ### Written Markdown in Output and in the chat
 
 An entry's rendered Output and a Sidekick conversation body are drawn as the

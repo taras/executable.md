@@ -1345,6 +1345,128 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     ].join("\n"),
   ];
 
+  it("shows the originating Prompt's current activity at 72×20", function* () {
+    let time = 10;
+    const nextSecond = withResolvers<void>();
+    yield* ReplClock.around({
+      *now() {
+        return time;
+      },
+      *wait([seconds], next) {
+        if (seconds === 1 && time === 10) {
+          yield* nextSecond.operation;
+        } else {
+          yield* next(seconds);
+        }
+      },
+    });
+    const page = yield* useReplPage({ size: { columns: 72, rows: 20 } });
+    const { fake } = page.repl;
+    fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "```xmd",
+        '<Session><Prompt text="review request" /></Session>',
+        "```",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+      ].join("\n"),
+    });
+    fake.script({
+      held: true,
+      holdsEachPiece: true,
+      activity: [
+        { type: "tool_call", toolCallId: "first", title: "Checking the diff", text: "private" },
+        { type: "tool_call", toolCallId: "first", title: "Running focused tests", text: "" },
+        { type: "tool_call", toolCallId: "notice", title: "xmd: Permission response", text: "" },
+        { type: "tool_call", toolCallId: "notice", title: "Do not display this pair", text: "" },
+        {
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "marked",
+          title: "Renamed response notice",
+          text: "",
+          rawOutput: {
+            "executablemd.xmd-response/v1": {
+              kind: "question",
+              event: "retired",
+              reason: "request-ended",
+              requestId: "request",
+              presentationId: "marked",
+            },
+          },
+        },
+        { type: "tool_call", toolCallId: "marked", text: "" },
+        { type: "tool_call", toolCallId: " ".repeat(513), title: "Invalid ID", text: "" },
+        { type: "tool_call", toolCallId: "next", title: "unsafe\nline", text: "" },
+        { type: "tool_call", toolCallId: "next", title: "界".repeat(95), text: "" },
+      ],
+      reply: "Review result.",
+    });
+    fake.script({ reply: "<Output>Review noted.</Output>" });
+    yield* page.until("the Sidekick composer", (screen) => screen.shows(COMPOSER));
+    yield* typed(page, "review");
+    yield* page.press("[send]");
+    const identity = `Entry 1 · ${MOUNTED_AGENT} · `;
+    yield* page.until("the waiting status beside Entry 1", (screen) =>
+      screen.shows(identity + "Waiting for agent update · 0s"),
+    );
+
+    yield* fake.holdingTurns(1);
+    time = 11;
+    nextSecond.resolve();
+    yield* page.until("the waiting timer advances without input or provider updates", (screen) =>
+      screen.shows(identity + "Waiting for agent update · 1s"),
+    );
+    time = 13;
+    fake.releaseTurn();
+    yield* page.until("the first tool", (screen) =>
+      screen.shows(identity + "Checking the diff · 0s"),
+    );
+
+    yield* fake.streamingTurns(1);
+    time = 16;
+    fake.releaseDeltas();
+    yield* page.until("the same tool's elapsed time", (screen) =>
+      screen.shows(identity + "Running focused tests · 3s"),
+    );
+    for (const hidden of [
+      "Permission response",
+      "Do not display this pair",
+      "Renamed response notice",
+      "Working",
+      "Invalid ID",
+    ]) {
+      yield* fake.streamingTurns(1);
+      fake.releaseDeltas();
+      yield* fake.streamingTurns(1);
+      expect(page.screen().shows(identity + hidden)).toBe(false);
+    }
+    expect(page.screen().shows(identity + "Running focused tests · 3s")).toBe(true);
+
+    time = 20;
+    fake.releaseDeltas();
+    yield* page.until("a new tool with an unusable title", (screen) =>
+      screen.shows(identity + "Working · 0s"),
+    );
+    yield* fake.streamingTurns(1);
+    time = 22;
+    fake.releaseDeltas();
+    yield* page.until(
+      "the fitted wide-character title with its elapsed time",
+      (screen) => screen.shows(identity + "界") && screen.shows("… · 2s"),
+    );
+    yield* fake.streamingTurns(1);
+    time = 25;
+    fake.releaseDeltas();
+    yield* page.until("the frozen terminal status", (screen) =>
+      screen.shows(identity + "Completed · 5s"),
+    );
+    const after = yield* settledReading(page.repl);
+    expect(after.model.turns.map((turn) => turn.text)).toEqual(["Review result."]);
+  });
+
   it("PV1: literal Output arrives as a preview, with nothing pressed and nothing run", function* () {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
@@ -3876,6 +3998,76 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
 });
 
 describe("Joined output API", () => {
+  it("keeps independent Prompt timers through failure and explicit Entry Stop", function* () {
+    let time = 10;
+    yield* ReplClock.around({
+      *now() {
+        return time;
+      },
+    });
+    const held = yield* useHarness();
+    const { fake, session } = held;
+    fake.script({
+      held: true,
+      holdsEachPiece: true,
+      activity: [{ type: "tool_call", toolCallId: "shared", title: "Inspecting", text: "" }],
+      failure: "review failed",
+    });
+    fake.script({ manual: true });
+    const submitted = yield* session.submit(
+      [
+        "<All>",
+        '<Spawn><Session name="first"><Prompt text="first" /></Session></Spawn>',
+        '<Spawn><Session name="second"><Prompt text="second" /></Session></Spawn>',
+        "</All>",
+      ].join("\n"),
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    yield* fake.consumedTurns(2);
+    expect(session.agent.slots.map((slot) => slot.activity?.label)).toEqual([
+      "Waiting for agent update",
+      "Waiting for agent update",
+    ]);
+    time = 14;
+    fake.releaseTurn();
+    yield* fake.streamingTurns(1);
+    expect(session.agent.slots.map((slot) => slot.activity)).toEqual([
+      { agent: AGENT, toolCallId: "shared", label: "Inspecting", started: 14 },
+      { agent: AGENT, label: "Waiting for agent update", started: 10 },
+    ]);
+    time = 17;
+    fake.releaseDeltas();
+    const changes = yield* session.agentChanges;
+    while (!session.agent.slots.some((slot) => slot.durable !== undefined)) {
+      yield* changes.next();
+    }
+    const cleanup = fake.holdCancellation();
+    yield* ensure(() => cleanup.release());
+    time = 20;
+    const stopping = yield* spawn(() => session.stopEntry(submitted.value.entry));
+    yield* cleanup.reached;
+    expect(session.agent.slots.map((slot) => slot.activity)).toEqual([
+      { agent: AGENT, label: "Failed", started: 14, finished: 17 },
+      { agent: AGENT, label: "Stopped", started: 10, finished: 20 },
+    ]);
+    time = 30;
+    cleanup.release();
+    expect((yield* stopping).ok).toBe(true);
+    expect(session.agent.turns).toEqual([]);
+    expect(session.agent.slots.map((slot) => [slot.entry, slot.activity?.finished])).toEqual([
+      ["entry-1", 17],
+      ["entry-1", 20],
+    ]);
+    const head = session.reading(undefined);
+    if (!head.ok) {
+      throw head.error;
+    }
+    expect(head.value.model.entries[0]?.terminal?.status).toBe("cancelled");
+    expect(head.value.model.turns.map((turn) => turn.status)).toEqual(["failed"]);
+  });
+
   it("drains cleanup output and joins before exposing an interrupted observation", function* () {
     const entered = withResolvers<void>();
     const cleaning = withResolvers<void>();

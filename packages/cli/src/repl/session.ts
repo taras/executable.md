@@ -1292,6 +1292,7 @@ function* start(
       if (!handle.ok) {
         return handle;
       }
+      yield* agent.stop(held.key);
       const canonical = yield* handle.value();
       // The entry's own outcome, then the task's own teardown. Two different
       // moments: a root that has closed is still releasing what the entry

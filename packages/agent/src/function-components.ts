@@ -683,7 +683,7 @@ function* installHeldPromptTerminal(
             direct.retain(content);
             const publisher = yield* AgentInternal.operations.promptPublisher;
             if (publisher?.begin !== undefined) {
-              carried.begun = yield* publisher.begin(content);
+              carried.begun = yield* publisher.begin(content, direct.agent);
             }
             asked.resolve({
               content,
@@ -941,7 +941,7 @@ export function* runPrompt(
       // composition settled on: announcing the undelegated text here would
       // name this turn by something it never asked.
       if (direct === undefined && publisher?.begin !== undefined) {
-        carried.begun = yield* publisher.begin(text);
+        carried.begun = yield* publisher.begin(text, options?.agent);
       }
       // Only for a host that asked to be told. A publisher with no `observe`
       // accumulates no prefix and is scanned for nothing: this feature costs

@@ -5,8 +5,8 @@
  * identity, and produces the normalized public event sequence: exactly
  * one `started`, then `text_delta` events for output-stream deltas only,
  * then exactly one `terminal`, then the channel closes with the complete
- * concatenated text — including partial text on failure. Thought,
- * status, tool, usage, and raw ACP events stay private.
+ * concatenated text, including partial text on failure. Bounded activity
+ * and XMD input outcomes travel alongside reply text.
  *
  * A successfully completed turn may also name itself. When the adapter said
  * which turn this was, that name is associated with the exact terminal event
@@ -22,6 +22,7 @@
  * below, so observing a turn cannot cancel, close or fail it.
  */
 
+import { clearsLiveOutput } from "@executablemd/core/host";
 import { each, race, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
 import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/agent/api";
@@ -34,6 +35,34 @@ import { checkpointFromResult } from "./checkpoint.ts";
 import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";
 import type { Registration } from "./permission-bridge.ts";
 import type { TurnUsage } from "./usage.ts";
+
+const MAX_TOOL_CALL_ID = 512;
+const MAX_ACTIVITY_TITLE = 160;
+const UNSUITABLE_TITLE = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}\p{Bidi_Control}]/u;
+const XMD_NOTICE_TITLE = /^XMD[\s:_-]+(?:question|permission)\b/iu;
+
+function activityId(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length <= MAX_TOOL_CALL_ID &&
+    value.trim().length !== 0 &&
+    !UNSUITABLE_TITLE.test(value)
+    ? value
+    : undefined;
+}
+
+function* activityLabel(value: unknown): Operation<string> {
+  if (
+    typeof value !== "string" ||
+    value.length > MAX_ACTIVITY_TITLE ||
+    UNSUITABLE_TITLE.test(value)
+  ) {
+    return "Working";
+  }
+  const title = value.trim();
+  return title === "" || title === "tool call" || !(yield* clearsLiveOutput(title))
+    ? "Working"
+    : title;
+}
 
 export interface TurnIdentity {
   agent: string;
@@ -76,19 +105,34 @@ export function* consumeTurn(
   let settled: AcpRuntimeTurnResult | undefined;
   try {
     const reading = function* (): Operation<void> {
+      const notices = new Set<string>();
       for (const event of yield* each(stream(turn.events))) {
         usage?.observe(event);
         if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
           text += event.text;
           yield* channel.send({ type: "text_delta", text: event.text });
         }
-        if (
-          event.type === "tool_call" &&
-          event.rawOutput !== null &&
-          typeof event.rawOutput === "object" &&
-          XMD_RESPONSE in event.rawOutput
-        ) {
-          const response = XmdResponse.parse(Reflect.get(event.rawOutput, XMD_RESPONSE));
+        const rawOutput = event.type === "tool_call" ? event.rawOutput : undefined;
+        const notice =
+          rawOutput !== null && typeof rawOutput === "object" && XMD_RESPONSE in rawOutput;
+        if (event.type === "tool_call") {
+          const id = activityId(event.toolCallId);
+          if (
+            id !== undefined &&
+            (notice || (typeof event.title === "string" && XMD_NOTICE_TITLE.test(event.title)))
+          ) {
+            notices.add(id);
+          }
+          if (id !== undefined && !notices.has(id)) {
+            yield* channel.send({
+              type: "tool_activity",
+              toolCallId: id,
+              label: yield* activityLabel(event.title),
+            });
+          }
+        }
+        if (notice) {
+          const response = XmdResponse.parse(Reflect.get(rawOutput, XMD_RESPONSE));
           if (response.event === "retired") {
             if (inputs !== undefined) {
               yield* inputs.retire(response.presentationId);

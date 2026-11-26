@@ -133,6 +133,7 @@ export type AgentPromptEvent =
   | ChildAnswerPromptEvent
   | { type: "started"; agent: Agent; session: Session }
   | { type: "text_delta"; text: string }
+  | { type: "tool_activity"; toolCallId: string; label: string }
   | {
       type: "terminal";
       status: "completed" | "failed" | "cancelled";

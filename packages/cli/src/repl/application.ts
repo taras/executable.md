@@ -120,7 +120,7 @@ import type { SidekickFeedback } from "./sidekick/model.ts";
 import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading, ReplSourceInspectionStore } from "./source-reading.ts";
-import { readingRuns, fitPlain, slicedRuns } from "./fitting.ts";
+import { fitCells, readingRuns, fitPlain, slicedRuns } from "./fitting.ts";
 import { createMarkdownStore, markdownLines } from "./markdown.ts";
 import type { ReplMarkdownLine, ReplMarkdownStore } from "./markdown.ts";
 import type { ReplPlainFitStore } from "./fitting.ts";
@@ -1403,6 +1403,7 @@ interface ReplRestoreView {
 
 /** One complete reading of the product, ready to describe. */
 export interface ReplView {
+  readonly frameAt?: number;
   readonly restore?: ReplRestoreView;
   readonly restorationNotice?: string;
   readonly detachable?: boolean;
@@ -4181,6 +4182,7 @@ function drafting(state: ReplState, draft: string, by: Submitter = "person"): Re
 type ReplChatComposed =
   | {
       readonly kind: "text";
+      readonly tail?: string;
       readonly key: string;
       readonly text: string;
       readonly style: ReplRowStyle;
@@ -4439,7 +4441,7 @@ function sidekickComposedRows(
 function chatLinesOf(one: Extract<ReplChatComposed, { kind: "text" }>): readonly ReplChatLine[] {
   const shown =
     one.lines ??
-    one.text
+    `${one.text}${one.tail ?? ""}`
       .split("\n")
       .map((text) => ({ text, runs: tokenRuns([{ text, token: one.style.role }]) }));
   return shown.map((own, offset) => ({
@@ -4689,6 +4691,9 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
         : workState(entry, staging.model, staging.live).word,
     );
   }
+  for (const slot of staging?.activity ?? []) {
+    facts.push(slot.key, slot.entry, slot.agent, slot.label, slot.elapsed);
+  }
   return facts;
 }
 
@@ -4754,7 +4759,19 @@ export function createChatPreparationStore(
                 style: styleOf("metadata"),
               },
             ];
-      const lines = composed.flatMap((one) => (one.kind === "text" ? chatLinesOf(one) : []));
+      const fittedChat: ReplChatComposed[] = [];
+      for (const one of composed) {
+        if (one.kind === "text" && one.tail !== undefined) {
+          const fitted = yield* fitCells(renderer, view.size, one.text, one.tail, room);
+          if (!fitted.ok) {
+            return fitted;
+          }
+          fittedChat.push({ ...one, text: fitted.value.text, tail: undefined });
+        } else {
+          fittedChat.push(one);
+        }
+      }
+      const lines = fittedChat.flatMap((one) => (one.kind === "text" ? chatLinesOf(one) : []));
       // Prune before suspension too: a refused or cancelled fit owns no old candidates.
       cuts.settle(
         lines.map((one) => one.text),
@@ -4767,7 +4784,7 @@ export function createChatPreparationStore(
         if (!fitted.ok) {
           return fitted;
         }
-        const sequence = chatSequence(composed, fitted.value);
+        const sequence = chatSequence(fittedChat, fitted.value);
         held = { facts, room, columns: view.size.columns, rows: view.size.rows, sequence };
         complete = true;
         return Ok(sequence);
@@ -12753,8 +12770,48 @@ function markedRuns(
   ]);
 }
 
+function chatActivity(view: ReplView, workspace: ReplWorkspace) {
+  const reading = view.live.sidekick;
+  if (view.state.route.at !== undefined || reading === undefined) {
+    return [];
+  }
+  const messages = new Set(
+    reading.chat.filter((item) => item.conversation === reading.reading).map((item) => item.key),
+  );
+  const entries = new Set(
+    workspace.work.filter((work) => messages.has(work.message)).map((work) => work.entry),
+  );
+  return view.live.agent.slots.flatMap((slot) =>
+    slot.activity !== undefined && entries.has(slot.entry)
+      ? [{ slot, activity: slot.activity }]
+      : [],
+  );
+}
+
+export function nextChatActivitySecond(view: ReplView): number | undefined {
+  const workspace = staged(view);
+  if (workspace === undefined || view.frameAt === undefined) {
+    return undefined;
+  }
+  let next = Infinity;
+  for (const { activity } of chatActivity(view, workspace)) {
+    if (activity.finished === undefined) {
+      const elapsed = Math.max(0, Math.floor(view.frameAt - activity.started));
+      next = Math.min(next, activity.started + elapsed + 1);
+    }
+  }
+  return Number.isFinite(next) ? next : undefined;
+}
+
 /** What the staged chat adds to a reading: the work its messages submitted. */
 interface ReplChatStaging {
+  readonly activity: readonly {
+    key: string;
+    entry: string;
+    agent: string;
+    label: string;
+    elapsed: number;
+  }[];
   readonly model: ReplModel;
   readonly live: ReplLive;
   readonly work: readonly ReplAssociatedWork[];
@@ -12770,6 +12827,16 @@ function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
     return undefined;
   }
   return {
+    activity: chatActivity(view, workspace).map(({ slot, activity }) => ({
+      key: slot.key,
+      entry: slot.entry,
+      agent: headline(inertCommandText(activity.agent ?? "Agent")) || "Agent",
+      label: activity.label,
+      elapsed: Math.max(
+        0,
+        Math.floor((activity.finished ?? view.frameAt ?? activity.started) - activity.started),
+      ),
+    })),
     model: view.model,
     live: view.live,
     work: workspace.work,
@@ -12837,6 +12904,17 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
         action: inspectionAction("entry", entry.key),
       }),
     );
+    for (const status of staging.activity) {
+      if (status.entry === entry.key) {
+        found.push({
+          kind: "text",
+          key: `sidekick:work:${entry.key}:activity:${status.key}`,
+          text: `${CONTROL_ROOM}${MARKER_ROOM}Entry ${entry.order} · ${status.agent} · ${status.label}`,
+          tail: ` · ${status.elapsed}s`,
+          style: styleOf("metadata"),
+        });
+      }
+    }
     if (staging.showUsage && one.usageLine !== undefined) {
       found.push(
         Object.freeze({
@@ -12934,7 +13012,7 @@ function workspaceChatComposed(
           { mark: originMark(item.origin), action: inspectionAction("person", item.key) },
         ),
       );
-    } else if (item.kind === "preview") {
+    } else if (item.kind === "preview" && item.hasOutput) {
       // Said as the attempt it is. Nothing has been evaluated, no control has
       // run and no turn is acknowledged, so this is not a reply yet — and a
       // row that differed from one only by its colour would tell a reader
@@ -13097,7 +13175,7 @@ function workspaceChatComposed(
   const spaced: ReplChatComposed[] = [];
   for (const [at, one] of items.entries()) {
     const key = one.key;
-    const continues = one.kind === "text" && key.endsWith(":output");
+    const continues = one.kind === "text" && (key.endsWith(":output") || one.tail !== undefined);
     if (at > 0 && !continues) {
       spaced.push(
         Object.freeze({ kind: "text" as const, key: `${key}:gap`, text: "", style: ORDINARY }),
