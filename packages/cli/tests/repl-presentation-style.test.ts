@@ -721,8 +721,10 @@ function* exchange(page: ReplPage, order: number, one: Exchange): Operation<void
   yield* sendMessage(page, one.asked);
   if (one.outcome === "cancelled") {
     yield* page.until(
-      `Entry ${order} waiting`,
-      (reading) => reading.found("Stop", { onRow: "+ New Round" }) === 1,
+      `Entry ${order} waiting for an answer with its Draft Stop`,
+      (reading) =>
+        reading.shows(`Entry ${order} waiting for an answer`) &&
+        reading.found("Stop", { onRow: "+ New Round" }) === 1,
     );
     yield* page.press("Stop", { onRow: "+ New Round" });
   }

@@ -2941,7 +2941,9 @@ describe("Sidekick original independent readings and streaming rows", () => {
     yield* sendComposed(page);
     yield* page.repl.fake.holdingTurns(1);
     const fed = page.repl.terminal.fed;
-    yield* page.until("the evaluation status", (one) => transcriptHas(one, "evaluating the reply"));
+    yield* page.until("the Sidekick waiting for Entry 1", (one) =>
+      chatHas(one, "waiting for Entry 1"),
+    );
     const read = yield* settledReading(page.repl);
     expect(
       read.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt")),
