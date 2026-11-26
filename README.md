@@ -155,26 +155,20 @@ and checks read what setup prepared and leave tracked files, `node_modules` and
 
 ## Build
 
-Install the development launcher from a prepared checkout. Run these commands
-from the checkout root in a POSIX shell.
+Install the development launcher from the root of a prepared checkout.
+Run the [installation example](examples/install-xmd-dev.md) with an existing `xmd`.
 
 ```sh
-mkdir -p "$HOME/.local/xmd-dev/bin"
-ln -s "$PWD/scripts/xmd-dev" "$HOME/.local/xmd-dev/bin/xmd-dev"
-export PATH="$HOME/.local/xmd-dev/bin:$PATH"
-command -v xmd-dev
-xmd-dev --version
+xmd run examples/install-xmd-dev.md
 ```
 
-Add the PATH export to your shell startup file to use this installation in
-later terminals. The dedicated directory lets you migrate from an older
-`xmd-dev` by putting the new launcher first on PATH while keeping the old
-file in place. To change the default checkout, update this symlink. For a
-single invocation, set `XMD_DEV_ROOT` to another prepared checkout. Run from
-your project directory. The launcher follows its installation symlink to
-find its default checkout and supplies the invocation details the REPL
-uses to reopen a saved view.
-
+The example installs `xmd-dev` in `~/.local/xmd-dev/bin` and prints the PATH
+step if your shell needs it. Add that export to your shell startup file if you
+want it in later terminals. The dedicated directory lets you select this
+launcher while keeping an older installation in place. To change the default
+checkout, move the installed link aside and run the example from the new
+checkout. To select another prepared checkout for one invocation, set
+`XMD_DEV_ROOT`. Run `xmd-dev` from your project directory.
 
 Compile the standalone `xmd` binary: prepare the checkout and then build,
 yielding `dist/xmd`, a self-contained executable for this host.

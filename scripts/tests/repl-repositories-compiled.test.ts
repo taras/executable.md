@@ -20,9 +20,9 @@ import { replMountsJourney } from "../../packages/cli/tests/support/repl-mounts-
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { chmod, realpath, symlink, unlink } from "node:fs/promises";
+import { chmod, readlink, realpath, symlink, unlink } from "node:fs/promises";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { scoped, until, type Operation } from "effection";
 import {
   allocate,
@@ -94,15 +94,48 @@ describe("the compiled binary's REPL entry files", () => {
 describe("1440: installed development and explicit compiled launchers", () => {
   it("pastes each full reopen hint through the correct launcher and restores the selected entry", function* () {
     yield* requireBinary();
-    const home = yield* until(realpath(yield* useTempDirectory("xmd-1440-")));
-    const bin = join(home, "private bin");
+    const home = yield* until(realpath(yield* useTempDirectory("xmd-1440 home ")));
+    const bin = join(home, ".local", "xmd-dev", "bin");
     const project = join(home, "project", "nested");
     const leading = join(home, "leading PATH directory");
     yield* ensureDir(join(leading, "xmd"));
-    yield* ensureDir(bin);
     yield* ensureDir(project);
     const launcher = join(bin, "xmd-dev");
-    yield* until(symlink(join(ROOT, "scripts", "xmd-dev"), launcher));
+    const installer = compiled(["run", "examples/install-xmd-dev.md", "--raw"]);
+    const install = (installHome: string) =>
+      runShell(installer, {
+        cwd: ROOT,
+        env: { HOME: installHome },
+      });
+    const installed = yield* install(home).expect();
+    expect(installed.stdout).toContain(`Installed the launcher at ${launcher}.`);
+    expect(installed.stdout).toContain('export PATH="$HOME/.local/xmd-dev/bin:$PATH"');
+    const source = join(ROOT, "scripts", "xmd-dev");
+    expect(yield* until(readlink(launcher))).toBe(source);
+    const repeated = yield* install(home).expect();
+    expect(repeated.stdout).toContain("already points to this checkout");
+    expect(yield* until(readlink(launcher))).toBe(source);
+    const selectedInstall = yield* runShell(`PATH=${shellQuote(bin)}:"$PATH" ${installer}`, {
+      cwd: ROOT,
+      env: { HOME: home },
+    }).expect();
+    expect(selectedInstall.stdout).not.toContain("export PATH=");
+
+    const conflictHome = join(home, "conflicting home");
+    const conflictBin = join(conflictHome, ".local", "xmd-dev", "bin");
+    const conflict = join(conflictBin, "xmd-dev");
+    yield* ensureDir(conflictBin);
+    const conflictContents = "#!/bin/sh\nprintf '%s\\n' existing-launcher\n";
+    yield* writeTextFile(conflict, conflictContents);
+    yield* until(chmod(conflict, 0o755));
+    const refused = yield* install(conflictHome).join();
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain(`Could not install ${conflict}.`);
+    expect(yield* readTextFile(conflict)).toBe(conflictContents);
+    yield* until(unlink(conflict));
+    yield* ensureDir(conflict);
+    expect((yield* install(conflictHome).join()).code).toBe(1);
+    expect(yield* exists(join(conflict, "xmd-dev"))).toBe(false);
     const prefix = `unset XMD_DEV_ROOT XMD_DEV_DENO; export PATH=${shellQuote(leading)}:${shellQuote(bin)}:"$PATH"; cd ${shellQuote(project)} &&`;
     const version = (yield* runShell(compiled(["--version"])).expect()).stdout.trim();
     const found = yield* runShell(`${prefix} command -v xmd-dev && xmd-dev --version`).expect();
