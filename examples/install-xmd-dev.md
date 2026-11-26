@@ -13,8 +13,7 @@ effect without reinstalling. The dedicated directory lets you put this launcher
 first on `PATH`, the list your shell searches for commands.
 
 ```sh exec as="source"
-test -f scripts/xmd-dev && test -x scripts/xmd-dev &&
-  printf '%s/scripts/xmd-dev\n' "$(pwd -P)"
+test -f scripts/xmd-dev && test -x scripts/xmd-dev
 ```
 
 <If condition={source.exitCode !== 0}>
@@ -31,9 +30,9 @@ test -n "${HOME:-}" && printf '%s/.local/xmd-dev/bin/xmd-dev\n' "$HOME"
 
 <Let as="installedPath" value={destination.stdout.trimEnd()} />
 
-The link is created without replacement. If the name is occupied, the installer
-reads the existing link to tell a repeat install from a conflict. Move a
-conflicting command elsewhere before running the installer again.
+The link is created without replacement. An existing symbolic link counts as
+installed when it resolves to the same launcher. Move a conflicting command
+elsewhere before running the installer again.
 
 ```sh exec as="install"
 mkdir -p "$HOME/.local/xmd-dev/bin" &&
@@ -43,10 +42,11 @@ mkdir -p "$HOME/.local/xmd-dev/bin" &&
 <If condition={install.exitCode !== 0}>
 
 ```sh exec as="existing"
-readlink "$HOME/.local/xmd-dev/bin/xmd-dev"
+test -L "$HOME/.local/xmd-dev/bin/xmd-dev" &&
+  test "$HOME/.local/xmd-dev/bin/xmd-dev" -ef scripts/xmd-dev
 ```
 
-<If condition={existing.exitCode !== 0 || existing.stdout !== source.stdout}>
+<If condition={existing.exitCode !== 0}>
 <Let as="refusal">
 
 Could not install {installedPath}. Move a conflicting command aside before
