@@ -4662,8 +4662,19 @@ function chatFacts(view: ReplView): readonly (string | number | boolean | null |
     }
   }
   facts.push(undefined);
+  const entriesByKey = new Map<string, ReplEntry>();
+  if (staging !== undefined && staging.work.length > 1) {
+    for (const entry of staging.model.entries) {
+      if (!entriesByKey.has(entry.key)) {
+        entriesByKey.set(entry.key, entry);
+      }
+    }
+  }
   for (const one of staging?.work ?? []) {
-    const entry = staging?.model.entries.find((candidate) => candidate.key === one.entry);
+    const entry =
+      staging?.work.length === 1
+        ? staging.model.entries.find((candidate) => candidate.key === one.entry)
+        : entriesByKey.get(one.entry);
     facts.push(
       one.message,
       one.entry,
