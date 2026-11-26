@@ -1079,6 +1079,21 @@ no established request and appears beside the preceding attempt on its own.
 It creates no feedback intent or acknowledgement. A second ordinary outcome
 for the same request still refuses the history.
 
+An explicit message whose held same-session ensure fails before sending a prompt
+remains eligible for Retry regardless of provider error code or message when its
+exact input can be reconstructed. A request that carried recovered feedback
+does not offer Retry for this pre-send failure when its original composed payload
+cannot be restored. A failure after canonical begin keeps the established Retry
+behavior. Each
+failed attempt sends nothing, retains its own request and turn, and creates no
+replacement. Retry selects one saved request and sends its exact text on the
+same identity only when the person chooses it. Consecutive failures keep their
+separate Retry controls; a later success belongs to the request selected. A
+native identity mismatch, unknown prompt delivery, or unowned request offers
+no Retry. Failed continuation of a saved recovery instruction retains that
+instruction and the Start new chat action. Queue release and recovery ownership
+remain explicit.
+
 For a classified resume refusal, chat displays the screened ACP details as
 literal text followed by the saved recovery message. A missing or blank detail
 leaves the recovery message alone. The live exchange, including an original
@@ -3260,8 +3275,9 @@ attach no host invocation observer.
 ## Who owns what
 
 When eager ensure refuses to continue the original conversation, the failed
-result still offers **Start new chat** after the attempt is saved. Retry
-remains unavailable for that request while live and after reopening. A
+result still offers **Start new chat** after the attempt is saved. An explicit
+plain request also offers Retry when its exact input and identity remain known;
+a request carrying unreconstructable feedback on this pre-send path does not. A
 subscription failure that reached canonical begin keeps its existing
 recovery behavior. The entry Journal reads the canonical saved failure.
 

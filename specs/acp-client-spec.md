@@ -1235,6 +1235,16 @@ resume, the element fails with the name `SessionResumeRequiredError` and no raw
 upstream cause, its body and later content do not run, and no Prompt record,
 attempted input, ordinal, usage or `started` event is created.
 
+An unknown failure of an established same-session load or resume is a failed
+pre-send attempt. The provider preserves the saved identity, creates no session,
+and sends no prompt. It reports `SessionResumeRequiredError` with the ordinary
+Session remedy: repeat the operation with the same `<Session>` when its caller
+permits it; a different `<Session>` starts another conversation. Neither an ACP
+code, provider name, message nor retryable hint decides eligibility. An identity
+mismatch refuses; an attempt whose prompt delivery is uncertain cannot use this
+pre-send rule. Classification never resends automatically. A workflow reports
+the failure under its retained run contract and offers no per-Prompt Retry.
+
 ACP attaches the [selected bounded facts](#saved-prompt-failure-details) to the
 refusal under `executablemd.agent.prompt-diagnostic` with provider `acp`, stage
 `session-ensure` and operation `session/ensure`. The operation names the
@@ -1248,7 +1258,7 @@ appends one line per present fact, in this order and with these labels; string
 values use JSON string rendering so an embedded line break stays unambiguous:
 
 ```text
-Session "<key>" could not be resumed. Name a different <Session> to start a new conversation.
+Session "<key>" could not be resumed. Retry this operation with the same <Session> if its caller permits; a different <Session> starts a new conversation.
 Resume diagnostic (provider=acp, operation=session/ensure, stage=session-ensure)
 Normalization origin: acp
 Runtime code: "RUNTIME" (normalizer fallback)
@@ -2092,8 +2102,8 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   load/resume capability refuses even an unused record. Failed loading never replaces a used or
   uncertain record; the released `-32603` fallback remains only for a provably
   never-prompted record. Supported resume-required errors become
-  `SessionResumeRequiredError`, naming the Session and a different Session
-  element as the remedy, before `started`. An ordinary Session's refusal
+  `SessionResumeRequiredError`, naming a later attempt with the same Session as
+  the available remedy when the caller permits it, before `started`. An ordinary Session's failure
   carries the bounded facts of
   [Ordinary Session resume failure details](#ordinary-session-resume-failure-details)
   under the `session-ensure` stage; Agent screens them and owns the message.

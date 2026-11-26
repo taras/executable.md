@@ -3219,6 +3219,13 @@ retained no checkpoint remains unassociated.
 
 A reached marked question on partial continuation obtains fresh missing input from the foreground responder. Recorded public fields stay fixed and completed commands stay completed. Missing live input refuses immediately without a pending secret delivery. Completed roots attach no operational responder and ask nothing.
 
+When a saved provider session fails to reattach before a Prompt is sent, the
+workflow reports that failure and preserves the run's provider identity. It
+offers no per-Prompt Retry control and performs no automatic resend or
+replacement. `xmd workflow resume` continues only a run whose retained state
+permits continuation; the Session failure message does not promise that a
+failed workflow Prompt can be replayed.
+
 Everything in this section is workflow-only. An ordinary `xmd run` has no
 WorkflowRun, no retained history and nothing to replay: its repository
 operations are performed once per execution, and a second run is a second
