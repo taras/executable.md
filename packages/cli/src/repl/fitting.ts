@@ -40,7 +40,7 @@ import { close, fit, open, text } from "../../generated/tty/mod.js";
 import type { Op } from "../../generated/tty/mod.js";
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
-import type { ReplRenderer } from "./renderer.ts";
+import type { ReplMeasured, ReplRenderer } from "./renderer.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import type { ReplReadingLine, ReplSourceInspectionStore } from "./source-reading.ts";
 import { createSourceInspectionStore, READING_STATUSES } from "./source-reading.ts";
@@ -166,6 +166,14 @@ export interface ReplFitGeometry {
  * cheaper comparison that is already cheap.
  */
 export interface ReplFitStore {
+  /** The last successful measurement of the History map and its controls. */
+  historyProbe?: {
+    readonly renderer: ReplRenderer;
+    readonly engine: number;
+    readonly key: string;
+    readonly measured: ReplMeasured;
+  };
+
   /**
    * The reading's written Output as formatted lines, held for the same
    * lifetime as its geometry: every frame builds the reading again, and a

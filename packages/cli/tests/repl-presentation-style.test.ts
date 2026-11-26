@@ -5909,6 +5909,59 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     }
   });
 
+  it("reuses the History split only for the same measured inputs", function* () {
+    const model = yield* runningReading();
+    const view = stagedView(model, WIDE);
+    const underlying = yield* useReplRenderer(WIDE);
+    let inputs: string[] = [];
+    const renderer: typeof underlying = {
+      ...underlying,
+      *measure(ops, size) {
+        if (ops.some((op) => "id" in op && op.id === "box:probe:history")) {
+          inputs.push(JSON.stringify([size.columns, size.rows, ops]));
+        }
+        return yield* underlying.measure(ops, size);
+      },
+    };
+    const draft = { ...view, state: { ...view.state, draftOpen: true } };
+    const medium = { ...draft, size: MEDIUM };
+    const selected = {
+      ...view,
+      state: {
+        ...view.state,
+        route: { ...view.state.route, at: view.navigation.checkpoints[0]?.marker },
+      },
+    };
+    const store = createFitStore();
+    let previous: string | undefined;
+    let hits = 0;
+    let misses = 0;
+    for (const next of [view, view, draft, draft, medium, medium, selected, selected]) {
+      renderer.resize(next.size);
+      inputs = [];
+      const cold = yield* prepareFrame(renderer, next);
+      if (!cold.ok) throw cold.error;
+      expect(inputs).toHaveLength(1);
+      const key = inputs[0];
+      inputs = [];
+      const warm = yield* prepareFrame(renderer, next, store);
+      if (!warm.ok) throw warm.error;
+      if (key === previous) {
+        expect(inputs).toEqual([]);
+        hits++;
+      } else {
+        expect(inputs).toEqual([key]);
+        misses++;
+      }
+      previous = key;
+      expect(warm.value.context.historySplit).toEqual(cold.value.context.historySplit);
+      expect(warm.value.context.wideHistoryMap).toEqual(cold.value.context.wideHistoryMap);
+      expect(warm.value.context.historyGap).toEqual(cold.value.context.historyGap);
+    }
+    expect(hits).toBeGreaterThanOrEqual(4);
+    expect(misses).toBeGreaterThanOrEqual(3);
+  });
+
   it("A2: every size places whole controls inside the frame and keeps its routes", function* () {
     const model = yield* runningReading();
     for (const size of [WIDE, MEDIUM, SMALL]) {

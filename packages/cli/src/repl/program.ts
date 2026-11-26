@@ -6099,9 +6099,28 @@ export function* prepareFrame(
   // the answer this replaces.
   const parts = historyProbeOf(probed.manifest, view.size);
   if (parts !== undefined) {
-    const apart = yield* renderer.measure(skeletonOps(parts), view.size);
+    // This tree contains the actual runs, control labels and layout props
+    // the probe would send to the engine. Keep one copied answer per command.
+    const key =
+      store === undefined ? undefined : JSON.stringify([view.size.columns, view.size.rows, parts]);
+    const held = store?.historyProbe;
+    const apart =
+      held !== undefined &&
+      held.renderer === renderer &&
+      held.engine === renderer.engines().measuring &&
+      held.key === key
+        ? Ok(held.measured)
+        : yield* renderer.measure(skeletonOps(parts), view.size);
     if (!apart.ok) {
       return apart;
+    }
+    if (store !== undefined && key !== undefined && held?.measured !== apart.value) {
+      store.historyProbe = {
+        renderer,
+        engine: renderer.engines().measuring,
+        key,
+        measured: apart.value,
+      };
     }
     if (profileFor(view.size) === "wide") {
       const bounded = wideHistoryWidths(
