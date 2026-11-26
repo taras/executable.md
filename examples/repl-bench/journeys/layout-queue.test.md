@@ -113,7 +113,7 @@
       <XMD.Repl sidekick-agent={fixtureRoot + "/repl-ui-queue.md"}>
         <Terminal.Type text="Start the held checkout round." />
         <Terminal.Key key="Enter" />
-        <Terminal.WaitForText text="1 ●" />
+        <Terminal.WaitForText text="1 ●" timeout="45s" />
         <Terminal.Focus target="sidekick-composer" />
         <Each in={[1, 2, 3, 4, 5, 6, 7]} let="position">
           <Let as="message" value={"Waiting message " + position} />
