@@ -30,9 +30,10 @@ test -n "${HOME:-}" && printf '%s/.local/xmd-dev/bin/xmd-dev\n' "$HOME"
 
 <Let as="installedPath" value={destination.stdout.trimEnd()} />
 
-The link is created without replacement. An existing symbolic link counts as
-installed when it resolves to the same launcher. Move a conflicting command
-elsewhere before running the installer again.
+The link is created without replacement. For a repeat install, `realpath`
+resolves both launcher paths. The paths must match because the launcher uses its
+own directory to select the checkout. Move a conflicting command elsewhere
+before running the installer again.
 
 ```sh exec as="install"
 mkdir -p "$HOME/.local/xmd-dev/bin" &&
@@ -41,12 +42,20 @@ mkdir -p "$HOME/.local/xmd-dev/bin" &&
 
 <If condition={install.exitCode !== 0}>
 
-```sh exec as="existing"
-test -L "$HOME/.local/xmd-dev/bin/xmd-dev" &&
-  test "$HOME/.local/xmd-dev/bin/xmd-dev" -ef scripts/xmd-dev
+```sh exec as="expected"
+realpath scripts/xmd-dev
 ```
 
-<If condition={existing.exitCode !== 0}>
+<If condition={expected.exitCode !== 0}>
+<Fail message={expected.stderr.trim()} />
+</If>
+
+```sh exec as="existing"
+link="$HOME/.local/xmd-dev/bin/xmd-dev"
+test -L "$link" && test -f "$link" && realpath "$link"
+```
+
+<If condition={existing.exitCode !== 0 || existing.stdout !== expected.stdout}>
 <Let as="refusal">
 
 Could not install {installedPath}. Move a conflicting command aside before
