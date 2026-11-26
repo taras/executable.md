@@ -18,13 +18,13 @@ The other layers row is recorded for context and never fails the comparison.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 21,407,663 |
+| calls: total | 21,404,861 |
 | calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 3,304,145 |
+| calls: xmd cli | 3,301,784 |
 | calls: npm @termless/xtermjs | 2,094,435 |
-| calls: effection | 1,242,073 |
-| calls: deno runtime | 297,231 |
-| calls: effectionx | 182,695 |
+| calls: effection | 1,241,830 |
+| calls: deno runtime | 297,160 |
+| calls: effectionx | 182,568 |
 | calls: xmd core | 132,841 |
 | calls: npm @secretlint/core | 45,180 |
 | calls: other layers | 42,603 |
@@ -39,7 +39,7 @@ The other layers row is recorded for context and never fails the comparison.
   "measures": [
     {
       "name": "calls: total",
-      "value": 21407663
+      "value": 21404861
     },
     {
       "name": "calls: npm @xterm/headless",
@@ -47,7 +47,7 @@ The other layers row is recorded for context and never fails the comparison.
     },
     {
       "name": "calls: xmd cli",
-      "value": 3304145
+      "value": 3301784
     },
     {
       "name": "calls: npm @termless/xtermjs",
@@ -55,15 +55,15 @@ The other layers row is recorded for context and never fails the comparison.
     },
     {
       "name": "calls: effection",
-      "value": 1242073
+      "value": 1241830
     },
     {
       "name": "calls: deno runtime",
-      "value": 297231
+      "value": 297160
     },
     {
       "name": "calls: effectionx",
-      "value": 182695
+      "value": 182568
     },
     {
       "name": "calls: xmd core",
