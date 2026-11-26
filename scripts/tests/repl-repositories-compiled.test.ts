@@ -20,9 +20,9 @@ import { replMountsJourney } from "../../packages/cli/tests/support/repl-mounts-
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { chmod, readlink, realpath, symlink, unlink } from "node:fs/promises";
+import { chmod, link, readlink, realpath, symlink, unlink } from "node:fs/promises";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { copyFile, ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { scoped, until, type Operation } from "effection";
 import {
   allocate,
@@ -101,10 +101,14 @@ describe("1440: installed development and explicit compiled launchers", () => {
     yield* ensureDir(join(leading, "xmd"));
     yield* ensureDir(project);
     const launcher = join(bin, "xmd-dev");
-    const installer = compiled(["run", "examples/install-xmd-dev.md", "--raw"]);
-    const install = (installHome: string) =>
+    const installer = compiled([
+      "run",
+      shellQuote(join(ROOT, "examples", "install-xmd-dev.md")),
+      "--raw",
+    ]);
+    const install = (installHome: string, checkout = ROOT) =>
       runShell(installer, {
-        cwd: ROOT,
+        cwd: checkout,
         env: { HOME: installHome },
       });
     const installed = yield* install(home).expect();
@@ -171,6 +175,26 @@ describe("1440: installed development and explicit compiled launchers", () => {
     yield* ensureDir(conflict);
     expect((yield* install(conflictHome).join()).code).toBe(1);
     expect(yield* exists(join(conflict, "xmd-dev"))).toBe(false);
+    const checkoutA = join(home, "checkout A");
+    const checkoutB = join(home, "checkout B");
+    const launcherA = join(checkoutA, "scripts", "xmd-dev");
+    const launcherB = join(checkoutB, "scripts", "xmd-dev");
+    yield* ensureDir(join(checkoutA, "scripts"));
+    yield* ensureDir(join(checkoutB, "scripts"));
+    yield* copyFile(source, launcherA);
+    yield* until(chmod(launcherA, 0o755));
+    yield* until(link(launcherA, launcherB));
+
+    const linkedHome = join(home, "hard-linked launcher home");
+    const linkedBin = join(linkedHome, ".local", "xmd-dev", "bin");
+    const linkedLauncher = join(linkedBin, "xmd-dev");
+    yield* ensureDir(linkedBin);
+    yield* until(symlink(launcherB, linkedLauncher));
+    const wrongCheckout = yield* install(linkedHome, checkoutA).join();
+    expect(wrongCheckout.code).toBe(1);
+    expect(wrongCheckout.stderr).toContain(`Could not install ${linkedLauncher}.`);
+    expect(yield* until(readlink(linkedLauncher))).toBe(launcherB);
+
     const prefix = `unset XMD_DEV_ROOT XMD_DEV_DENO; export PATH=${shellQuote(leading)}:${shellQuote(bin)}:"$PATH"; cd ${shellQuote(project)} &&`;
     const version = (yield* runShell(compiled(["--version"])).expect()).stdout.trim();
     const found = yield* runShell(`${prefix} command -v xmd-dev && xmd-dev --version`).expect();
