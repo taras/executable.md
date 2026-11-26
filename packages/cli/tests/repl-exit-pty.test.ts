@@ -809,21 +809,37 @@ if (cliRuntime() !== "deno") {
       if (entry === undefined) {
         throw new Error("Missing source entrypoint.");
       }
-      const cases = [
+      const cases: { options: string[]; expectedCwd: string; nodeOptions?: string }[] = [
         { options: ["--conditions=example"], expectedCwd: nested },
         { options: [flag, "./local loader.cjs"], expectedCwd: project },
       ];
       if (cliRuntime() === "node") {
         yield* writeTextFile(join(project, "options.json"), "{}\n");
-        cases.push({
-          options: ["--experimental-config-file=options.json"],
-          expectedCwd: project,
-        });
+        yield* writeTextFile(join(project, "project-loader.cjs"), "module.exports = {};\n");
+        cases.push(
+          { options: ["--experimental-config-file=options.json"], expectedCwd: project },
+          {
+            options: [],
+            nodeOptions: "--require=./project-loader.cjs --conditions=private-condition-witness",
+            expectedCwd: project,
+          },
+          { options: [], nodeOptions: '--require "./local loader.cjs"', expectedCwd: project },
+          {
+            options: [],
+            nodeOptions: "--conditions=private-condition-witness",
+            expectedCwd: nested,
+          },
+        );
       }
-      for (const { options, expectedCwd } of cases) {
+      for (const { options, expectedCwd, nodeOptions } of cases) {
         yield* scoped(function* () {
           const line = [...base, ...options, entry, "repl", "--deny-all"].map(shellQuote).join(" ");
-          const pty = yield* allocateFullPty(`cd ${shellQuote(project)} && ${line}`, home);
+          const inherited =
+            nodeOptions === undefined ? "" : `NODE_OPTIONS=${shellQuote(nodeOptions)} `;
+          const pty = yield* allocateFullPty(
+            `cd ${shellQuote(project)} && ${inherited}${line}`,
+            home,
+          );
           yield* showingFullPty(pty, "[exit]", 60_000);
           yield* click(pty, "[exit]");
           expect(yield* terminalExit(pty)).toBe(0);
@@ -833,9 +849,18 @@ if (cliRuntime() !== "deno") {
           if (launch === undefined) {
             throw new Error("The terminal printed no complete launch command.");
           }
-          expect(launch).toContain(options.at(-1));
+          const option = options.at(-1);
+          if (option !== undefined) {
+            expect(launch).toContain(option);
+          }
+          if (nodeOptions !== undefined) {
+            expect(launch).not.toContain("NODE_OPTIONS");
+            expect(launch).not.toContain("private-condition-witness");
+            expect(launch).not.toContain("loader.cjs");
+          }
           const cwd = (yield* runShell(`${launch} run --eval ${shellQuote("<Cwd />")}`, {
             cwd: nested,
+            ...(nodeOptions === undefined ? {} : { env: { NODE_OPTIONS: nodeOptions } }),
           }).expect()).stdout.trim();
           expect(cwd).toBe(expectedCwd);
         });

@@ -22,13 +22,25 @@ import { readSourceCheckout, requiredRuntimeDirectory } from "./node-repl-build.
 import { XMD_VERSION } from "./cli.ts";
 import { useNodeReplTerminal } from "./node-repl-terminal.ts";
 
+function inheritedNodeOptions(value: string): string[] {
+  // NODE_OPTIONS splits on spaces outside double quotes and escapes only inside them.
+  return Array.from(value.matchAll(/(?:[^ "]+|"(?:[^"\\]|\\[\s\S])*")+/g), ([word]) =>
+    word.replace(/"((?:[^"\\]|\\[\s\S])*)"/g, (_quote, quoted: string) =>
+      quoted.replace(/\\([\s\S])/g, "$1"),
+    ),
+  );
+}
+
 export function* useNodeRepl(command: readonly string[], interactive = true): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
   yield* installTodoSource();
   const checkout = interactive ? yield* readSourceCheckout(command.at(-1)) : undefined;
   const config = process.env["TSX_TSCONFIG_PATH"];
-  const directory = requiredRuntimeDirectory(command.slice(1, -1), process.cwd());
+  const directory = requiredRuntimeDirectory(
+    [...command.slice(1, -1), ...inheritedNodeOptions(process.env["NODE_OPTIONS"] ?? "")],
+    process.cwd(),
+  );
   const reopen = {
     command,
     directory,

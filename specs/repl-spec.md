@@ -200,6 +200,9 @@ The launch arguments are an ordered JSON array with the runtime executable and
 source entrypoint where applicable. The POSIX command renders the same argument
 boundaries and includes required launch directory and environment overrides.
 The child inherits the caller's environment along with any stated overrides.
+For Node, inherited `NODE_OPTIONS` with a cwd-relative runtime operand also
+requires the host's launch directory. The report states the directory and
+leaves the inherited option values in the caller's environment.
 When the launch command is available, append the desired XMD subcommand and options to start a child. The required launch directory, when
 present, belongs to the runtime invocation. The response's working directory
 still belongs to the user's project. Reading these facts performs no launch
