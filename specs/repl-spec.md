@@ -1887,8 +1887,7 @@ position, and `[live]` returns from any of them to the head. The selected
 position keeps its own surface and the head its own colour, so the two can sit
 side by side.
 
-The History drawer shows one row per admitted round, newest first, prefixed
-with its existing round number as `n:` in the theme’s white output foreground. Each row shows only its lifecycle glyph in the existing status color: `●` active, `✓` completed, `×` failed, `-` interrupted, or the neutral `·` unfinished. Lifecycle words are omitted in History only; state is read from the selected reading. Rounds beyond a selected historical prefix retain their destinations without revealing later lifecycle outcomes. The History heading is followed directly
+The History drawer shows one row per admitted round, newest first. The `in` and `out` buttons use the action button surface, with the white, right-aligned round number between them. A missing `out` leaves its column empty. Each row ends with its lifecycle glyph in the existing status color: `●` active, `✓` completed, `×` failed, `-` interrupted, or the neutral `·` unfinished. Lifecycle words are omitted in History only; state is read from the selected reading. Rounds beyond a selected historical prefix retain their destinations without revealing later lifecycle outcomes. The History heading is followed directly
 by the list, with no instructional row reserved beneath it. Each row
 has distinct Input and Output controls. Input selects that round's retained
 entry-admission marker; Output selects its retained root-outcome marker. An

@@ -9014,6 +9014,7 @@ function drawerContent(
       const from = roundWindow?.from ?? 0;
       const visible =
         roundWindow === undefined ? rounds : rounds.slice(from, from + roundWindow.count);
+      const numberWidth = String(rounds[0].input.entry).length;
       // Keyboard neighbours still come from the whole list.
       for (const [offset, round] of visible.entries()) {
         const index = from + offset;
@@ -9024,10 +9025,10 @@ function drawerContent(
           Home: `drawer:marker:${rounds[0].input.point.marker}`,
           End: `drawer:marker:${rounds[rounds.length - 1].input.point.marker}`,
         };
-        const control = (point: typeof input, label: string) =>
+        const control = (point: typeof input, part: "in" | "out") =>
           row(
             `drawer:marker:${point.point.marker}`,
-            label,
+            part,
             {
               select: "marker",
               marker: point.point.marker,
@@ -9037,26 +9038,26 @@ function drawerContent(
                 ...neighbours,
                 ArrowDown: `drawer:marker:${older?.point.marker ?? point.point.marker}`,
                 ArrowUp: `drawer:marker:${newer?.point.marker ?? point.point.marker}`,
-                ...(label === "[Input]" && output !== undefined
+                ...(part === "in" && output !== undefined
                   ? { "Alt+ArrowDown": `drawer:marker:${output.point.marker}` }
                   : older === undefined
                     ? {}
                     : { "Alt+ArrowDown": `drawer:marker:${older.point.marker}` }),
-                ...(label === "[Output]"
+                ...(part === "out"
                   ? { "Alt+ArrowUp": `drawer:marker:${input.point.marker}` }
                   : newer === undefined
                     ? {}
                     : {
                         "Alt+ArrowUp": `drawer:marker:${(rounds[index - 1].output ?? newer).point.marker}`,
                       }),
-                ...(label === "[Input]" && output !== undefined
+                ...(part === "in" && output !== undefined
                   ? { ArrowRight: `drawer:marker:${output.point.marker}` }
-                  : label === "[Output]"
+                  : part === "out"
                     ? { ArrowLeft: `drawer:marker:${input.point.marker}` }
                     : {}),
               },
             },
-            styleOf("history", {
+            styleOf("action", {
               selected: view.state.route.at === point.point.marker,
               inspected: true,
             }),
@@ -9072,13 +9073,15 @@ function drawerContent(
               : status.word.split(" ")[0];
         const heading = line(
           `drawer:round:${input.point.marker}`,
-          `${input.entry}: ${glyph}`,
-          styleOf("output"),
-          tokenRuns([
-            { text: `${input.entry}: `, token: "output" },
-            { text: glyph, token: status?.style.role ?? "metadata" },
-          ]),
+          glyph,
+          status?.style ?? styleOf("metadata"),
         );
+        const roundPart = (part: string, label: string) =>
+          describeNode<ReplAction>({
+            key: `${heading.key}:${part}`,
+            component: LINE,
+            input: { label, historyRound: String(input.entry) },
+          });
         const read = readDescription(heading.description);
         content.push({
           described: {
@@ -9088,8 +9091,11 @@ function drawerContent(
               component: read.component,
               input: { ...fields(read.input), historyRound: String(input.entry) },
               children: [
-                control(input, "[Input]").description,
-                ...(output === undefined ? [] : [control(output, "[Output]").description]),
+                control(input, "in").description,
+                roundPart("number", String(input.entry).padStart(numberWidth)),
+                output === undefined
+                  ? roundPart("empty", " ".repeat(focusPrefixed("out", false).length))
+                  : control(output, "out").description,
               ],
             }),
           },
@@ -11210,9 +11216,8 @@ function candidatesOf(
         style:
           styles.get(read.key) ??
           (typeof fields(read.input)?.["historyRound"] === "string"
-            ? styleOf("history", {
+            ? styleOf(isControl(read.component, read.input) ? "action" : "output", {
                 selected: fields(read.input)?.["historySelected"] === true,
-                inspected: true,
               })
             : ORDINARY),
         runs: runs.get(read.key),
@@ -11341,7 +11346,7 @@ function drawerBoxes(candidates: readonly ReplCandidate[], width: number | undef
       ? one
       : box({
           ...one,
-          children: group.map((candidate) =>
+          children: [...group.slice(1), group[0]].map((candidate) =>
             box({
               id: `box:drawer:${candidate.key}`,
               key: candidate.key,
