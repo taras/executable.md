@@ -5225,7 +5225,7 @@ describe("Contributed Sidekick controls", () => {
     expect(calls).toBe(1);
     expect(
       held.host.fake.prompts[0]?.split("\n").filter((line) => line.startsWith("- <Cwd")),
-    ).toEqual(["- <Cwd>…</Cwd> — write. props: label"]);
+    ).toEqual(['- <Cwd as="result">…</Cwd> — write. props: label']);
     expect(held.host.fake.prompts[1]).toContain("paired-cwd");
     held.host.fake.script({ reply: '<Cwd as="refused" />' });
     held.host.fake.script({ reply: "<Output>Self-closing Cwd was refused.</Output>" });
@@ -5423,8 +5423,10 @@ describe("Contributed Sidekick controls", () => {
       expect(counts.initialized).toBe(1);
       expect(counts.conversations).toBe(1);
       expect(counts.calls).toEqual(["read", "write"]);
-      expect(held.host.fake.prompts[0]).toContain("<Contributed /> — read");
-      expect(held.host.fake.prompts[0]).toContain("<Contributed>…</Contributed> — write");
+      expect(held.host.fake.prompts[0]).toContain('<Contributed as="result" /> — read');
+      expect(held.host.fake.prompts[0]).toContain(
+        '<Contributed as="result">…</Contributed> — write',
+      );
       expect(held.host.fake.prompts[1]).toContain('"count": 1');
       expect(held.host.fake.prompts[1]).toContain('"count": 2');
       expect(held.host.fake.prompts[0]).toContain("contribution-conversation");
