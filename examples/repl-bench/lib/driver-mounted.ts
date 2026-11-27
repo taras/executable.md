@@ -131,10 +131,7 @@ function* answer(page: ReplPage, command: Command, pendingInput: PendingInput): 
       if (from !== undefined) {
         // Input clamped against a boundary can paint nothing, so the wait
         // for its frame is bounded rather than required.
-        yield* race([
-          page.until("the frame of a key or wheel burst", (one) => one.index > from),
-          sleep(INPUT_FRAME_MS),
-        ]);
+        yield* race([page.after(from), sleep(INPUT_FRAME_MS)]);
       }
       yield* sleep(command.ticks * command.tick);
       return null;

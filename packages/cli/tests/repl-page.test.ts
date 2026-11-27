@@ -15,6 +15,7 @@
 import { beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { journalBeforeEach } from "@executablemd/test-support/failure-journal";
 import { expect } from "@executablemd/test-support/expect";
+import { spawn } from "effection";
 import type { Operation } from "effection";
 
 import { useReplPage } from "./support/repl-page.ts";
@@ -198,11 +199,18 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     expect(page.screen().index).toBe(held);
     expect(page.screen().shows("held while writing")).toBe(false);
 
+    let resumed = false;
+    const pending = yield* spawn(function* () {
+      yield* page.after(held);
+      resumed = true;
+    });
+    expect(resumed).toBe(false);
+
     terminal.holdPresent?.release();
-    const landed = yield* page.until("the held write landing", (one) =>
-      one.shows("held while writing"),
-    );
-    expect(landed.index).toBeGreaterThan(held);
+    yield* pending;
+    expect(page.screen().index).toBeGreaterThan(held);
+    expect(page.screen().shows("held while writing")).toBe(true);
+    yield* page.after(held);
   });
 });
 

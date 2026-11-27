@@ -21,6 +21,11 @@
       <Terminal.Type text="-after" />
       <Terminal.Region name="sidekick-composer">
         <Terminal.WaitForText text="mounted-marker-after" />
+        <Terminal.Key key="Backspace" />
+        <Terminal.Key key="Backspace" />
+        <Terminal.Scroll pattern="." />
+        <Terminal.WaitForText text="mounted-marker-aft" />
+        <Terminal.WaitForText text="mounted-marker-afte" present={false} />
       </Terminal.Region>
     </XMD.Repl>
   </Terminal>
