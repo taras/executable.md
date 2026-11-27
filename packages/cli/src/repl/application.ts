@@ -15112,7 +15112,11 @@ function workspacePresentation(input: {
                   control: true,
                   region,
                   props: COMPOSER_INPUT_PROPS,
-                  children: composerRows.map((one) => rowBox(one, region, undefined)),
+                  // Fitted rather than grown, so each row keeps its runs: the
+                  // caret and the muted placeholder are drawn from them.
+                  children: composerRows.map((one) =>
+                    box({ ...rowBox(one, region, undefined), props: fittedRowProps(0) }),
+                  ),
                 }),
               ],
             }),
