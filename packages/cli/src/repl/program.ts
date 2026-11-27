@@ -6314,30 +6314,6 @@ export function* prepareFrame(
   // One more structural measurement when the composer is taller than the
   // minimum, so the capacity the chat is admitted against is the capacity of
   // the frame that will actually be drawn. Bounded: one pass, never a loop.
-  const geometry =
-    shown === undefined || shown.length <= 1
-      ? third
-      : yield* renderer.measure(
-          skeletonOps(
-            presentationFor(
-              view,
-              queuing(
-                measuringAt(
-                  widths,
-                  windowed,
-                  entriesRows,
-                  guidanceRows?.length ?? 1,
-                  shown.length,
-                  envelope,
-                ),
-              ),
-            ).manifest.root,
-          ),
-          view.size,
-        );
-  if (!geometry.ok) {
-    return geometry;
-  }
   const placed =
     shown === undefined || shown.length <= 1
       ? measured
@@ -6354,6 +6330,14 @@ export function* prepareFrame(
             ),
           ),
         );
+
+  const geometry =
+    placed === measured
+      ? third
+      : yield* renderer.measure(skeletonOps(placed.manifest.root), view.size);
+  if (!geometry.ok) {
+    return geometry;
+  }
   // The History band, measured against the terminal's own width. Prepared
   // beside the reading: where a mark lands is a proportion of the rail's
   // measured columns, so the pass that asks how wide the band is cannot
