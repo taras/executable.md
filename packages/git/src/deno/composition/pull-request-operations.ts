@@ -43,7 +43,7 @@
  */
 
 import { getExpansion, sourceDescription, type JsonObject } from "@executablemd/core";
-import type { SearchResult } from "../../composition/components/GitHubSearch.ts";
+import type { SearchRequest, SearchResult } from "../../composition/components/GitHubSearch.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import { scoped, type Operation } from "effection";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
@@ -80,30 +80,13 @@ export function useRetainedPullRequestReads(): Operation<void> {
     {
       *search([repository, request, transport, validate]): Operation<SearchResult> {
         const run = yield* getWorkflowRun();
-        const expansion = yield* getExpansion();
-        const configuration = gitOperationFingerprint([
+        return yield* retainGitHubSearch(
+          { runId: run.runId },
           repository,
-          request.query,
-          request.sort ?? null,
-          request.order ?? null,
-          String(request.page),
-          String(request.perPage),
-          ...(request.paginate ? ["paginate"] : []),
-        ]);
-        const stored = yield* scoped(function* () {
-          return yield createDurableOperation(
-            {
-              type: "github_search",
-              name: `${expansion.id}:${configuration}`,
-              input: { repository, request, runId: run.runId, expansionId: expansion.id },
-              configuration,
-              ...sourceDescription(expansion.position),
-            },
-            transport,
-            { coordinator: joinedReadCoordinator },
-          );
-        });
-        return validate(stored);
+          request,
+          transport,
+          validate,
+        );
       },
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
         const run = yield* getWorkflowRun();
@@ -117,6 +100,40 @@ export function useRetainedPullRequestReads(): Operation<void> {
     },
     { at: "min" },
   );
+}
+
+/** Retain an admitted search under the execution owner that asked it. */
+export function* retainGitHubSearch(
+  owner: { readonly runId: string } | { readonly entryOwner: string },
+  repository: string,
+  request: SearchRequest,
+  transport: () => Operation<SearchResult>,
+  validate: (value: unknown) => SearchResult,
+): Operation<SearchResult> {
+  const expansion = yield* getExpansion();
+  const configuration = gitOperationFingerprint([
+    repository,
+    request.query,
+    request.sort ?? null,
+    request.order ?? null,
+    String(request.page),
+    String(request.perPage),
+    ...(request.paginate ? ["paginate"] : []),
+  ]);
+  const stored = yield* scoped(function* () {
+    return yield createDurableOperation(
+      {
+        type: "github_search",
+        name: `${expansion.id}:${configuration}`,
+        input: { repository, request, ...owner, expansionId: expansion.id },
+        configuration,
+        ...sourceDescription(expansion.position),
+      },
+      transport,
+      { coordinator: joinedReadCoordinator },
+    );
+  });
+  return validate(stored);
 }
 
 /** Install the retained pull-request lifecycle for the current scope and below. */

@@ -2407,8 +2407,15 @@ selection. The provider authenticates that selection and checks its GitHub
 repository against the `allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`
 before opening a GitHub session. Configuration is read on invocation.
 A host without a search provider raises an ordinary document error before
-opening a GitHub session or binding a result. If the error reaches the root
-of a REPL entry, the REPL records the entry as failed and permits a successor
+opening a GitHub session or binding a result.
+
+A REPL entry provides search through its authenticated Repository selection,
+including the checkout selected at launch. It applies the same repository
+allowlist and retains an admitted request and its answer per entry occurrence.
+Replaying an acknowledged search restores the validated answer without
+contacting GitHub. A selected repository with a non-GitHub origin or one outside the
+allowlist produces an ordinary document error before contacting GitHub. If it
+reaches the entry root, the REPL records the failure and permits a successor
 after cleanup.
 
 The query uses GitHub REST issue search syntax and includes exactly one

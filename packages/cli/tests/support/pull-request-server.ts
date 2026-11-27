@@ -228,6 +228,11 @@ function* respond(
     return { status: 401, body: JSON.stringify({ message: "Bad credentials" }) };
   }
   const home = `${store.owner}/${store.repository}`;
+  if (asked.method === "GET" && asked.url.pathname === "/search/issues") {
+    return asked.url.searchParams.get("q") === "repo:" + home + " is:issue"
+      ? answered({ total_count: 0, incomplete_results: false, items: [] })
+      : missing();
+  }
   const pulls = `/repos/${home}/pulls`;
 
   // The collection itself: the observation a fresh upsert makes, and the
