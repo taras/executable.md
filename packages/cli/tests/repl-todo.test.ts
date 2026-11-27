@@ -359,13 +359,19 @@ describe("TODO typed component and historical result", () => {
     const readHistory = new InMemoryStream();
     const other = yield* entry('<Sidekick.Todo as="items" />\n<Json value={items} />', readHistory);
     expect(other).toEqual(first);
-    yield* writeTextFile(`${root}/todo.md`, "- [x] external\n");
+    const external = "- [X] <Sidekick.Todo />\n\n- [ ] {unbound}\n";
+    yield* writeTextFile(`${root}/todo.md`, external);
+    const bare = yield* entry("<Sidekick.Todo />");
+    if (!bare.ok) {
+      throw bare.error;
+    }
+    expect(bare.value).toBe(external);
     const before = todo.pending.length;
     expect(yield* entry(source, history)).toEqual(first);
     expect(
       yield* entry('<Sidekick.Todo as="items" />\n<Json value={items} />', readHistory),
     ).toEqual(other);
-    expect(yield* readTextFile(`${root}/todo.md`)).toBe("- [x] external\n");
+    expect(yield* readTextFile(`${root}/todo.md`)).toBe(external);
     expect(todo.pending).toHaveLength(before);
   });
 
