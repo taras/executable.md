@@ -87,6 +87,7 @@ import {
   TAB_GAP,
   BUTTON_GAP,
   BUTTON_PROPS,
+  LOOP_PROPS,
   workspaceBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
@@ -13672,30 +13673,26 @@ function workspaceControls(
       ),
     );
   }
-  if (workspace.follow !== undefined) {
-    items.push(
-      row(
-        "follow",
-        `[${workspace.follow ? "x" : " "}]loop`,
-        { select: "toggle-follow" },
-        // The tray row is unshaded: its controls carry no surface of their own.
-        styleOf("navigate"),
-        {
-          here: view.focused,
-          runs: [
-            { text: `[${workspace.follow ? "x" : " "}]`, token: "checkbox" },
-            { text: "loop", token: "output" },
-          ],
-        },
-      ),
-    );
-  }
   if (reading.busy) {
     items.push(
-      row("sidekick:stop", "Stop", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
+      row("sidekick:stop", "Stop", { select: "stop-sidekick" }, styleOf("stop-title"), {
         here: view.focused,
         button: true,
       }),
+    );
+  }
+  // Described in the order drawn, which is the order the keyboard walks.
+  if (workspace.follow !== undefined) {
+    items.push(
+      // Only the glyph is drawn: its name and whether it is pressed travel
+      // with the control rather than as words on the row.
+      row(
+        "follow",
+        "∞",
+        { select: "toggle-follow", name: "loop", pressed: workspace.follow },
+        styleOf(workspace.follow ? "loop-on" : "loop-off"),
+        { here: view.focused, button: true },
+      ),
     );
   }
   // Dim while there is nothing to send, as the Draft's own Send is.
@@ -13704,7 +13701,7 @@ function workspaceControls(
       "sidekick:send",
       "Send",
       { select: "send-message" },
-      styleOf(state.message.length === 0 ? "inactive" : "navigate"),
+      styleOf(state.message.length === 0 ? "inactive" : "button-title"),
       { here: view.focused, button: true },
     ),
   );
@@ -14821,27 +14818,29 @@ function workspacePresentation(input: {
     }
     const left = parts(headerKeysOf(spec.left, candidates), region, surface);
     const grouped = parts(headerKeysOf(spec.right, candidates), region, surface);
-    // The tray's Stop and Send are filled buttons one cell apart.
-    const buttons = grouped.filter(
-      (one) => one.key === "sidekick:stop" || one.key === "sidekick:send",
-    );
+    // The tray's actions in their own order: Stop, the loop toggle, Send. The
+    // toggle's own cells space it from the filled buttons beside it; without
+    // it, the buttons sit one cell apart.
+    const actions =
+      id === "tray"
+        ? ["sidekick:stop", "follow", "sidekick:send"].flatMap((key) =>
+            grouped.filter((one) => one.key === key),
+          )
+        : [];
     const right =
-      id !== "tray" || buttons.length === 0
+      actions.length === 0
         ? grouped
-        : grouped.flatMap((one) =>
-            one === buttons[0]
-              ? [
-                  box({
-                    id: "box:tray:buttons",
-                    region,
-                    props: fittedRowProps(BUTTON_GAP),
-                    children: buttons.map((button) => box({ ...button, props: BUTTON_PROPS })),
-                  }),
-                ]
-              : buttons.includes(one)
-                ? []
-                : [one],
-          );
+        : [
+            box({
+              id: "box:tray:buttons",
+              region,
+              props: fittedRowProps(actions.some((one) => one.key === "follow") ? 0 : BUTTON_GAP),
+              children: actions.map((one) =>
+                box({ ...one, props: one.key === "follow" ? LOOP_PROPS : BUTTON_PROPS }),
+              ),
+            }),
+            ...grouped.filter((one) => !actions.includes(one)),
+          ];
     if (left.length === 0 && right.length === 0) {
       return [];
     }

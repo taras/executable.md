@@ -40,8 +40,8 @@ function composerShown(reading: ScreenReading): boolean {
   return reading.composer !== undefined;
 }
 
-/** The Sidekick's checked loop toggle, which shares its row with the Sidekick's Send. */
-const LOOP = "[x]loop";
+/** The Sidekick's loop toggle, which shares its row with the Sidekick's Send. */
+const LOOP = "∞";
 
 /** The Sidekick's own Send, scoped by the one bounded layout statement made here. */
 const SIDEKICK_SEND: ScreenScope = { onRow: LOOP, rightOf: LOOP };

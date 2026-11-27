@@ -172,6 +172,9 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
         if (event.text === " " && input?.["select"] === "toggle-usage") {
           return { kind: "toggle-usage" };
         }
+        if (event.text === " " && input?.["select"] === "toggle-follow") {
+          return { kind: "toggle-follow" };
+        }
         if (event.text === " " && input?.["select"] === "pane" && input["pane"] === "todo") {
           return { kind: "select-pane", pane: "todo" };
         }

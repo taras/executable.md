@@ -15,6 +15,8 @@
     <ReplBench.Key key="Alt+ArrowUp" />
     <ReplBench.WaitForText text=">Send" bold={true} />
     <ReplBench.Key key="Alt+ArrowUp" />
+    <ReplBench.WaitForText text=">∞" bold={true} />
+    <ReplBench.Key key="Alt+ArrowUp" />
     <ReplBench.WaitForText text=">Stop" bold={true} />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text=" Stop " present={false} />

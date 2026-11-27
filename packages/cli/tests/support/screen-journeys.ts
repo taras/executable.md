@@ -96,6 +96,9 @@ export const SIDEKICK_CONTROLS: ScreenScope = {
   },
 };
 
+/** The Sidekick's loop toggle, which draws only its glyph. */
+export const LOOP = "∞";
+
 /** The Sidekick tray's filled buttons. */
 export const SEND = "Send";
 export const STOP = "Stop";

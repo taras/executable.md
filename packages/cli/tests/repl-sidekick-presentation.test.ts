@@ -79,6 +79,7 @@ import {
   STOP,
   TRAY_CONTROLS,
   sidekickStopShown,
+  LOOP,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-presentation.test.ts";
@@ -559,6 +560,17 @@ function inks(title: string, colour: number): number[] {
   return Array.from(title, () => colour);
 }
 
+/** The revised Flow 1 spec's exact composer colours. */
+const SPEC = Object.freeze({
+  pane: 0x0a0c0e,
+  loopOn: 0x7ed3e8,
+  loopOff: 0x7b858d,
+  buttonFill: 0x151d21,
+  sendMuted: 0x495259,
+  sendLight: 0xe6ecf0,
+  stopCoral: 0xc3756e,
+});
+
 describe("Flow 1 composer presentation", () => {
   beforeEach(journalBeforeEach(OWNER));
   it("F1: the bordered input shows focus on its edge, a muted placeholder and the caret", function* () {
@@ -580,29 +592,26 @@ describe("Flow 1 composer presentation", () => {
     expect(ink(hint.column, hint.row).foreground).toBe(REPL_PALETTE.muted);
     expect(ink(hint.column - 1, hint.row).background).toBe(REPL_PALETTE.focus);
     const send = empty.locate(SEND, TRAY_CONTROLS);
-    const loop = empty.locate("[x]loop");
+    const loop = empty.locate(LOOP, TRAY_CONTROLS);
     expect(loop.row).toBe(send.row);
     expect(corner.row).toBe(send.row + 1);
-    // The reference: a cyan checkbox against a light label, two blank cells,
-    // then a six-cell filled Send whose fill ends on the box's right edge
-    // column: one cell of fill, the title, one cell of fill.
+    // The revised Flow 1 spec: only ∞, active cyan, immediately left of a
+    // six-cell filled Send whose fill ends on the box's right edge column. The
+    // toggle is its marker cell, its glyph and one cell, so one blank cell
+    // separates the glyph from Send's fill.
     const fill = { from: send.column - 1, to: send.column + SEND.length };
     expect(fill.to - fill.from + 1).toBe(6);
-    expect(fill.from - (loop.column + "[x]loop".length)).toBe(2);
+    expect(fill.from - loop.column).toBe(2);
     expect(fill.to).toBe(empty.composer?.right);
-    expect(controlInks(ink, loop, "[x]")).toEqual(inks("[x]", REPL_PALETTE.focus));
-    expect(controlInks(ink, { row: loop.row, column: loop.column + 3 }, "loop")).toEqual(
-      inks("loop", REPL_PALETTE.output),
-    );
-    // Dim while the draft is empty: there is nothing to send.
-    expect(controlInks(ink, send, SEND)).toEqual(inks(SEND, REPL_PALETTE.inactiveAction));
-    // The pane stays unshaded around the controls; only the button is filled.
+    expect(empty.loop).toBe("pressed");
+    expect(ink(loop.column, loop.row).foreground).toBe(SPEC.loopOn);
+    // Disabled and muted while the draft is empty.
+    expect(controlInks(ink, send, SEND)).toEqual(inks(SEND, SPEC.sendMuted));
+    // The pane stays unshaded around and under the toggle; only Send is filled.
     for (let column = corner.column - 1; column < WIDE.columns; column += 1) {
       expect([column, ink(column, send.row).background]).toEqual([
         column,
-        column >= fill.from && column <= fill.to
-          ? REPL_PALETTE.buttonSurface
-          : REPL_PALETTE.conversationSurface,
+        column >= fill.from && column <= fill.to ? SPEC.buttonFill : SPEC.pane,
       ]);
     }
 
@@ -611,10 +620,10 @@ describe("Flow 1 composer presentation", () => {
     expect(typed.found(PLACEHOLDER, COMPOSER_VALUE)).toBe(0);
     // With something to send, Send takes the active action ink on the same fill.
     const ready = typed.locate(SEND, TRAY_CONTROLS);
-    expect(controlInks(ink, ready, SEND)).toEqual(inks(SEND, REPL_PALETTE.heading));
+    expect(controlInks(ink, ready, SEND)).toEqual(inks(SEND, SPEC.sendLight));
     expect(ready.column).toBe(send.column);
-    expect(ink(ready.column - 1, ready.row).background).toBe(REPL_PALETTE.buttonSurface);
-    expect(ink(ready.column - 2, ready.row).background).toBe(REPL_PALETTE.conversationSurface);
+    expect(ink(ready.column - 1, ready.row).background).toBe(SPEC.buttonFill);
+    expect(ink(ready.column - 2, ready.row).background).toBe(SPEC.pane);
 
     // Keyboard focus on Send: the marker takes the fill's first cell and the
     // focus surface replaces the fill, with the title and the row unmoved.
@@ -624,7 +633,7 @@ describe("Flow 1 composer presentation", () => {
       (one) => one.found(`>${SEND}`, TRAY_CONTROLS) === 1,
     );
     expect(focused.locate(SEND, TRAY_CONTROLS)).toEqual(ready);
-    expect(focused.locate("[x]loop")).toEqual(loop);
+    expect(focused.locate(LOOP, TRAY_CONTROLS)).toEqual(loop);
     expect(ink(ready.column - 1, ready.row).foreground).toBe(REPL_PALETTE.focus);
     for (let column = fill.from; column <= fill.to; column += 1) {
       expect([column, ink(column, ready.row).background]).toEqual([
@@ -632,7 +641,41 @@ describe("Flow 1 composer presentation", () => {
         REPL_PALETTE.focusSurface,
       ]);
     }
-    expect(ink(fill.from - 1, ready.row).background).toBe(REPL_PALETTE.conversationSurface);
+    expect(ink(fill.from - 1, ready.row).background).toBe(SPEC.pane);
+
+    // Keyboard focus on the toggle, one step left of Send: its marker takes
+    // its first cell and the focus surface fills its three cells, with the
+    // glyph unmoved. Space and Enter each toggle it in place.
+    yield* page.key("Alt+ArrowUp");
+    const onToggle = yield* page.until(
+      "keyboard focus on the loop toggle",
+      (one) => one.found(`>${LOOP}`, TRAY_CONTROLS) === 1,
+    );
+    expect(onToggle.locate(LOOP, TRAY_CONTROLS)).toEqual(loop);
+    expect(onToggle.locate(SEND, TRAY_CONTROLS)).toEqual(ready);
+    expect(onToggle.loop).toBe("pressed");
+    expect(ink(loop.column - 1, loop.row).foreground).toBe(REPL_PALETTE.focus);
+    for (const column of [loop.column - 1, loop.column, loop.column + 1]) {
+      expect([column, ink(column, loop.row).background]).toEqual([
+        column,
+        REPL_PALETTE.focusSurface,
+      ]);
+    }
+    yield* page.type(" ");
+    const released = yield* page.until(
+      "Space releasing the toggle",
+      (one) => one.loop === "released",
+    );
+    expect(released.found(`>${LOOP}`, TRAY_CONTROLS)).toBe(1);
+    expect(ink(loop.column, loop.row).foreground).toBe(SPEC.loopOff);
+    expect(released.locate(LOOP, TRAY_CONTROLS)).toEqual(loop);
+    yield* page.key("Enter");
+    yield* page.until("Enter pressing the toggle again", (one) => one.loop === "pressed");
+    expect(ink(loop.column, loop.row).foreground).toBe(SPEC.loopOn);
+    expect(page.screen().found(`>${LOOP}`, TRAY_CONTROLS)).toBe(1);
+    // Neither key sent the draft.
+    expect(composerHolds(page.screen(), "Hello World!")).toBe(true);
+    yield* page.key("Alt+ArrowDown");
     yield* page.key("Alt+ArrowDown");
     yield* page.until("keyboard focus back in the composer", (one) => composerFocused(one));
     const text = typed.locate("Hello World!", COMPOSER_VALUE);
@@ -689,29 +732,53 @@ describe("Flow 1 composer beside waiting messages", () => {
     const busyRow = (reading: ScreenReading) => {
       const stop = reading.locate(STOP, TRAY_CONTROLS);
       const sent = reading.locate(SEND, TRAY_CONTROLS);
-      const loop = reading.locate("[x]loop");
+      const loop = reading.locate(LOOP, TRAY_CONTROLS);
       expect([loop.row, stop.row]).toEqual([sent.row, sent.row]);
-      // Six-cell fills: one cell, the title, one cell.
+      // Stop, ∞, Send: six-cell fills either side of the toggle's three cells,
+      // so one blank cell separates the glyph from each fill.
       const stopFill = { from: stop.column - 1, to: stop.column + STOP.length };
       const sendFill = { from: sent.column - 1, to: sent.column + SEND.length };
-      expect(stopFill.from - (loop.column + "[x]loop".length)).toBe(2);
-      expect(sendFill.from - stopFill.to - 1).toBe(1);
+      expect(loop.column - stopFill.to).toBe(2);
+      expect(sendFill.from - loop.column).toBe(2);
       expect(sendFill.to).toBe(reading.composer?.right);
-      expect(controlInks(ink, stop, STOP)).toEqual(inks(STOP, REPL_PALETTE.failure));
-      expect(controlInks(ink, sent, SEND)).toEqual(inks(SEND, REPL_PALETTE.inactiveAction));
-      expect(
-        [stopFill.from, stopFill.to, sendFill.from, sendFill.to].map(
-          (column) => ink(column, sent.row).background,
-        ),
-      ).toEqual(Array.from({ length: 4 }, () => REPL_PALETTE.buttonSurface));
-      expect(
-        [stopFill.from - 1, stopFill.to + 1].map((column) => ink(column, sent.row).background),
-      ).toEqual([REPL_PALETTE.conversationSurface, REPL_PALETTE.conversationSurface]);
+      expect(reading.loop).toBe("pressed");
+      expect(ink(loop.column, sent.row).foreground).toBe(SPEC.loopOn);
+      expect(controlInks(ink, stop, STOP)).toEqual(inks(STOP, SPEC.stopCoral));
+      expect(controlInks(ink, sent, SEND)).toEqual(inks(SEND, SPEC.sendMuted));
+      for (let column = stopFill.from - 1; column <= sendFill.to; column += 1) {
+        const filled =
+          (column >= stopFill.from && column <= stopFill.to) ||
+          (column >= sendFill.from && column <= sendFill.to);
+        expect([column, ink(column, sent.row).background]).toEqual([
+          column,
+          filled ? SPEC.buttonFill : SPEC.pane,
+        ]);
+      }
     };
     busyRow(queued);
     // The busiest staged row still fits one row at the medium size.
     const medium = yield* page.resize({ columns: 120, rows: 30 });
     busyRow(medium);
+    // The keyboard walks the controls as they are drawn: Send, ∞, then Stop.
+    // The waiting message's X comes first from the composer, as it always has.
+    yield* focusMessage(page);
+    for (let step = 0; step < 4 && page.screen().found(`>${SEND}`, TRAY_CONTROLS) === 0; step++) {
+      const index = page.screen().index;
+      yield* page.key("Alt+ArrowUp");
+      yield* page.until("the next keyboard stop", (one) => one.index > index);
+    }
+    yield* page.until(
+      "keyboard focus on Send",
+      (one) => one.found(`>${SEND}`, TRAY_CONTROLS) === 1,
+    );
+    for (const control of [LOOP, STOP]) {
+      yield* page.key("Alt+ArrowUp");
+      yield* page.until(
+        `keyboard focus on ${control}`,
+        (one) => one.found(`>${control}`, TRAY_CONTROLS) === 1,
+      );
+    }
+    expect(page.screen().loop).toBe("pressed");
     page.repl.fake.releaseTurn();
   });
 });
@@ -3594,33 +3661,33 @@ describe("Follow: the running command owns the mounted control", () => {
       if (size.columns !== WIDE.columns) {
         yield* page.resize(size);
       }
-      yield* page.until("checked Follow", (one) => one.shows("[x]loop"));
+      yield* page.until("checked Follow", (one) => one.loop === "pressed");
       yield* page.key("Alt+ArrowUp");
       yield* page.key("Alt+ArrowUp");
       yield* page.key("Enter");
-      yield* page.until("keyboard unchecked Follow", (one) => one.shows("[ ]loop"));
-      yield* page.press("[ ]loop");
-      yield* page.until("pointer checked Follow", (one) => one.shows("[x]loop"));
-      yield* page.press("[x]loop");
-      yield* page.until("Follow off before navigation", (one) => one.shows("[ ]loop"));
+      yield* page.until("keyboard unchecked Follow", (one) => one.loop === "released");
+      yield* page.press(LOOP, TRAY_CONTROLS);
+      yield* page.until("pointer checked Follow", (one) => one.loop === "pressed");
+      yield* page.press(LOOP, TRAY_CONTROLS);
+      yield* page.until("Follow off before navigation", (one) => one.loop === "released");
       yield* page.resize(size.columns === WIDE.columns ? { columns: 120, rows: 30 } : WIDE);
-      expect(page.screen().shows("[ ]loop")).toBe(true);
+      expect(page.screen().loop).toBe("released");
       yield* atSize(page, WIDE);
       yield* selectPane(page, "bindings");
-      expect(page.screen().shows("]loop")).toBe(false);
+      expect(page.screen().loop).toBeUndefined();
       yield* selectPane(page, "sidekick");
       if (size.columns !== WIDE.columns) {
         yield* page.resize(size);
       }
-      expect(page.screen().shows("[ ]loop")).toBe(true);
-      yield* page.press("[ ]loop");
-      yield* page.until("deliberately enabled Follow", (one) => one.shows("[x]loop"));
+      expect(page.screen().loop).toBe("released");
+      yield* page.press(LOOP, TRAY_CONTROLS);
+      yield* page.until("deliberately enabled Follow", (one) => one.loop === "pressed");
       expect(page.repl.fake.prompts).toHaveLength(0);
       expect(page.screen().shows("TODO")).toBe(true);
       if (size.columns === 72) {
         yield* page.press("Entries");
         yield* page.until("inactive Sidekick outlet", (one) => !composerShown(one));
-        expect(page.screen().shows("]loop")).toBe(false);
+        expect(page.screen().loop).toBeUndefined();
       }
     });
   }
@@ -3634,8 +3701,8 @@ describe("Follow: the running command owns the mounted control", () => {
       "reply joined",
       (one) => one.shows("Retained explicit reply.") && sidekickIdle(one),
     );
-    yield* page.press("[x]loop");
-    yield* page.until("Follow unchecked", (one) => one.shows("[ ]loop"));
+    yield* page.press(LOOP, TRAY_CONTROLS);
+    yield* page.until("Follow unchecked", (one) => one.loop === "released");
     page.repl.terminal.end();
     yield* awaited("first command joined", () => page.repl.outcome() !== undefined);
     const result = page.repl.outcome();
@@ -3644,7 +3711,7 @@ describe("Follow: the running command owns the mounted control", () => {
     }
     const before = host.fake.prompts.length;
     const cold = yield* useReplPage({ host, location: result.value.location });
-    expect(cold.screen().shows("[x]loop")).toBe(true);
+    expect(cold.screen().loop).toBe("pressed");
     expect(host.fake.prompts).toHaveLength(before);
   });
 });

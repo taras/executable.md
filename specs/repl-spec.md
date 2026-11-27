@@ -1483,14 +1483,18 @@ its own.
 
 Message is the input box at the foot of the Sidekick pane, above the fixed
 footer. The row above it holds the pane's controls on the pane's own
-unshaded surface. Follow is drawn `[x]loop`, its checkbox in the focus colour
-against a light label, with no cell between them. Two cells after it come the
-buttons: Stop while the Sidekick is working, then Send, one cell apart and each
-a filled rectangle with one cell of fill either side of its title, with Send's
-fill ending on the box's right edge. Focus puts the marker in a button's first
-cell and the focus surface in place of its fill, so the title does not move. Stop's title is the failure colour. Send's is the
-active action colour while there is a message to send and dim while there is
-none; the pane between and around the controls stays unshaded. The box is a thin edge around the message, with no heading,
+unshaded surface (`#0a0c0e`), in the order Stop, loop, Send — Stop only while
+the Sidekick is working. The loop toggle is Follow: it draws only `∞`, is named
+loop and exposes whether it is pressed, starts pressed in cyan (`#7ed3e8`) and
+is grey (`#7b858d`) when released, focus included. Enter or Space toggles it
+where it has focus. It takes three cells — its marker cell, the glyph and one
+more — with no fill, so one blank cell separates the glyph from each button.
+Stop and Send are filled rectangles (`#151d21`) with one cell of fill either
+side of their title, and Send's fill ends on the box's right edge. Stop's title
+is coral (`#c3756e`). Send's is light (`#e6ecf0`) while there is a message to
+send and muted (`#495259`) while there is none. Focus puts the marker in a
+control's first cell and the focus surface over its cells, so nothing moves.
+The box is a thin edge around the message, with no heading,
 label or focus marker of its own: the edge is the focus mark, cyan while Message
 holds focus and neutral grey when it does not. The message is drawn inside the
 edge in the rows the box's measured inner width cut it into, so a short message
@@ -1790,7 +1794,7 @@ The right column opens on **Sidekick**. Its tabs are **Sidekick**, **TODO**, and
 shared checklist in the reading area, with Message and its actions below.
 Bindings is available at the two three-column sizes.
 
-Follow starts checked and keeps its live setting across rounds, navigation and
+Follow starts pressed and keeps its live setting across rounds, navigation and
 resizing. Send stays available beside Stop during an active exchange. A held
 queue shows its reason and offers **Resume queue** beside the other fixed
 actions. When the actions cannot fit one row, each control stays whole.

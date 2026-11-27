@@ -78,8 +78,14 @@ export type ReplPresentationRole =
   | "interrupted-outcome"
   /** Something that has not settled, and the affordance that attends to it. */
   | "waiting"
-  /** A checkbox's brackets and mark, beside the label it sets. */
-  | "checkbox"
+  /** The Sidekick's loop toggle while it is on. */
+  | "loop-on"
+  /** The Sidekick's loop toggle while it is off, which focus does not brighten. */
+  | "loop-off"
+  /** A tray button's title while it has something to act on. */
+  | "button-title"
+  /** The tray's Stop button title. */
+  | "stop-title"
   /** A control that has nothing to act on yet. */
   | "inactive"
   /** Something activating does. */
@@ -317,9 +323,15 @@ export const REPL_PALETTE = Object.freeze({
   /** The tray and the Sidekick's composer. */
   composerSurface: 0x0d1215,
   /** The fill of the Sidekick's Stop and Send buttons. */
-  buttonSurface: 0x171d21,
+  buttonSurface: 0x151d21,
+  /** A tray button's title while it has something to act on. */
+  buttonTitle: 0xe6ecf0,
   /** A button's title while it has nothing to act on. */
-  inactiveAction: 0x4b5258,
+  inactiveAction: 0x495259,
+  /** The tray's Stop title. */
+  stopTitle: 0xc3756e,
+  /** The Sidekick's loop toggle while it is on; off is muted. */
+  loopOn: 0x7ed3e8,
   /** The one-cell rule between two columns. */
   paneDivider: 0x1c252b,
   /** A message waiting behind the active exchange. */
@@ -487,8 +499,14 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "metadata":
     case "field-hint":
       return REPL_PALETTE.muted;
-    case "checkbox":
-      return REPL_PALETTE.focus;
+    case "loop-on":
+      return REPL_PALETTE.loopOn;
+    case "loop-off":
+      return REPL_PALETTE.muted;
+    case "button-title":
+      return REPL_PALETTE.buttonTitle;
+    case "stop-title":
+      return REPL_PALETTE.stopTitle;
     case "inactive":
       return REPL_PALETTE.inactiveAction;
     case "successful-outcome":

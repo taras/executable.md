@@ -130,6 +130,7 @@ import {
   STOP,
   TRAY_CONTROLS,
   sidekickStopShown,
+  LOOP,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-journey.test.ts";
@@ -4452,8 +4453,8 @@ describe("Follow: submitted rounds in the running command", () => {
     page.repl.fake.script({ reply: followSubmission("<Output>OFF-ROUND</Output>") });
     yield* sendMessage(page, "one round only");
     yield* cleaning.operation;
-    yield* page.press("[x]loop");
-    yield* page.until("unchecked live Follow", (one) => one.shows("[ ]loop"));
+    yield* page.press(LOOP, TRAY_CONTROLS);
+    yield* page.until("unchecked live Follow", (one) => one.loop === "released");
     expect(page.repl.fake.prompts).toHaveLength(1);
     release.resolve();
     yield* savedReplies(page.repl, 1);
@@ -4474,7 +4475,7 @@ describe("Follow: submitted rounds in the running command", () => {
       return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
     });
     expect(page.repl.fake.prompts).toHaveLength(3);
-    expect(page.screen().shows("[ ]loop")).toBe(true);
+    expect(page.screen().loop).toBe("released");
   });
 });
 
