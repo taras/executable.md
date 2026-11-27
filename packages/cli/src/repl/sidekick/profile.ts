@@ -367,7 +367,9 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
       // schema here to read, so it states the authored contract it was selected
       // for instead.
       props: control.definition === undefined ? (control.props ?? []) : propsOf(control.definition),
-      requiresCapture: control.definition?.returns !== undefined,
+      requiresCapture:
+        control.definition?.returns !== undefined ||
+        (control.name === "Sidekick.Todo" && control.form === "paired"),
       designated:
         DESIGNATED.has(control.name) ||
         (ceiling.components ?? []).some((one) => one.name === control.name),

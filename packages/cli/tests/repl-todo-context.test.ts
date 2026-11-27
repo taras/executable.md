@@ -297,7 +297,35 @@ describe("TODO context on independently admitted prompts", () => {
     expect((yield* todo.read()).items[0].text).toBe("survives");
     expect(host.fake.prompts).toHaveLength(1);
   });
-  it("advertises and runs both TODO forms with capture", function* () {
+  for (const [source, feedback] of [
+    ["- [ ] Review proposal\n- [x] Send notes\n", "- [ ] Review proposal\n- [x] Send notes"],
+    ["", "The checklist is empty."],
+  ]) {
+    it(`delivers the first-turn bare TODO read once (${source === "" ? "empty" : "populated"})`, function* () {
+      const { host, dispatch } = yield* setup();
+      if (source !== "") {
+        yield* writeTextFile(host.workspace + "/todo.md", source);
+      }
+      host.fake.script({ reply: "<Sidekick.Todo />" });
+      host.fake.script({ reply: "<Output>Checklist reviewed.</Output>" });
+      const sent = yield* send(dispatch, "read the current checklist");
+      expect((yield* sent.completion).ok).toBe(true);
+      expect(host.fake.prompts).toHaveLength(2);
+      expect(host.fake.prompts[1]).toContain(feedback);
+      expect(host.fake.prompts[1].split(feedback)).toHaveLength(2);
+      expect(host.fake.prompts[0]).toContain("- <Sidekick.Todo /> — read.");
+      const saved = yield* records(host.execution);
+      const responses = saved.filter((one) => one.kind === "response");
+      expect(
+        responses.map(({ outcome, hasOutput, output }) => ({ outcome, hasOutput, output })),
+      ).toEqual([
+        { outcome: { status: "ok" }, hasOutput: false, output: "" },
+        { outcome: { status: "ok" }, hasOutput: true, output: "Checklist reviewed." },
+      ]);
+    });
+  }
+
+  it("runs a bound TODO read and advertises and runs a bound write", function* () {
     const { host, todo, dispatch } = yield* setup();
     yield* todo.save("", "- [ ] shared\n");
     const read = '<Sidekick.Todo as="result" />';
@@ -310,7 +338,7 @@ describe("TODO context on independently admitted prompts", () => {
     const sent = yield* send(dispatch, "read and complete");
     expect((yield* sent.completion).ok).toBe(true);
     expect(host.fake.prompts).toHaveLength(3);
-    expect(host.fake.prompts[0]).toContain(`- ${read} — read.`);
+    expect(host.fake.prompts[0]).toContain("- <Sidekick.Todo /> — read.");
     expect(host.fake.prompts[0]).toContain(`- ${write}…</Sidekick.Todo> — write.`);
     expect(host.fake.prompts[1]).toContain('"completed": false');
     expect(host.fake.prompts[2]).toContain('"completed": true');

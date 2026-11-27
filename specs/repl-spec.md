@@ -305,22 +305,23 @@ scopes, File operands are ordinary project paths. Testing remains session-owned.
 
 ## The shared checklist
 
-Edit the TODO checklist above Message, or read it from an entry or response:
+Edit the TODO checklist above Message or read it with `<Sidekick.Todo />`.
+A bare read returns the current tasks in order as Markdown checklist text, or
+“The checklist is empty.” A Sidekick response sends this text to the Sidekick
+as control feedback. The person sees content published through an explicit
+`Output`. A bare read in a REPL entry renders the text in that entry.
 
-```xmd
-<Sidekick.Todo as="items" />
-```
+`<Sidekick.Todo as="items" />` binds an ordered array of items with `text` and
+`completed` fields. One `todo.md` in the session workspace owns this list across
+entries, directories and chat selections. A missing file represents an empty
+checklist and reading it creates nothing. Reopening restores the file with no
+pending changes, recovery marker or automatic prompt.
 
-Each item has `text` and `completed`. One `todo.md` in the session workspace
-owns this list across entries, directories and chat selections. Missing means
-empty and creates nothing. Reopening restores this file, with no pending
-changes, recovery marker or automatic prompt.
-
-The paired form takes exactly one fenced unified diff and returns its own
-committed items. Both forms require `as` before body effects and render nothing.
-A completed retained result restores its historical value without rereading or
-rewriting the file. Both response forms receive ordinary designated result
-feedback; an entry capture starts no feedback exchange.
+The paired form requires `as` before projecting its body. It takes exactly one
+fenced unified diff and binds its own committed items. Both bound forms render
+nothing. A completed retained result restores its historical value without
+rereading or rewriting the file. Bound invocations in a Sidekick response also
+receive ordinary designated result feedback.
 
 ````xmd
 <Sidekick.Todo as="items">
