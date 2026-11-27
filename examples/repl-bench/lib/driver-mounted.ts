@@ -120,9 +120,7 @@ function* answer(page: ReplPage, command: Command, pendingInput: PendingInput): 
         return null;
       }
       pendingInput.from ??= page.screen().index;
-      for (let notch = 0; notch < Math.abs(command.delta); notch += 1) {
-        yield* page.wheel(command.delta < 0 ? "up" : "down", command.at);
-      }
+      yield* page.wheel(command.delta < 0 ? "up" : "down", command.at, Math.abs(command.delta));
       return null;
     }
     case "pause": {
@@ -144,6 +142,12 @@ function* answer(page: ReplPage, command: Command, pendingInput: PendingInput): 
     default:
       throw unanswered(`the ${command.action} action`);
   }
+}
+
+/** Answer driver commands against a mounted page, in the order they are sent. */
+export function mountedAnswers(page: ReplPage): (command: Command) => Operation<unknown> {
+  const pendingInput: PendingInput = { from: undefined };
+  return (command) => answer(page, command, pendingInput);
 }
 
 // The page is mounted in a root scope, which inherits nothing. An entry the
@@ -171,14 +175,13 @@ export function* connectMounted(
       ready.reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
-  const page = yield* ready.operation;
-  const pendingInput: PendingInput = { from: undefined };
+  const answerOne = mountedAnswers(yield* ready.operation);
   // A command that fails is handed back as a result. Thrown inside the scope it
   // would fail the scope too, and one refused step would end the mounted REPL.
   return function* (command) {
     const result: Result<unknown> = yield* scope.run(function* () {
       try {
-        return Ok(yield* answer(page, command, pendingInput));
+        return Ok(yield* answerOne(command));
       } catch (error) {
         return Err(error instanceof Error ? error : new Error(String(error)));
       }

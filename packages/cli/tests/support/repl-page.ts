@@ -157,7 +157,11 @@ export interface ReplPage {
   press(label: string, scope?: ScreenScope): Operation<void>;
   /** Send one named key. Waits for nothing. */
   key(name: PageKey): Operation<void>;
-  wheel(direction: "up" | "down", at: ScreenCell): Operation<void>;
+  /**
+   * Send wheel notches at one cell as one input chunk, as a terminal delivers a
+   * burst. Waits for nothing.
+   */
+  wheel(direction: "up" | "down", at: ScreenCell, notches?: number): Operation<void>;
   /** Send text to whatever holds focus. Waits for nothing. */
   type(text: string): Operation<void>;
   /** Resize the terminal and wait for a reading the new size produced. */
@@ -418,8 +422,10 @@ export function* useReplPage(
     repl.terminal.feed(KEYS[name]);
   }
 
-  function* wheel(direction: "up" | "down", at: ScreenCell): Operation<void> {
-    repl.terminal.feed(`\x1b[<${direction === "up" ? 64 : 65};${at.column + 1};${at.row + 1}M`);
+  function* wheel(direction: "up" | "down", at: ScreenCell, notches = 1): Operation<void> {
+    repl.terminal.feed(
+      `\x1b[<${direction === "up" ? 64 : 65};${at.column + 1};${at.row + 1}M`.repeat(notches),
+    );
   }
 
   function* type(text: string): Operation<void> {
