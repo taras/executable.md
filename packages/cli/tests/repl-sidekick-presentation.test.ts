@@ -584,9 +584,10 @@ describe("Flow 1 composer presentation", () => {
     expect(loop.row).toBe(send.row);
     expect(corner.row).toBe(send.row + 1);
     // The reference: a cyan checkbox against a light label, two blank cells,
-    // then a filled Send whose fill ends on the box's right edge column. The
-    // fill holds Send's two-cell marker room, its title and one cell after.
-    const fill = { from: send.column - 2, to: send.column + SEND.length };
+    // then a six-cell filled Send whose fill ends on the box's right edge
+    // column: one cell of fill, the title, one cell of fill.
+    const fill = { from: send.column - 1, to: send.column + SEND.length };
+    expect(fill.to - fill.from + 1).toBe(6);
     expect(fill.from - (loop.column + "[x]loop".length)).toBe(2);
     expect(fill.to).toBe(empty.composer?.right);
     expect(controlInks(ink, loop, "[x]")).toEqual(inks("[x]", REPL_PALETTE.focus));
@@ -611,7 +612,29 @@ describe("Flow 1 composer presentation", () => {
     // With something to send, Send takes the active action ink on the same fill.
     const ready = typed.locate(SEND, TRAY_CONTROLS);
     expect(controlInks(ink, ready, SEND)).toEqual(inks(SEND, REPL_PALETTE.heading));
-    expect(ink(ready.column - 2, ready.row).background).toBe(REPL_PALETTE.buttonSurface);
+    expect(ready.column).toBe(send.column);
+    expect(ink(ready.column - 1, ready.row).background).toBe(REPL_PALETTE.buttonSurface);
+    expect(ink(ready.column - 2, ready.row).background).toBe(REPL_PALETTE.conversationSurface);
+
+    // Keyboard focus on Send: the marker takes the fill's first cell and the
+    // focus surface replaces the fill, with the title and the row unmoved.
+    yield* page.key("Alt+ArrowUp");
+    const focused = yield* page.until(
+      "keyboard focus on Send",
+      (one) => one.found(`>${SEND}`, TRAY_CONTROLS) === 1,
+    );
+    expect(focused.locate(SEND, TRAY_CONTROLS)).toEqual(ready);
+    expect(focused.locate("[x]loop")).toEqual(loop);
+    expect(ink(ready.column - 1, ready.row).foreground).toBe(REPL_PALETTE.focus);
+    for (let column = fill.from; column <= fill.to; column += 1) {
+      expect([column, ink(column, ready.row).background]).toEqual([
+        column,
+        REPL_PALETTE.focusSurface,
+      ]);
+    }
+    expect(ink(fill.from - 1, ready.row).background).toBe(REPL_PALETTE.conversationSurface);
+    yield* page.key("Alt+ArrowDown");
+    yield* page.until("keyboard focus back in the composer", (one) => composerFocused(one));
     const text = typed.locate("Hello World!", COMPOSER_VALUE);
     expect(ink(text.column + "Hello World!".length, text.row).background).toBe(REPL_PALETTE.focus);
     // The short draft is one display row between the edges.
@@ -668,22 +691,22 @@ describe("Flow 1 composer beside waiting messages", () => {
       const sent = reading.locate(SEND, TRAY_CONTROLS);
       const loop = reading.locate("[x]loop");
       expect([loop.row, stop.row]).toEqual([sent.row, sent.row]);
-      expect(stop.column - 2 - (loop.column + "[x]loop".length)).toBe(2);
-      expect(sent.column - 2 - (stop.column + STOP.length + 1)).toBe(1);
-      expect(sent.column + SEND.length).toBe(reading.composer?.right);
+      // Six-cell fills: one cell, the title, one cell.
+      const stopFill = { from: stop.column - 1, to: stop.column + STOP.length };
+      const sendFill = { from: sent.column - 1, to: sent.column + SEND.length };
+      expect(stopFill.from - (loop.column + "[x]loop".length)).toBe(2);
+      expect(sendFill.from - stopFill.to - 1).toBe(1);
+      expect(sendFill.to).toBe(reading.composer?.right);
       expect(controlInks(ink, stop, STOP)).toEqual(inks(STOP, REPL_PALETTE.failure));
       expect(controlInks(ink, sent, SEND)).toEqual(inks(SEND, REPL_PALETTE.inactiveAction));
       expect(
-        [
-          stop.column - 2,
-          stop.column + STOP.length,
-          sent.column - 2,
-          sent.column + SEND.length,
-        ].map((column) => ink(column, sent.row).background),
+        [stopFill.from, stopFill.to, sendFill.from, sendFill.to].map(
+          (column) => ink(column, sent.row).background,
+        ),
       ).toEqual(Array.from({ length: 4 }, () => REPL_PALETTE.buttonSurface));
-      expect(ink(stop.column + STOP.length + 1, sent.row).background).toBe(
-        REPL_PALETTE.conversationSurface,
-      );
+      expect(
+        [stopFill.from - 1, stopFill.to + 1].map((column) => ink(column, sent.row).background),
+      ).toEqual([REPL_PALETTE.conversationSurface, REPL_PALETTE.conversationSurface]);
     };
     busyRow(queued);
     // The busiest staged row still fits one row at the medium size.

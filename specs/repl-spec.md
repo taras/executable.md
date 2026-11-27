@@ -1486,8 +1486,9 @@ footer. The row above it holds the pane's controls on the pane's own
 unshaded surface. Follow is drawn `[x]loop`, its checkbox in the focus colour
 against a light label, with no cell between them. Two cells after it come the
 buttons: Stop while the Sidekick is working, then Send, one cell apart and each
-a filled rectangle holding its title and its focus marker room, with Send's fill
-ending on the box's right edge. Stop's title is the failure colour. Send's is the
+a filled rectangle with one cell of fill either side of its title, with Send's
+fill ending on the box's right edge. Focus puts the marker in a button's first
+cell and the focus surface in place of its fill, so the title does not move. Stop's title is the failure colour. Send's is the
 active action colour while there is a message to send and dim while there is
 none; the pane between and around the controls stays unshaded. The box is a thin edge around the message, with no heading,
 label or focus marker of its own: the edge is the focus mark, cyan while Message

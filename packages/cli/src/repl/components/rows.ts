@@ -46,7 +46,8 @@ export function textOf(input: ReplViewData, name: string): string {
  * exactly why the marker is redrawn after every commit rather than remembered.
  */
 function marked(input: ReplViewData, label: string): string {
-  return focusPrefixed(label, fields(input)?.["focused"] === true);
+  const named = fields(input);
+  return focusPrefixed(label, named?.["focused"] === true, named?.["button"] === true);
 }
 
 /**
@@ -56,8 +57,15 @@ function marked(input: ReplViewData, label: string): string {
  * wide this row is before any node renders it. A measurement taken without the
  * marker is two columns narrower than the row drawn in its place, which is how a
  * control comes to be admitted to a row that cannot hold it.
+ *
+ * A filled button keeps one cell of its fill in front of its title for the
+ * marker instead of two, so the title sits one cell inside the fill and does
+ * not move when focus arrives.
  */
-export function focusPrefixed(label: string, focused: boolean): string {
+export function focusPrefixed(label: string, focused: boolean, button = false): string {
+  if (button) {
+    return `${focused ? ">" : " "}${label}`;
+  }
   return focused ? `> ${label}` : `  ${label}`;
 }
 
