@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/agent",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Agent sessions, prompts and held conversations for executable.md documents.",
   "type": "module",
   "exports": {
