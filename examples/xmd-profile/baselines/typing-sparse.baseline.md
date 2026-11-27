@@ -18,17 +18,16 @@ The other layers row is recorded for context and never fails the comparison.
 
 | Measure | Value |
 | --- | ---: |
-| calls: total | 20,434,070 |
-| calls: npm @xterm/headless | 14,066,460 |
-| calls: xmd cli | 2,433,868 |
-| calls: npm @termless/xtermjs | 2,064,375 |
-| calls: effection | 1,235,478 |
-| calls: deno runtime | 231,266 |
+| calls: total | 21,726,564 |
+| calls: npm @xterm/headless | 15,048,870 |
+| calls: xmd cli | 2,637,627 |
+| calls: npm @termless/xtermjs | 2,184,795 |
+| calls: effection | 1,237,548 |
+| calls: deno runtime | 213,691 |
 | calls: effectionx | 182,078 |
-| calls: xmd core | 132,780 |
+| calls: xmd core | 132,900 |
 | calls: npm @secretlint/core | 45,180 |
-| calls: xmd durable-streams | 21,060 |
-| calls: other layers | 21,525 |
+| calls: other layers | 43,875 |
 
 ```json
 {
@@ -40,27 +39,27 @@ The other layers row is recorded for context and never fails the comparison.
   "measures": [
     {
       "name": "calls: total",
-      "value": 20434070
+      "value": 21726564
     },
     {
       "name": "calls: npm @xterm/headless",
-      "value": 14066460
+      "value": 15048870
     },
     {
       "name": "calls: xmd cli",
-      "value": 2433868
+      "value": 2637627
     },
     {
       "name": "calls: npm @termless/xtermjs",
-      "value": 2064375
+      "value": 2184795
     },
     {
       "name": "calls: effection",
-      "value": 1235478
+      "value": 1237548
     },
     {
       "name": "calls: deno runtime",
-      "value": 231266
+      "value": 213691
     },
     {
       "name": "calls: effectionx",
@@ -68,19 +67,15 @@ The other layers row is recorded for context and never fails the comparison.
     },
     {
       "name": "calls: xmd core",
-      "value": 132780
+      "value": 132900
     },
     {
       "name": "calls: npm @secretlint/core",
       "value": 45180
     },
     {
-      "name": "calls: xmd durable-streams",
-      "value": 21060
-    },
-    {
       "name": "calls: other layers",
-      "value": 21525
+      "value": 43875
     }
   ]
 }
