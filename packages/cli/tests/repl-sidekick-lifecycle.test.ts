@@ -86,11 +86,12 @@ import {
   saidBySidekick,
   selectPane,
   sendMessage,
-  SIDEKICK_CONTROLS,
   sidekickIdle,
   stopSidekick,
   submitForm,
   typed,
+  trayFound,
+  STOP,
 } from "./support/screen-journeys.ts";
 
 import {
@@ -2303,10 +2304,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* entered.operation;
     yield* page.until(
       "both Stops with Follow enabled",
-      (one) =>
-        one.found("[stop]", SIDEKICK_CONTROLS) === 1 &&
-        roundStops(one) === 1 &&
-        one.shows("[x]loop"),
+      (one) => trayFound(one, STOP) === 1 && roundStops(one) === 1 && one.shows("[x]loop"),
     );
     yield* stopSidekick(page);
     yield* page.until(

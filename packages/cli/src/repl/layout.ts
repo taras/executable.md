@@ -597,13 +597,22 @@ export function headerBandProps(rows: number, surface: number, topGap = 0): Repl
 /** How far apart the two tabs of the right pane's header sit. */
 export const TAB_GAP = 2;
 
+/** How far apart the Sidekick tray's filled buttons sit. */
+export const BUTTON_GAP = 1;
+
 /**
- * The extra cells after Follow in the Sidekick tray. The approved composer
- * leaves seven blank cells between `[x]loop` and the control after it: the
- * row's gap on each side of this spacer and that control's two-cell marker
- * room supply the other six.
+ * One filled button of the Sidekick tray: its marker room and title on the
+ * button surface, with one cell of fill after the title. Focus still replaces
+ * the fill with the focus surface, as it does for every control.
  */
-export const FOLLOW_GAP = 1;
+export const BUTTON_PROPS: ReplBoxProps = Object.freeze({
+  layout: Object.freeze({
+    width: fit(),
+    height: fixed(1),
+    padding: Object.freeze({ right: 1 }),
+  }),
+  bg: terminalColour(REPL_PALETTE.buttonSurface),
+});
 
 /**
  * How many blank rows each shared column keeps above its first heading.

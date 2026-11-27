@@ -6,7 +6,13 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage, ScreenCell } from "./support/repl-page.ts";
-import { draftText, intoComposer, intoDraft, SIDEKICK_PANE } from "./support/screen-journeys.ts";
+import {
+  draftText,
+  intoComposer,
+  intoDraft,
+  SIDEKICK_PANE,
+  sidekickStopShown,
+} from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-wheel-scroll.test.ts";
 
@@ -51,7 +57,7 @@ function* eighteenTurns(page: ReplPage): Operation<void> {
     yield* page.key("Enter");
     yield* page.until(
       `turn ${at} completed`,
-      (one) => one.shows(`Reply witness ${at}`) && !one.shows("[stop]"),
+      (one) => one.shows(`Reply witness ${at}`) && !sidekickStopShown(one),
     );
   }
   yield* typed(page, "message-kept");
@@ -451,7 +457,7 @@ describe("wheel real consumers", () => {
       yield* page.until("new tail reached", (one) => one.shows("Chat row 59"));
       page.repl.fake.releaseDeltas();
       yield* page.until("following resumed", (one) => one.shows("Chat row 79"));
-      yield* page.until("turn completed", (one) => !one.shows("[stop]"));
+      yield* page.until("turn completed", (one) => !sidekickStopShown(one));
       expect(page.screen().shows("draft-kept")).toBe(true);
       expect(page.screen().shows("message-kep!t")).toBe(true);
       expect(page.screen().found("[↑ earlier]", SIDEKICK_PANE) > 0).toBe(false);

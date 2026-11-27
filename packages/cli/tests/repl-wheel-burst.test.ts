@@ -5,7 +5,13 @@ import { scoped, sleep } from "effection";
 import type { Operation } from "effection";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
-import { draftHolds, intoComposer, intoDraft, paneLines } from "./support/screen-journeys.ts";
+import {
+  draftHolds,
+  intoComposer,
+  intoDraft,
+  paneLines,
+  sidekickStopShown,
+} from "./support/screen-journeys.ts";
 import { generateTypingHistory } from "./support/typing-history.ts";
 
 const OWNER = "packages/cli/tests/repl-wheel-burst.test.ts";
@@ -183,7 +189,7 @@ describe("wheel bursts in one input chunk", () => {
     const held = chatRows(page);
     expect(held).toEqual(consecutive(followed[0] - 30, held.length));
     page.repl.fake.releaseDeltas();
-    yield* page.until("turn completed", (one) => !one.shows("[stop]"));
+    yield* page.until("turn completed", (one) => !sidekickStopShown(one));
     yield* sleep(60);
     expect(chatRows(page)).toEqual(held);
     expect(page.screen().shows("message-kept")).toBe(true);
@@ -239,7 +245,7 @@ describe("wheel bursts in one input chunk", () => {
       yield* page.key("Enter");
       yield* page.until(
         `turn ${at} completed`,
-        (one) => one.shows(`third ${at}`) && !one.shows("[stop]"),
+        (one) => one.shows(`third ${at}`) && !sidekickStopShown(one),
       );
     }
     yield* page.key("Tab");

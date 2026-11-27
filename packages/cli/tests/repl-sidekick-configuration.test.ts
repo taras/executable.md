@@ -78,11 +78,15 @@ import {
   scrollDrawerTo,
   selectPane,
   sendMessage,
-  SIDEKICK_CONTROLS,
   sidekickIdle,
   stopSidekick,
   tab,
   typed,
+  trayFound,
+  SEND,
+  STOP,
+  TRAY_CONTROLS,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 /** The names the provider advertises for the ids these rows choose by. */
@@ -1203,11 +1207,8 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
       // drawer took the keystrokes, so the composer's own route is walked.
       yield* intoComposer(page);
       yield* typed(page, "during");
-      yield* page.until(
-        "the Sidekick offering its own Send",
-        (one) => one.found("[send]", SIDEKICK_CONTROLS) === 1,
-      );
-      yield* page.press("[send]", SIDEKICK_CONTROLS);
+      yield* page.until("the Sidekick offering its own Send", (one) => trayFound(one, SEND) === 1);
+      yield* page.press(SEND, TRAY_CONTROLS);
       yield* page.until("the refusal Send is given", (one) =>
         one.shows("already doing something you asked for"),
       );
@@ -1522,10 +1523,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     yield* draftText(page, "kept draft");
     yield* sendMessage(page, "work on it");
     yield* repl.fake.holdingTurns(1);
-    yield* page.until(
-      "the Sidekick working",
-      (one) => one.found("[stop]", SIDEKICK_CONTROLS) === 1,
-    );
+    yield* page.until("the Sidekick working", (one) => trayFound(one, STOP) === 1);
     // Opened over a working Sidekick, which refuses to inspect while a turn is
     // running — so what is waited for is the drawer, not its choices. That
     // refusal is the established behaviour and is not what this row is about:
@@ -2132,7 +2130,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // A second explicit Retry waits behind the first; it consumes no newer text.
     yield* page.press("[retry]");
     yield* repl.fake.holdingTurns(1);
-    yield* page.until("active Retry", (one) => one.shows("[stop]"));
+    yield* page.until("active Retry", (one) => sidekickStopShown(one));
     yield* page.press("[retry]");
     yield* page.until("Retry accepted while busy", (one) =>
       one.shows("Waiting messages are kept only in this REPL."),

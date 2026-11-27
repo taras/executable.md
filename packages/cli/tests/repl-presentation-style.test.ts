@@ -134,7 +134,6 @@ import {
   draftHolds,
   draftText,
   openHistoryPositions,
-  SIDEKICK_PANE,
   drawerLines,
   drawerOpen,
   entrySettles,
@@ -144,9 +143,11 @@ import {
   saidBySidekick,
   sendMessage,
   SIDEKICK,
-  SIDEKICK_CONTROLS,
   sidekickIdle,
   typed,
+  trayFound,
+  SEND,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import { createFitStore, createPlainFitStore, fitPlain } from "../src/repl/fitting.ts";
@@ -6185,7 +6186,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     const talkingNow = yield* page.until("the Sidekick surface", (reading) =>
       composerShown(reading),
     );
-    expect(talkingNow.shows("[stop]")).toBe(true);
+    expect(sidekickStopShown(talkingNow)).toBe(true);
     expect(talkingNow.shows(DRAFT)).toBe(false);
     expect(talkingNow.shows(BINDINGS)).toBe(false);
   });
@@ -6353,7 +6354,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     expect(wide.shows(BINDINGS)).toBe(true);
     expect(wide.shows(SIDEKICK)).toBe(true);
     expect(wide.shows("[History]")).toBe(true);
-    expect(wide.occurrences("[send]")).toBe(1);
+    expect(trayFound(wide, SEND)).toBe(1);
     expect(wide.found("Send", { onRow: "✎ draft" })).toBe(1);
 
     const medium = yield* page.resize(MEDIUM);
@@ -6370,7 +6371,7 @@ describe("REPL presentation: the screen says what is placed", () => {
 
     const refused = yield* page.resize({ columns: 60, rows: 15 });
     expect(refused.shows("needs at least 72x20")).toBe(true);
-    expect(refused.occurrences("[send]")).toBe(0);
+    expect(trayFound(refused, SEND)).toBe(0);
   });
 
   it("keeps source text in the field that draws it", function* () {
@@ -6402,7 +6403,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     yield* intoDraft(page);
     yield* intoComposer(page);
     const reading = page.screen();
-    expect(reading.found("[send]", SIDEKICK_PANE)).toBe(1);
+    expect(trayFound(reading, SEND)).toBe(1);
     expect(reading.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 

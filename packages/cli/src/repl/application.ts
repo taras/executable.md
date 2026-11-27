@@ -85,7 +85,8 @@ import {
   workspaceQueueRows,
   workspaceBodyRows,
   TAB_GAP,
-  FOLLOW_GAP,
+  BUTTON_GAP,
+  BUTTON_PROPS,
   workspaceBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
@@ -13647,21 +13648,30 @@ function workspaceControls(
         styleOf("navigate"),
         {
           here: view.focused,
+          runs: [
+            { text: `[${workspace.follow ? "x" : " "}]`, token: "checkbox" },
+            { text: "loop", token: "output" },
+          ],
         },
       ),
     );
   }
   if (reading.busy) {
     items.push(
-      row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
+      row("sidekick:stop", "Stop", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
         here: view.focused,
       }),
     );
   }
+  // Dim while there is nothing to send, as the Draft's own Send is.
   items.push(
-    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("navigate"), {
-      here: view.focused,
-    }),
+    row(
+      "sidekick:send",
+      "Send",
+      { select: "send-message" },
+      styleOf(state.message.length === 0 ? "inactive" : "navigate"),
+      { here: view.focused },
+    ),
   );
   if (workspace.queueHeld !== undefined) {
     items.push(
@@ -14776,15 +14786,27 @@ function workspacePresentation(input: {
     }
     const left = parts(headerKeysOf(spec.left, candidates), region, surface);
     const grouped = parts(headerKeysOf(spec.right, candidates), region, surface);
-    const follow = grouped.findIndex((one) => one.key === "follow");
+    // The tray's Stop and Send are filled buttons one cell apart.
+    const buttons = grouped.filter(
+      (one) => one.key === "sidekick:stop" || one.key === "sidekick:send",
+    );
     const right =
-      id !== "tray" || follow < 0 || follow === grouped.length - 1
+      id !== "tray" || buttons.length === 0
         ? grouped
-        : [
-            ...grouped.slice(0, follow + 1),
-            box({ id: "box:tray:follow-gap", region, props: statedPartProps(FOLLOW_GAP) }),
-            ...grouped.slice(follow + 1),
-          ];
+        : grouped.flatMap((one) =>
+            one === buttons[0]
+              ? [
+                  box({
+                    id: "box:tray:buttons",
+                    region,
+                    props: fittedRowProps(BUTTON_GAP),
+                    children: buttons.map((button) => box({ ...button, props: BUTTON_PROPS })),
+                  }),
+                ]
+              : buttons.includes(one)
+                ? []
+                : [one],
+          );
     if (left.length === 0 && right.length === 0) {
       return [];
     }

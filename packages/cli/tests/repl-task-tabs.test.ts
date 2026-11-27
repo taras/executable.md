@@ -12,7 +12,10 @@ import {
   draftText,
   intoComposer,
   intoDraft,
-  SIDEKICK_CONTROLS,
+  SEND,
+  STOP,
+  TRAY_CONTROLS,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
@@ -132,7 +135,7 @@ for (const size of [
 
       page.repl.fake.script({ reply: "<Output>held answer</Output>", held: true });
       yield* page.type("active request");
-      yield* page.press("[send]", SIDEKICK_CONTROLS);
+      yield* page.press(SEND, TRAY_CONTROLS);
       yield* page.repl.fake.startedTurns(1);
       for (const text of ["waiting-one", "waiting-two"]) {
         yield* page.until(
@@ -140,7 +143,7 @@ for (const size of [
           (one) => !composerHolds(one, "request") && !composerHolds(one, "waiting-"),
         );
         yield* page.type(text);
-        yield* page.press("[send]", SIDEKICK_CONTROLS);
+        yield* page.press(SEND, TRAY_CONTROLS);
         yield* page.until("the queued message is visible", (one) =>
           one.rows.some((row) => row.includes(text) && /\sX\s*$/.test(row)),
         );
@@ -218,8 +221,11 @@ for (const size of [
         "Sidekick restores Message and keeps the queue",
         (one) => one.shows("waiting-one") && !one.shows("inserted") && composerFocused(one),
       );
-      yield* page.press("[stop]", SIDEKICK_CONTROLS);
-      yield* page.until("held queue", (one) => one.shows("[Resume queue]") && !one.shows("[stop]"));
+      yield* page.press(STOP, TRAY_CONTROLS);
+      yield* page.until(
+        "held queue",
+        (one) => one.shows("[Resume queue]") && !sidekickStopShown(one),
+      );
       capture(page, "queue-stopped");
       yield* page.press("X", { onRow: "waiting-one" });
       yield* page.until(

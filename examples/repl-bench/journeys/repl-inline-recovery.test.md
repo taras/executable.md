@@ -13,11 +13,11 @@
     <ReplBench.WaitForText text="Automatic feed… · generating" />
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="[send]" bold={true} />
+    <ReplBench.WaitForText text="> Send" bold={true} />
     <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="[stop]" bold={true} />
+    <ReplBench.WaitForText text="> Stop" bold={true} />
     <ReplBench.Key key="Enter" />
-    <ReplBench.WaitForText text="[stop]" present={false} />
+    <ReplBench.WaitForText text=" Stop " present={false} />
     <ReplBench.WaitForText text="Answer saved. Feedback receipt unknown." timeout="10s" />
     <ReplBench.SidekickStatus as="before" />
     <ReplBench.Resize columns={72} rows={20} />
@@ -32,7 +32,7 @@
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="Fresh instruction reached the same chat." />
     <ReplBench.WaitForText text="Answer saved. Feedback receipt unknown." />
-    <ReplBench.WaitForText text="[stop]" present={false} />
+    <ReplBench.WaitForText text=" Stop " present={false} />
     <ReplBench.SidekickStatus as="after" />
     <AssertEquals actual={after.conversation} expected={before.conversation} />
     <AssertEquals actual={after.messages.length} expected={before.messages.length + 1} />

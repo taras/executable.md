@@ -78,6 +78,10 @@ export type ReplPresentationRole =
   | "interrupted-outcome"
   /** Something that has not settled, and the affordance that attends to it. */
   | "waiting"
+  /** A checkbox's brackets and mark, beside the label it sets. */
+  | "checkbox"
+  /** A control that has nothing to act on yet. */
+  | "inactive"
   /** Something activating does. */
   | "action"
   /** A navigation control that keeps the surface of its pane. */
@@ -312,6 +316,10 @@ export const REPL_PALETTE = Object.freeze({
   paneHeaderSurface: 0x0e1215,
   /** The tray and the Sidekick's composer. */
   composerSurface: 0x0d1215,
+  /** The fill of the Sidekick's Stop and Send buttons. */
+  buttonSurface: 0x171d21,
+  /** A button's title while it has nothing to act on. */
+  inactiveAction: 0x4b5258,
   /** The one-cell rule between two columns. */
   paneDivider: 0x1c252b,
   /** A message waiting behind the active exchange. */
@@ -479,6 +487,10 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "metadata":
     case "field-hint":
       return REPL_PALETTE.muted;
+    case "checkbox":
+      return REPL_PALETTE.focus;
+    case "inactive":
+      return REPL_PALETTE.inactiveAction;
     case "successful-outcome":
       return REPL_PALETTE.success;
     case "failed-outcome":

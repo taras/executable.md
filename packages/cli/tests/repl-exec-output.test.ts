@@ -16,7 +16,13 @@ import { useMountedHost } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
-import { intoComposer, intoDraft, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
+import {
+  intoComposer,
+  intoDraft,
+  pasteDraft,
+  sidekickIdle,
+  sidekickStopShown,
+} from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-exec-output.test.ts";
 
@@ -485,7 +491,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
     release.resolve();
     yield* page.until(
       "the failed entry finishing cleanup",
-      (one) => one.shows("2 ×") && !one.shows("[stop]"),
+      (one) => one.shows("2 ×") && !sidekickStopShown(one),
     );
     const saved = yield* mountedReading(page.repl);
     expect(saved.model.entries).toHaveLength(2);

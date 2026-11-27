@@ -37,7 +37,7 @@ Deno.test("finds the composer's bordered input whatever it holds, and reads focu
     [REPL_PALETTE.muted, "Hello World!", false],
   ] satisfies readonly (readonly [number, string, boolean])[]) {
     const { backend, screen } = screenOf([
-      "  [x]loop    [send]",
+      "  [x]loop    Send ",
       ...boxed(edge, held, 1, 40),
       "  [exit]",
     ]);

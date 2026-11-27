@@ -160,7 +160,7 @@
     <ReplBench.Region name="sidekick-composer" focused={false}>
       <ReplBench.WaitForText text="Send sidekick a message" as="composer" />
     </ReplBench.Region>
-    <ReplBench.WaitForText text="[send]" row={composer.row-2} as="sidekickSend" />
+    <ReplBench.WaitForText text="Send" row={composer.row-2} as="sidekickSend" />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Type text="Draft Send witness" />
     <ReplBench.WaitForText text="│ Draft Send witness" as="draftValue" />
@@ -177,7 +177,7 @@
     <ReplBench.WaitForText text="│ Draft Send witness" present={false} />
     <ReplBench.WaitForText text="Output" as="sentOutput" />
     <ReplBench.WaitForText text="Draft Send witness" row={sentOutput.row+1} />
-    <ReplBench.WaitForText text="[send]" at={sidekickSend} />
+    <ReplBench.WaitForText text="Send" at={sidekickSend} />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Region name="transcript">
       <ReplBench.WaitForText text="── Round 1 ──" />
@@ -214,7 +214,7 @@
     <ReplBench.WaitForText text="needs at least 72x20" />
     <ReplBench.WaitForText text="larger" />
     <ReplBench.WaitForText text="Draft kept through resize" present={false} />
-    <ReplBench.WaitForText text="[send]" present={false} />
+    <ReplBench.WaitForText text="Send" present={false} />
 
     <ReplBench.Resize columns={160} rows={36} />
     <ReplBench.WaitForText text="> All sessions" />
