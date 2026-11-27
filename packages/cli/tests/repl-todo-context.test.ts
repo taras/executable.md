@@ -7,7 +7,7 @@ import { ensure, Ok, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 import type { AgentPromptEvent } from "@executablemd/agent/api";
 import type { ReplPluginInstallation } from "../api.ts";
-import { writeTextFile } from "@effectionx/fs";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { useHostFiles } from "@executablemd/runtime";
 import { installTodoSource } from "../src/node-todo-source.ts";
 import { todoPlugin } from "../src/repl/todo/plugin.ts";
@@ -298,7 +298,7 @@ describe("TODO context on independently admitted prompts", () => {
     expect(host.fake.prompts).toHaveLength(1);
   });
   for (const [source, feedback] of [
-    ["- [ ] Review proposal\n- [x] Send notes\n", "- [ ] Review proposal\n- [x] Send notes"],
+    ["- [ ] Review proposal\n\n- [X] Send notes\n", "- [ ] Review proposal\n\n- [X] Send notes\n"],
     ["", "The checklist is empty."],
   ]) {
     it(`delivers the first-turn bare TODO read once (${source === "" ? "empty" : "populated"})`, function* () {
@@ -326,30 +326,37 @@ describe("TODO context on independently admitted prompts", () => {
   }
 
   it("runs a bound TODO read and advertises and runs a bound write", function* () {
-    const { host, todo, dispatch } = yield* setup();
-    yield* todo.save("", "- [ ] shared\n");
+    const { host, dispatch } = yield* setup();
+    const file = host.workspace + "/todo.md";
+    const source = "- [ ] shared\n\n- [X] finished\n";
+    yield* writeTextFile(file, source);
     const read = '<Sidekick.Todo as="result" />';
     const write = '<Sidekick.Todo as="result">';
+    host.fake.script({ reply: "<Sidekick.Todo />" });
     host.fake.script({ reply: read });
     host.fake.script({
-      reply: write + "\n```diff\n@@ -1 +1 @@\n-- [ ] shared\n+- [x] shared\n```\n</Sidekick.Todo>",
+      reply:
+        write +
+        "\n```diff\n@@ -1,3 +1,3 @@\n-- [ ] shared\n+- [x] shared\n \n - [X] finished\n```\n</Sidekick.Todo>",
     });
     host.fake.script({ reply: "<Output>done</Output>" });
     const sent = yield* send(dispatch, "read and complete");
     expect((yield* sent.completion).ok).toBe(true);
-    expect(host.fake.prompts).toHaveLength(3);
+    expect(host.fake.prompts).toHaveLength(4);
     expect(host.fake.prompts[0]).toContain("- <Sidekick.Todo /> — read.");
     expect(host.fake.prompts[0]).toContain(`- ${write}…</Sidekick.Todo> — write.`);
-    expect(host.fake.prompts[1]).toContain('"completed": false');
-    expect(host.fake.prompts[2]).toContain('"completed": true');
+    expect(host.fake.prompts[1]).toContain(source);
+    expect(host.fake.prompts[2]).toContain('"completed": false');
+    expect(host.fake.prompts[3]).toContain('"completed": true');
+    expect(yield* readTextFile(file)).toBe("- [x] shared\n\n- [X] finished\n");
     const saved = yield* records(host.execution);
     expect(
       saved.filter((one) => one.kind === "control" && one.component === "Sidekick.Todo"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     const intents = saved.filter((one) => one.kind === "feedback" && one.turn === null);
     const acknowledgements = saved.filter((one) => one.kind === "feedback" && one.turn !== null);
-    expect(intents).toHaveLength(2);
-    expect(acknowledgements).toHaveLength(2);
+    expect(intents).toHaveLength(3);
+    expect(acknowledgements).toHaveLength(3);
     for (let index = 0; index < intents.length; index++) {
       const intent = intents[index];
       const acknowledgement = acknowledgements[index];

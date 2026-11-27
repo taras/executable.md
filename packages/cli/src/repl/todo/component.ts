@@ -55,14 +55,14 @@ function todoBody(claim: IdentityClaimant): FunctionComponent {
           if (service === undefined) {
             throw new TodoEditError("Sidekick.Todo requires an initialized live REPL session.");
           }
-          const items =
-            patch === undefined ? (yield* service.read()).items : yield* service.apply(patch);
-          if (bound) {
-            return parseJson(items);
+          if (patch !== undefined) {
+            return parseJson(yield* service.apply(patch));
           }
-          return items.length === 0
-            ? "The checklist is empty."
-            : items.map(({ text, completed }) => `- [${completed ? "x" : " "}] ${text}`).join("\n");
+          const document = yield* service.read();
+          if (bound) {
+            return parseJson(document.items);
+          }
+          return document.items.length === 0 ? "The checklist is empty." : document.source;
         },
       );
       return parseJson(stored);

@@ -306,10 +306,10 @@ scopes, File operands are ordinary project paths. Testing remains session-owned.
 ## The shared checklist
 
 Edit the TODO checklist above Message or read it with `<Sidekick.Todo />`.
-A bare read returns the current tasks in order as Markdown checklist text, or
+A bare read returns the exact `todo.md` source when it contains tasks, or
 “The checklist is empty.” A Sidekick response sends this text to the Sidekick
 as control feedback. The person sees content published through an explicit
-`Output`. A bare read in a REPL entry renders the text in that entry.
+`Output`. A bare read in a REPL entry renders the result as inert text.
 
 `<Sidekick.Todo as="items" />` binds an ordered array of items with `text` and
 `completed` fields. One `todo.md` in the session workspace owns this list across
@@ -3603,7 +3603,9 @@ A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 The compact response surface is derived from what is admitted. A control
 supplied with a definition that declares `returns` is listed with an `as`
-binding in each admitted form. Entry syntax is a read over the ordinary entry's
+binding in each admitted form. The paired `Sidekick.Todo` edit requires an
+`as` binding and is listed with one. The self-closing read is listed bare and
+accepts an optional `as` binding. Entry syntax is a read over the ordinary entry's
 current registry, finalized includes and host declarations. The index uses
 core's structured symbols. Named lookup uses core's
 [full reference selection and renderer](executable-mdx-spec.md#531-syntax--the-protected-symbols-component).
