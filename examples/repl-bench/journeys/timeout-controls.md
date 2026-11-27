@@ -13,7 +13,7 @@
   <ReplBench columns={72} rows={20} waitTimeout="2min">
     <Repl.Focus.Draft />
     <ReplBench.Key key="Enter" />
-    <ReplBench.Type text={"› message the sidekick\nonly-in-draft-1248"} />
+    <ReplBench.Type text={"┌────────────────────┐\n│ only-in-draft-1248 │\n└────────────────────┘"} />
     <ReplBench.WaitForText text="only-in-draft-1248" />
     <ReplBench.Region name="sidekick-composer">
       <ReplBench.WaitForText text="only-in-draft-1248" timeout="500ms" />

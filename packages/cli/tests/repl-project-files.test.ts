@@ -34,12 +34,12 @@ import {
   pasteDraft,
   entrySettles,
   intoComposer,
-  COMPOSER,
+  composerFocused,
   COMPOSER_VALUE,
   SIDEKICK_PANE,
 } from "./support/screen-journeys.ts";
 import type { Operation } from "effection";
-import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
+import type { ReplPage } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 
@@ -455,33 +455,6 @@ describe("1113: session scopes retain their restrictions", () => {
 });
 
 /**
- * Whether the committed tree holds focus on the Message field itself.
- *
- * Read from the decoration on the field's own heading, not from its value rows
- * and not from the `> ` cue. The cue is written from the view the frame was
- * built from and is a frame behind; the value rows are read rather than
- * reached, and the field above them owns the focus and the keyboard. The frame
- * draws its focused node's runs bold from `tree.focused()` after the reconcile,
- * and this field's style role carries no weight of its own, so bold on its
- * heading means the tree holds focus there and nothing else does.
- *
- * The decoration is read from the emulator, which is sound because a page hands
- * a predicate only its latest reading and the emulator holds exactly the cells
- * that write left.
- */
-function composerFocused(page: ReplPage, one: ScreenReading): boolean {
-  const screen = page.repl.terminal.screen;
-  if (screen === undefined) {
-    throw new Error("The terminal emulator is absent.");
-  }
-  if (one.occurrences(COMPOSER) !== 1) {
-    return false;
-  }
-  const at = one.locate(COMPOSER);
-  return screen.styleAt(at.column, at.row).attrs.includes(1);
-}
-
-/**
  * Send one instruction the way a person at a keyboard sends it.
  *
  * Its own text, confirmed in the composer's own value rows: the ordinary helper
@@ -512,7 +485,7 @@ function* sendInstruction(page: ReplPage, text: string): Operation<void> {
   );
   yield* page.until(
     "the Message field holding focus in the committed frame",
-    (one) => one.found(text, COMPOSER_VALUE) === 1 && composerFocused(page, one),
+    (one) => one.found(text, COMPOSER_VALUE) === 1 && composerFocused(one),
   );
   // This instruction is still unsent, by the only thing that could say
   // otherwise: no request the provider has received carries it. So the request

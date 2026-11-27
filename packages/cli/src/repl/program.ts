@@ -6240,24 +6240,25 @@ export function* prepareFrame(
   if (!chat.ok) {
     return chat;
   }
-  // The message's own value, cut to the same pane. Its rows are what the
-  // composer is as tall as, so this is fitted before the height is chosen and
-  // the height is chosen before the chat is admitted against what is left.
+  // The message's own value, cut to the inside of the composer's edge. Its
+  // rows are what the composer is as tall as, so this is fitted before the
+  // height is chosen and the height is chosen before the chat is admitted
+  // against what is left.
   //
   // Soft wrapping is display only: the string below is the one the person is
   // editing, and the cuts put no newline into it.
   // TODO replaces the chat viewport and leaves the composer mounted.
   const inspection = profileFor(view.size) === "narrow" ? "content" : "inspection";
-  const composing = third.value.boundsOf(`box:${inspection}:sidekick:message`) !== undefined;
+  const messageWidth = widthOf(third.value, `box:${inspection}:sidekick:message`);
   const editors = new Map<string, ReplEditor>();
   const message =
-    chatRoom < 1 || !composing
+    chatRoom < 1 || messageWidth < 1
       ? Ok(undefined)
       : yield* fitEditor(
           renderer,
           view.size,
           caretFor(view.state.message, view.state.messageCaret),
-          chatRoom,
+          messageWidth,
           view.focused === "sidekick:message",
           messageStore,
         );
@@ -6288,7 +6289,7 @@ export function* prepareFrame(
   // How tall the composer may be on this screen, and how tall it is.
   //
   // `C` is the chat capacity of the frame just measured, which carries the
-  // label and exactly one value row — the minimum composer. Growing to `h`
+  // edge and exactly one value row — the minimum composer. Growing to `h`
   // value rows takes `h - 1` rows from the chat, so `h` at most `C` leaves it
   // one row. Six is the accepted cap, and the fitted rows may be fewer.
   const messageRoom = presentsChat ? sidekickViewportOf(measured.manifest) : SIDEKICK_BODY;
@@ -6297,7 +6298,7 @@ export function* prepareFrame(
   const height =
     message.value === undefined
       ? 1
-      : Math.max(1, Math.min(Math.max(3, fittedRows), MESSAGE_VALUE_ROWS, Math.max(1, capacity)));
+      : Math.max(1, Math.min(fittedRows, MESSAGE_VALUE_ROWS, Math.max(1, capacity)));
   // The newest rows, because the end is where somebody is typing.
   const shown =
     message.value === undefined

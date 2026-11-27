@@ -16,6 +16,7 @@ import { awaited, recordingTerminal } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { z } from "zod";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
+import { composerOnScreen } from "./support/composer-input.ts";
 import { withResolvers } from "effection";
 import { XmdResponse } from "@executablemd/acp";
 import { childAddressPath } from "../src/headless/host.ts";
@@ -92,16 +93,11 @@ describe("987 — fresh child recovery reference", () => {
         yield* click(terminal.terminal, "Sidekick");
       }
       yield* visible(terminal.terminal, "[Start new chat]", frames);
-      for (
-        let step = 0;
-        step < 8 &&
-        !terminal.terminal.screen?.rows().some((row) => row.includes("> › message the sidekick"));
-        step++
-      ) {
+      for (let step = 0; step < 8 && !shownOn(terminal.terminal, FOCUSED_COMPOSER); step++) {
         yield* held.input.input(terminal.terminal, "\t");
         yield* held.input.ready(terminal.terminal);
       }
-      yield* visible(terminal.terminal, "> › message the sidekick", frames);
+      yield* visible(terminal.terminal, FOCUSED_COMPOSER, frames);
       const instruction = "Inspect the established result and propose the next step.";
       yield* held.input.input(terminal.terminal, instruction);
       yield* visible(terminal.terminal, "propose the next step.", frames);
@@ -286,7 +282,30 @@ function appliedAcknowledgement(value: unknown): boolean {
   return parsed.success && parsed.data.applied;
 }
 
-function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames): Operation<void> {
+/** Something a screen can show: text, or a named reading of its cells. */
+type Shown = string | { readonly name: string; readonly on: (terminal: Terminal) => boolean };
+
+function shownOn(terminal: Terminal, shown: Shown): boolean {
+  return typeof shown === "string"
+    ? terminal.screen?.rows().join("\n").includes(shown) === true
+    : shown.on(terminal);
+}
+
+function nameOf(shown: Shown): string {
+  return typeof shown === "string" ? JSON.stringify(shown) : shown.name;
+}
+
+const COMPOSER: Shown = {
+  name: "the Sidekick composer",
+  on: (terminal) => composerOnScreen(terminal.screen) !== undefined,
+};
+
+const FOCUSED_COMPOSER: Shown = {
+  name: "the focused Sidekick composer",
+  on: (terminal) => composerOnScreen(terminal.screen)?.focused === true,
+};
+
+function visible(terminal: Terminal, text: Shown, appliedFrames?: AppliedFrames): Operation<void> {
   return race([
     (function* () {
       while (true) {
@@ -294,7 +313,7 @@ function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames
         if (applied !== undefined) {
           yield* applied();
         }
-        if (terminal.screen?.rows().join("\n").includes(text)) {
+        if (shownOn(terminal, text)) {
           return;
         }
         yield* terminal.after(terminal.drawn);
@@ -303,23 +322,23 @@ function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames
     (function* (): Operation<never> {
       yield* sleep(10000);
       throw new Error(
-        `The attached screen did not show ${JSON.stringify(text)}: ${terminal.screen?.rows().join("\n")}`,
+        `The attached screen did not show ${nameOf(text)}: ${terminal.screen?.rows().join("\n")}`,
       );
     })(),
   ]);
 }
 
-function gone(terminal: Terminal, text: string): Operation<void> {
+function gone(terminal: Terminal, text: Shown): Operation<void> {
   return race([
     (function* () {
-      while (terminal.screen?.rows().join("\n").includes(text)) {
+      while (shownOn(terminal, text)) {
         yield* terminal.after(terminal.drawn);
       }
     })(),
     (function* (): Operation<never> {
       yield* sleep(10000);
       throw new Error(
-        `The attached screen still showed ${JSON.stringify(text)}: ${terminal.screen?.rows().join("\n")}`,
+        `The attached screen still showed ${nameOf(text)}: ${terminal.screen?.rows().join("\n")}`,
       );
     })(),
   ]);
@@ -549,9 +568,9 @@ describe("headless live UI", () => {
     });
     yield* visible(terminal, "[detach]", frames);
     yield* click("BINDINGS");
-    yield* gone(terminal, "message the sidekick");
+    yield* gone(terminal, COMPOSER);
     yield* click("SIDEKICK");
-    yield* visible(terminal, "message the sidekick", frames);
+    yield* visible(terminal, COMPOSER, frames);
     yield* held.input.input(terminal, "child message");
     yield* visible(terminal, "child message", frames);
     yield* held.input.input(terminal, "\x03");
@@ -606,7 +625,7 @@ describe("headless live UI", () => {
     });
     const at = yield* locate(screen, "BINDINGS");
     yield* held.input.input(screen, pointerPress(at));
-    yield* gone(screen, "message the sidekick");
+    yield* gone(screen, COMPOSER);
     screen.end();
     yield* ui;
     yield* held.task.halt();

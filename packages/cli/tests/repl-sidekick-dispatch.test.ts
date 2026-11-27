@@ -29,6 +29,8 @@ import {
   intoComposer,
   typed,
   SIDEKICK_PANE,
+  SIDEKICK_CONTROLS,
+  composerFocused,
   COMPOSER_VALUE,
   draftText,
   DRAFT_VALUE,
@@ -60,13 +62,13 @@ function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExch
 function* queueComposer(page: Parameters<typeof sendMessage>[0]): Operation<void> {
   yield* page.key("Ctrl+G");
   yield* page.key("1");
-  yield* page.until("Message region", (one) => one.shows("> › message the sidekick"));
+  yield* page.until("Message region", (one) => composerFocused(one));
 }
 
 function* queueSend(page: Parameters<typeof sendMessage>[0], text: string): Operation<void> {
   yield* queueComposer(page);
   yield* typed(page, text);
-  yield* page.press("[send]", { rightOf: "message the sidekick" });
+  yield* page.press("[send]", SIDEKICK_CONTROLS);
 }
 
 function fills(source: string): string {
@@ -375,9 +377,9 @@ describe("shared Sidekick dispatch", () => {
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect(page.screen().found("refused seventeenth", COMPOSER_VALUE)).toBe(1);
-    expect(page.screen().found("[send]", { rightOf: "message the sidekick" })).toBe(1);
-    expect(page.screen().found("[stop]", { rightOf: "message the sidekick" })).toBe(1);
-    yield* page.press("[send]", { rightOf: "message the sidekick" });
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
+    yield* page.press("[send]", SIDEKICK_CONTROLS);
     yield* page.until(
       "freed capacity accepts the previously refused text",
       (one) =>
@@ -392,9 +394,7 @@ describe("shared Sidekick dispatch", () => {
     yield* page.until("TODO opens without moving the queue", (one) => one.shows("> TODO"));
     expect(visibleWaiting()).toEqual(beforeSwitch);
     yield* page.press("SIDEKICK", { onRow: "TODO" });
-    yield* page.until("Message returns with the same queue", (one) =>
-      one.shows("> › message the sidekick"),
-    );
+    yield* page.until("Message returns with the same queue", (one) => composerFocused(one));
     expect(visibleWaiting()).toEqual(beforeSwitch);
   });
 

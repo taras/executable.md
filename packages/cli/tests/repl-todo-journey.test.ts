@@ -6,7 +6,12 @@ import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { useReplPage } from "./support/repl-page.ts";
-import { intoComposer, sidekickIdle } from "./support/screen-journeys.ts";
+import {
+  composerAt,
+  composerFocused,
+  intoComposer,
+  sidekickIdle,
+} from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
@@ -259,7 +264,7 @@ for (const size of [
       expect(page.repl.fake.prompts).toHaveLength(0);
       capture(page, "overflow-wrapped");
       const header = page.screen().locate("TODO", { onRow: "SIDEKICK" });
-      const composer = page.screen().locate("Follow");
+      const composer = page.screen().locate("]loop");
       const actions = page.screen().locate("task-0");
       const bodyRows = page
         .screen()
@@ -325,11 +330,9 @@ for (const size of [
         .screen()
         .rows.slice(
           page.screen().locate("TODO", { onRow: "SIDEKICK" }).row + 1,
-          page.screen().locate("message the sidekick").row,
+          composerAt(page.screen()).row,
         )
-        .map((row) =>
-          row.slice(Math.max(0, page.screen().locate("message the sidekick").column - 4)).trim(),
-        )
+        .map((row) => row.slice(composerAt(page.screen()).column).trim())
         .join("");
       expect(taskText).toContain("{inert}");
       expect(taskText).toContain("\\u{1b}");
@@ -434,7 +437,7 @@ for (const size of [
       );
       const visibleRows = (one: ScreenReading) =>
         one.rows
-          .slice(one.locate("TODO", { onRow: "SIDEKICK" }).row + 1, one.locate("Follow").row)
+          .slice(one.locate("TODO", { onRow: "SIDEKICK" }).row + 1, one.locate("]loop").row)
           .map((row) =>
             row
               .replace(/> (?=[☐☑])/, "  ")
@@ -451,7 +454,7 @@ for (const size of [
       );
       expect(visibleRows(page.screen())).toEqual(beforeSwitch);
       yield* page.key("Tab");
-      yield* page.until("Message fixed entry", (one) => one.shows("> › message the sidekick"));
+      yield* page.until("Message fixed entry", (one) => composerFocused(one));
       yield* page.key("Backtab");
       yield* page.until("TODO reverse fixed entry", (one) => one.shows("> TODO"));
       capture(page, "keyboard-navigation", timings);

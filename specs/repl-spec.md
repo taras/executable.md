@@ -1481,16 +1481,24 @@ window cannot hold are reached with wheel input or the reading keys. The
 narrow profile routes one outlet, has no shared column and is given no inset of
 its own.
 
-`Message Sidekick` is drawn as a block: its name and focus marker on one row,
-and the message itself in the rows the pane's measured width cut it into
-beneath them. The name stays put, so you can still see what you are typing into
-while the text scrolls inside it. An empty message is one blank row. The value
-grows to at most six rows — the name is not one of them — and then shows its
-caret's rows. Moving the caret reveals the corresponding part of the value;
-text outside that window remains in the message. On a screen with less room the cap is
-smaller: the composer is measured with its label and one value row, and it grows
-only as far as leaves the chat a row. Growing it takes rows from the chat, which
-keeps following its own newest messages as that room shrinks.
+Message is the input box at the foot of the Sidekick pane, above the fixed
+footer. The row above it holds the pane's controls on the pane's own
+unshaded surface: Follow, drawn `[x]loop` with no cell between its checkbox and
+its label, and `[send]`. The box is a thin edge around the message, with no heading,
+label or focus marker of its own: the edge is the focus mark, cyan while Message
+holds focus and neutral grey when it does not. The message is drawn inside the
+edge in the rows the box's measured inner width cut it into, so a short message
+is one row and the box three rows, its edge included. An empty message
+shows the muted placeholder `Send sidekick a message` on that row. The
+placeholder is presentation and never part of the message: the first character
+typed replaces it, and clearing the message brings it back without sending
+anything. The value grows to at most six rows — the edge is not one of them —
+and then shows its caret's rows. Moving the caret reveals the corresponding part
+of the value; text outside that window remains in the message. On a screen with
+less room the cap is smaller: the composer is measured with its edge and one
+value row, and it grows only as far as leaves the chat a row. Growing it takes
+rows from the chat, which keeps following its own newest messages as that room
+shrinks.
 
 Wrapping is display only. The message Send carries is the text you typed, with
 your own line breaks, blank lines and whitespace and none of the breaks the pane

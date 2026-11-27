@@ -1543,8 +1543,11 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
       expect(after.height).toBeLessThan(before.height);
       expect(after.height).toBeGreaterThanOrEqual(1);
       if (size.columns === 72) {
-        expect(field.x).toBe(1);
+        // The gutter cell, then the input's edge, then its padding before the value.
+        expect(full.regionOf("box:content:sidekick:message:outline")?.x).toBe(1);
         expect(presenter.grid.at(0, field.y)).toBe(" ");
+        expect(presenter.grid.at(1, field.y)).toBe("│");
+        expect(field.x).toBe(3);
       }
     }
   });
@@ -2040,9 +2043,8 @@ describe("shared TODO measured content", () => {
       expect(wrapped.boundsOf("todo:header")?.height).toBe(1);
       expect(wrapped.boundsOf("todo:add")?.height).toBe(1);
       const message = wrapped.boundsOf("sidekick:message");
-      const values = wrapped.keys.filter((key) => key.startsWith("sidekick:message:value:"));
       expect(message?.height).toBe(1);
-      expect(values.length).toBeGreaterThanOrEqual(3);
+      expect(wrapped.keys).toContain("sidekick:message:placeholder");
       expect(
         wrapped.boundsOf(todoTaskKeys(parseTodo("- [ ] " + "word ".repeat(70) + "\n"))[0])?.y,
       ).toBeLessThan(message?.y ?? 0);

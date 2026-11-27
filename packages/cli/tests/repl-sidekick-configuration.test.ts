@@ -58,7 +58,7 @@ import {
   retypeAgent,
   chosen,
   composerHolds,
-  COMPOSER,
+  composerShown,
   draftHolds,
   closeConfigure,
   drawerGone,
@@ -925,7 +925,7 @@ function* readOwnChat(page: ReplPage, title: string): Operation<void> {
   yield* page.until("the chat selector standing", (one) => one.shows("[Back to current chat]"));
   // The current chat keeps its usual controls even when it is the chat
   // somebody explicitly selected: it *is* the active association.
-  expect(page.screen().shows(COMPOSER)).toBe(true);
+  expect(composerShown(page.screen())).toBe(true);
 }
 
 /** The text with every space taken out, so wrapped prose compares as it was written. */

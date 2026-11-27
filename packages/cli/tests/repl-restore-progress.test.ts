@@ -18,6 +18,7 @@ import { recordingTerminal, useMountedHost } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { invalidRestoreEntries, savedRestoreFixture } from "./support/restore-progress.ts";
 import type { RetainedRestoreFixture } from "./support/restore-progress.ts";
+import { PLACEHOLDER } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-restore-progress.test.ts";
 
@@ -259,7 +260,7 @@ describe("#1037 cold restore progress", () => {
     expect(pending.join("\n")).toContain("Restored rounds · 155 / 155");
     expect(pending.join("\n")).toContain("Saved messages are being read before the REPL can open.");
     expect(pending.join("\n")).toMatch(/—  Restore the Sidekick conversation +\d+\.\ds/u);
-    expect(pending.join("\n")).not.toContain("message the sidekick");
+    expect(pending.join("\n")).not.toContain(PLACEHOLDER);
     bar(pending, 155, 155);
     sidekick.release();
 

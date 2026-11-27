@@ -46,7 +46,7 @@ export const ChildRecord = z.object({
 });
 
 export const omittedReason =
-  'Timed out waiting for "only-in-draft-1248" in sidekick-composer';
+  'Timed out waiting for the sidekick-composer region to be found, so "only-in-draft-1248" in sidekick-composer was never checked';
 const scriptedReasons = [
   'Scripted Sidekick prompt "Unexpected prompt.": prompt did not match the active stage.',
   'Timed out waiting for "fail-with-a-pending-acp-question" in viewport',
@@ -56,7 +56,7 @@ const scriptedReasons = [
 const reasons = [
   "test timed out after 8 seconds",
   omittedReason,
-  'Timed out waiting for "false-history-drawer" in history',
+  'Timed out waiting for the history region to be found, so "false-history-drawer" in history was never checked',
 ];
 
 const encoder = new TextEncoder();

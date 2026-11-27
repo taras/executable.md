@@ -144,6 +144,7 @@ import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplEntry } from "../src/repl/model.ts";
+import { composerOnScreen } from "./support/composer-input.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-recovery.test.ts";
 
@@ -3905,20 +3906,13 @@ describe("987 — actual child reference recording faults", () => {
           );
           for (
             let step = 0;
-            step < 12 &&
-            !terminal.terminal.screen
-              ?.rows()
-              .some((row) => row.includes("> › message the sidekick"));
+            step < 12 && composerOnScreen(terminal.terminal.screen)?.focused !== true;
             step++
           ) {
             yield* held.input.input(terminal.terminal, "\t");
             yield* held.input.ready(terminal.terminal);
           }
-          expect(
-            terminal.terminal.screen
-              ?.rows()
-              .some((row) => row.includes("> › message the sidekick")),
-          ).toBe(true);
+          expect(composerOnScreen(terminal.terminal.screen)?.focused).toBe(true);
           yield* held.input.input(
             terminal.terminal,
             "Inspect the established result and propose the next step.",

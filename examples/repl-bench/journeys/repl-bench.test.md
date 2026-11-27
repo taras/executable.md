@@ -31,19 +31,23 @@
     <Repl.Sidekick.Activate />
     <ReplBench.Resize columns={72} rows={20} />
     <ReplBench.WaitForText text="Entries    * Sidekick" />
-    <ReplBench.WaitForText text="message the sidekick" />
+    <ReplBench.Region name="sidekick-composer">
+      <ReplBench.WaitForText text="Send sidekick a message" />
+    </ReplBench.Region>
     <Terminal.Screenshot name="narrow-sidekick" as="image" />
     <AssertStringIncludes actual={image} expected="/narrow-sidekick.svg" />
     <File path={image.slice(directory.length + 1)} as="svg" />
     <AssertMatch actual={svg} expected={/^<svg .* viewBox="0 0 [\d.]+ 400"/} />
-    <AssertStringIncludes actual={svg} expected="message the sidekick" />
+    <AssertStringIncludes actual={svg} expected="Send sidekick a message" />
     <ReplBench.Key key="Ctrl+C" />
   </ReplBench>
   <AssertEquals actual={closed.exitCode} expected={0} />
   <AssertStringIncludes actual={closed.location} expected="view=sidekick" />
   <ReplBench resume={closed.resume}>
     <ReplBench.WaitForText text="Entries    * Sidekick" />
-    <ReplBench.WaitForText text="message the sidekick" />
+    <ReplBench.Region name="sidekick-composer">
+      <ReplBench.WaitForText text="Send sidekick a message" />
+    </ReplBench.Region>
   </ReplBench>
 </Test>
 
@@ -153,8 +157,10 @@
     <Repl.Focus.Draft />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="> Round" as="draft" />
-    <ReplBench.WaitForText text="message the sidekick" as="composer" />
-    <ReplBench.WaitForText text="[send]" row={composer.row-1} as="sidekickSend" />
+    <ReplBench.Region name="sidekick-composer" focused={false}>
+      <ReplBench.WaitForText text="Send sidekick a message" as="composer" />
+    </ReplBench.Region>
+    <ReplBench.WaitForText text="[send]" row={composer.row-2} as="sidekickSend" />
     <ReplBench.WaitForText text="No messages yet." />
     <ReplBench.Type text="Draft Send witness" />
     <ReplBench.WaitForText text="│ Draft Send witness" as="draftValue" />
@@ -202,7 +208,7 @@
     <ReplBench.WaitForText text="✎ draft" as="narrowBar" />
     <ReplBench.WaitForText text="Send" row={narrowBar.row} />
     <ReplBench.WaitForText text="SIDEKICK" present={false} />
-    <ReplBench.WaitForText text="message the sidekick" present={false} />
+    <ReplBench.WaitForText text="Send sidekick a message" present={false} />
 
     <ReplBench.Resize columns={40} rows={10} />
     <ReplBench.WaitForText text="needs at least 72x20" />

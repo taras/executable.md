@@ -70,7 +70,7 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
   answerField,
   chooseOffer,
-  COMPOSER,
+  composerShown,
   composerHolds,
   DRAFT,
   draftHolds,
@@ -1091,7 +1091,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
       // Stopped, with the provider's own cancellation held: this is what says
       // Stop joined what it asked for rather than returning over the top of it.
-      expect(page.screen().shows("[x] Follow")).toBe(true);
+      expect(page.screen().shows("[x]loop")).toBe(true);
       const cancelling = repl.fake.holdCancellation();
       try {
         // The Sidekick's own Stop. This person's entry is running, so the draft is
@@ -1111,7 +1111,7 @@ describe("Tier PV — generation that ended without a reply", () => {
       yield* page.until("the attempt Stop left", (one) =>
         one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
       );
-      expect(page.screen().shows("[x] Follow")).toBe(true);
+      expect(page.screen().shows("[x]loop")).toBe(true);
       const read = yield* settledReading(repl);
       expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
       expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
@@ -1353,7 +1353,7 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
       repl.terminal.feed("\x03");
       const cleared = yield* page.until(
         "the message box cleared",
-        (one) => one.shows(COMPOSER) && !composerHolds(one, "next question"),
+        (one) => composerShown(one) && !composerHolds(one, "next question"),
       );
       // Nothing else moved: the Draft, the running entry, the queue and the one
       // request the agent accepted are exactly as they were.
@@ -1405,7 +1405,7 @@ describe("Control-C and newlines in the message box", () => {
   function cleared(page: ReplPage, text: string): Operation<ScreenReading> {
     return page.until(
       `the message box no longer holding ${JSON.stringify(text)}`,
-      (one) => one.shows(COMPOSER) && !composerHolds(one, text),
+      (one) => composerShown(one) && !composerHolds(one, text),
     );
   }
 
@@ -1868,7 +1868,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     yield* page.until("Stop joining and the Sidekick coming to rest", (one) => sidekickIdle(one));
     expect(page.screen().shows("Shall I go on?")).toBe(false);
     expect(page.screen().shows("[answer sidekick]")).toBe(false);
-    expect(page.screen().shows("[x] Follow")).toBe(true);
+    expect(page.screen().shows("[x]loop")).toBe(true);
 
     // Nothing was answered and nothing followed: the intent stands with no
     // outcome beside it, which is what an interrupted question is.
@@ -2306,14 +2306,14 @@ describe("Follow: mounted Stop owns continuation", () => {
       (one) =>
         one.found("[stop]", SIDEKICK_CONTROLS) === 1 &&
         roundStops(one) === 1 &&
-        one.shows("[x] Follow"),
+        one.shows("[x]loop"),
     );
     yield* stopSidekick(page);
     yield* page.until(
       "Sidekick Stop joined with the entry still running",
       (one) => sidekickIdle(one) && roundStops(one) === 1,
     );
-    expect(page.screen().shows("[x] Follow")).toBe(true);
+    expect(page.screen().shows("[x]loop")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect((yield* settledReading(page.repl)).model.entries[0]?.terminal).toBeUndefined();
     release.resolve();
@@ -2338,7 +2338,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     );
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.repl.fake.prompts[2]).toContain("Entry entry-2 completed.");
-    expect(page.screen().shows("[x] Follow")).toBe(true);
+    expect(page.screen().shows("[x]loop")).toBe(true);
   });
 });
 

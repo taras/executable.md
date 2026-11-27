@@ -6,11 +6,13 @@ import { writeTextFile } from "@effectionx/fs";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import {
+  composerFocused,
   composerHolds,
   draftShows,
   draftText,
   intoComposer,
   intoDraft,
+  SIDEKICK_CONTROLS,
 } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
@@ -122,7 +124,7 @@ for (const size of [
       yield* page.until(
         "Message focus hides task actions",
         (one) =>
-          one.shows("> › message the sidekick") &&
+          composerFocused(one) &&
           !one.rows[one.locate("done code").row].includes("↑") &&
           !one.rows[one.locate("wrapped").row].includes("↑"),
       );
@@ -130,7 +132,7 @@ for (const size of [
 
       page.repl.fake.script({ reply: "<Output>held answer</Output>", held: true });
       yield* page.type("active request");
-      yield* page.press("[send]", { rightOf: "message the sidekick" });
+      yield* page.press("[send]", SIDEKICK_CONTROLS);
       yield* page.repl.fake.startedTurns(1);
       for (const text of ["waiting-one", "waiting-two"]) {
         yield* page.until(
@@ -138,7 +140,7 @@ for (const size of [
           (one) => !composerHolds(one, "request") && !composerHolds(one, "waiting-"),
         );
         yield* page.type(text);
-        yield* page.press("[send]", { rightOf: "message the sidekick" });
+        yield* page.press("[send]", SIDEKICK_CONTROLS);
         yield* page.until("the queued message is visible", (one) =>
           one.rows.some((row) => row.includes(text) && /\sX\s*$/.test(row)),
         );
@@ -152,7 +154,7 @@ for (const size of [
       yield* page.key("1");
       yield* page.until(
         "Message before editing",
-        (one) => !one.shows("[1]") && one.shows("> › message the sidekick"),
+        (one) => !one.shows("[1]") && composerFocused(one),
       );
       yield* page.type("kept message");
       yield* page.until("newer Message painted", (one) => composerHolds(one, "kept message"));
@@ -214,12 +216,9 @@ for (const size of [
       yield* page.press("SIDEKICK");
       yield* page.until(
         "Sidekick restores Message and keeps the queue",
-        (one) =>
-          one.shows("waiting-one") &&
-          !one.shows("inserted") &&
-          one.shows("> › message the sidekick"),
+        (one) => one.shows("waiting-one") && !one.shows("inserted") && composerFocused(one),
       );
-      yield* page.press("[stop]", { rightOf: "message the sidekick" });
+      yield* page.press("[stop]", SIDEKICK_CONTROLS);
       yield* page.until("held queue", (one) => one.shows("[Resume queue]") && !one.shows("[stop]"));
       capture(page, "queue-stopped");
       yield* page.press("X", { onRow: "waiting-one" });
@@ -240,9 +239,7 @@ for (const size of [
       expect(page.repl.fake.prompts[1]).not.toContain("waiting-one");
       expect(composerHolds(page.screen(), "kept message")).toBe(true);
       yield* page.press("SIDEKICK");
-      yield* page.until("Message fixed entry after queue", (one) =>
-        one.shows("> › message the sidekick"),
-      );
+      yield* page.until("Message fixed entry after queue", (one) => composerFocused(one));
       yield* page.type("X");
       yield* page.until("Message caret retained", (one) => composerHolds(one, "kXept message"));
       yield* page.key("Backspace");

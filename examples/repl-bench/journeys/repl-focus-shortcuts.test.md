@@ -10,8 +10,7 @@
       <Terminal.Type text="4" />
       <Terminal.Key key="2" />
       <Terminal.Type text="-suffix" />
-      <Terminal.WaitForText text="message the sidekick" bold={true} />
-      <Terminal.Region name="sidekick-composer">
+      <Terminal.Region name="sidekick-composer" focused={true}>
         <Terminal.WaitForText text="startup-message42-suffix" />
       </Terminal.Region>
 
@@ -24,7 +23,9 @@
 
       <Terminal.Key key="Tab" />
       <Terminal.WaitForText text="> Send" bold={true} />
-      <Terminal.WaitForText text="message the sidekick" bold={false} />
+      <Terminal.Region name="sidekick-composer" focused={false}>
+        <Terminal.WaitForText text="startup-message42-suffix" />
+      </Terminal.Region>
       <Terminal.Key key="Shift+Tab" />
       <Terminal.WaitForText text="> Round 1 · draft" />
       <Terminal.WaitForText text="> BINDINGS" present={false} />
@@ -32,7 +33,9 @@
       <Terminal.WaitForText text="│ pre-entry-draft" />
 
       <Repl.Focus.Message />
-      <Terminal.WaitForText text="message the sidekick" bold={true} />
+      <Terminal.Region name="sidekick-composer" focused={true}>
+        <Terminal.WaitForText text="startup-message42-suffix" />
+      </Terminal.Region>
       <Terminal.Type text="-more" />
       <Terminal.Region name="sidekick-composer">
         <Terminal.WaitForText text="startup-message42-suffix-more" />
@@ -75,12 +78,14 @@
       <Terminal.Key key="Ctrl+G" />
       <Terminal.Key key="1" />
       <Terminal.WaitForText text="[close]" />
-      <Terminal.WaitForText text="message the sidekick" present={false} />
+      <Terminal.WaitForText text="narrow-message" present={false} />
       <Terminal.Key key="Escape" />
       <Terminal.WaitForText text="[close]" present={false} />
 
       <Repl.Focus.Message />
-      <Terminal.WaitForText text="message the sidekick" bold={true} />
+      <Terminal.Region name="sidekick-composer" focused={true}>
+        <Terminal.WaitForText text="narrow-message" />
+      </Terminal.Region>
       <Terminal.Type text="-kept" />
       <Terminal.Region name="sidekick-composer">
         <Terminal.WaitForText text="narrow-message-kept" />
@@ -111,7 +116,9 @@
       <Repl.Focus.History />
       <Terminal.WaitForText text="> [History]" />
       <Repl.Focus.Message />
-      <Terminal.WaitForText text="> › message the sidekick" />
+      <Terminal.Region name="sidekick-composer" focused={true}>
+        <Terminal.WaitForText text="Send sidekick a message" />
+      </Terminal.Region>
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="Sessions" row={1} />
       <Repl.Focus.Draft />

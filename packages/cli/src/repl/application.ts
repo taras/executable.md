@@ -73,6 +73,9 @@ import {
   inlineActionRowProps,
   partsRowProps,
   roundEditorOutlineProps,
+  composerOutlineProps,
+  COMPOSER_EDGES,
+  COMPOSER_INPUT_PROPS,
   SPACER_PROPS,
   statedActionRowProps,
   statedPartProps,
@@ -10923,8 +10926,7 @@ export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined
 /**
  * The most rows the message's own value may take, before a screen reduces it.
  *
- * Six, and the label is not one of them: a name that scrolled away with the
- * text it names would leave somebody typing into an unlabelled box.
+ * Six, and the edge around them is not one of them.
  */
 export const MESSAGE_VALUE_ROWS = 6;
 
@@ -11053,6 +11055,7 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   if (
     key === "sidekick:message" ||
+    key === "sidekick:message:placeholder" ||
     key.startsWith("sidekick:message:value:") ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||
@@ -13636,7 +13639,7 @@ function workspaceControls(
     items.push(
       row(
         "follow",
-        `[${workspace.follow ? "x" : " "}] Follow`,
+        `[${workspace.follow ? "x" : " "}]loop`,
         { select: "toggle-follow" },
         styleOf("action"),
         {
@@ -13865,28 +13868,35 @@ function workspaceControls(
       }
     }
   }
+  // The field has no label of its own: the box its value is drawn in is what
+  // a person points at, and that box's edge is its focus mark.
   const claiming = claim === "sidekick:message";
   items.push(
-    field(
-      "sidekick:message",
-      " › message the sidekick",
-      state.message,
-      "message",
-      styleOf("draft"),
-      {
-        field: MESSAGE_FIELD,
-        caret: state.messageCaret,
-        here: view.focused,
-        block: true,
-        ...(claiming ? { focus: true } : {}),
-      },
-    ),
+    field("sidekick:message", "", state.message, "message", styleOf("draft"), {
+      field: MESSAGE_FIELD,
+      caret: state.messageCaret,
+      here: view.focused,
+      block: true,
+      ...(claiming ? { focus: true } : {}),
+    }),
   );
-  for (const [at, own] of messageValueRows(context).entries()) {
-    items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
+  if (state.message.length === 0) {
+    const focused = (claim ?? view.focused) === "sidekick:message";
+    const runs = tokenRuns([
+      ...(focused ? [{ text: " ", token: "caret" } as const] : []),
+      { text: MESSAGE_PLACEHOLDER, token: "metadata" },
+    ]);
+    items.push(line("sidekick:message:placeholder", runText(runs), styleOf("draft"), runs));
+  } else {
+    for (const [at, own] of messageValueRows(context).entries()) {
+      items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
+    }
   }
   return items;
 }
+
+/** What an empty Sidekick composer shows. Presentation only: never part of the message. */
+const MESSAGE_PLACEHOLDER = "Send sidekick a message";
 
 function workspaceDraft(view: ReplView, context: ReplPresentationContext): readonly Described[] {
   const open = view.model.entries.at(-1);
@@ -14356,7 +14366,8 @@ function trayAllocation(
       : context.headers?.has(`header:${id}`) === true
         ? 2
         : 1;
-  const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
+  const composer =
+    COMPOSER_EDGES + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
   const outletRows = profileFor(view.size) === "narrow" ? 2 : 0;
   const column = workspaceBodyRows(view.size) - wrapped("conversation") - 2 - extras - outletRows;
@@ -15078,8 +15089,35 @@ function workspacePresentation(input: {
     if (todo && (context.todo?.length ?? 0) > 0) {
       viewports.push({ id: "box:todo:viewport", region, window: "todo", owner: "viewport:todo" });
     }
-    const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
-    const trayHeader = headerRows("tray", region, REPL_PALETTE.composerSurface);
+    // The field's own node is the box its value rows are drawn in, so pointing
+    // anywhere inside the edge reaches it and the edge says whether it holds focus.
+    const composerRows = [
+      ...byKey("sidekick:message:placeholder"),
+      ...startingWith("sidekick:message:value:"),
+    ];
+    const composer =
+      byKey("sidekick:message").length === 0
+        ? []
+        : [
+            box({
+              id: `box:${region}:sidekick:message:outline`,
+              region,
+              props: composerOutlineProps(
+                (focusClaim(view) ?? view.focused) === "sidekick:message",
+              ),
+              children: [
+                box({
+                  id: `box:${region}:sidekick:message`,
+                  key: "sidekick:message",
+                  control: true,
+                  region,
+                  props: COMPOSER_INPUT_PROPS,
+                  children: composerRows.map((one) => rowBox(one, region, undefined)),
+                }),
+              ],
+            }),
+          ];
+    const trayHeader = headerRows("tray", region, REPL_PALETTE.conversationSurface);
     const statusRows = startingWith("queue-status:");
     const overflow = byKey("queue-overflow")[0];
     const queueStatus = statusRows.map((one, index) =>
@@ -15101,7 +15139,10 @@ function workspacePresentation(input: {
     const trayRows =
       allocation?.tray ??
       (recovery.length > 0
-        ? trayHeader.length + statusRows.length + queueRows.length + composer.length
+        ? trayHeader.length +
+          statusRows.length +
+          queueRows.length +
+          (composer.length === 0 ? 0 : composerRows.length + COMPOSER_EDGES)
         : "fit");
     return [
       ...headerRows("conversation", region, header),
@@ -15182,7 +15223,7 @@ function workspacePresentation(input: {
               region,
               props: workspaceBlockProps(
                 trayRows,
-                REPL_PALETTE.composerSurface,
+                REPL_PALETTE.conversationSurface,
                 WORKSPACE_LIST_GUTTER,
                 inside,
               ),
@@ -15203,7 +15244,7 @@ function workspacePresentation(input: {
                     ]
                   : queueRows),
                 ...trayHeader,
-                ...composer.map((one) => rowBox(one, region, room)),
+                ...composer,
               ],
             }),
           ]),

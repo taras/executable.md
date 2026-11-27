@@ -18,7 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import { useReplPage } from "./support/repl-page.ts";
-import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
+import type { ReplPage, ScreenCell, ScreenReading, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
 import { draftShows, intoDraft } from "./support/screen-journeys.ts";
 
@@ -35,8 +35,10 @@ const ROUND_BAR = { onRow: "✎ draft" };
 /** The Sidekick tab, which its own Send is drawn below and right of. */
 const SIDEKICK = "SIDEKICK";
 
-/** What the Sidekick's composer invites, which is the pane's own prompt. */
-const COMPOSER = "message the sidekick";
+/** Whether the Sidekick's composer box is drawn, read from its edge. */
+function composerShown(reading: ScreenReading): boolean {
+  return reading.composer !== undefined;
+}
 
 /** The Sidekick's own Send, scoped by the one bounded layout statement made here. */
 const SIDEKICK_SEND: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK };
@@ -136,7 +138,7 @@ describe("REPL page — Send and its visible scope", () => {
     yield* intoDraft(page);
     yield* typed(page, "Send appears in this draft");
     const ambiguous = yield* refusal(page.press("Send"));
-    expect(ambiguous).toContain("is shown 3 times in the whole screen");
+    expect(ambiguous).toContain("is shown 4 times in the whole screen");
 
     expect(page.screen().found("Send", ROUND_BAR)).toBe(1);
     yield* page.press("Send", ROUND_BAR);
@@ -161,7 +163,7 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     expect(narrow.found("Send", ROUND_BAR)).toBe(1);
     expect(narrow.locate("[History]").row).toBe(narrow.locate("Send", ROUND_BAR).row + 1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
-    expect(narrow.shows(COMPOSER)).toBe(false);
+    expect(composerShown(narrow)).toBe(false);
     // The scope that named the Sidekick's Send is refused here, saying which
     // visible text it could not find rather than pressing the Draft's instead.
     const gone = yield* refusal(page.press("[send]", SIDEKICK_SEND));
@@ -279,9 +281,9 @@ function* tab(page: ReplPage): Operation<void> {
  */
 function* intoComposer(page: ReplPage): Operation<void> {
   yield* page.press("BINDINGS");
-  yield* page.until("the Bindings reading", (one) => !one.shows(COMPOSER));
+  yield* page.until("the Bindings reading", (one) => !composerShown(one));
   yield* page.press(SIDEKICK);
-  yield* page.until("the Sidekick reading", (one) => one.shows(COMPOSER));
+  yield* page.until("the Sidekick reading", (one) => composerShown(one));
 }
 
 /** Ask the Sidekick something and wait for what it answers. */
