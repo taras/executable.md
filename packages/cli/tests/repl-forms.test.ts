@@ -2210,6 +2210,12 @@ describe("F3 — the History drawer is a window over every position (#875 R1)", 
     ).state;
     expect(chosen.route.at).toBe(POSITIONS[1].marker);
     expect(chosen.route.inspect).toBe(true);
+    const beforeClick = yield* admissionOf(after, asking(undefined), model, NARROW, engine);
+    const selected = Object.freeze({ ...model, selection: chosen.route.at, head: false });
+    const afterClick = yield* admissionOf(chosen, asking(undefined), selected, NARROW, engine);
+    expect(afterClick.windows.get(DRAWER_WINDOW)?.from).toBe(
+      beforeClick.windows.get(DRAWER_WINDOW)?.from,
+    );
   });
 });
 
