@@ -338,15 +338,15 @@ describe("TODO exact source grammar and patches", () => {
 
 describe("TODO typed component and historical result", () => {
   beforeEach(journalBeforeEach(OWNER));
-  it("requires as before effects, shares entry state, and replays an edit without repeating it", function* () {
+  it("requires as before write effects, shares entry state, and replays an edit without repeating it", function* () {
     const root = yield* fixture();
     const todo = yield* useTodo(root);
-    const missing = yield* entry("<Sidekick.Todo />");
+    const edit = "\n```diff\n@@ -0,0 +1 @@\n+- [ ] shared\n```\n</Sidekick.Todo>";
+    const missing = yield* entry("<Sidekick.Todo>" + edit);
     expect(missing.ok).toBe(false);
     expect(yield* exists(`${root}/todo.md`)).toBe(false);
     const history = new InMemoryStream();
-    const source =
-      '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] shared\n```\n</Sidekick.Todo>\n<Json value={items} />';
+    const source = '<Sidekick.Todo as="items">' + edit + "\n<Json value={items} />";
     const first = yield* entry(source, history);
     if (!first.ok) {
       throw first.error;

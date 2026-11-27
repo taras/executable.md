@@ -1,6 +1,7 @@
 import {
   content,
   formDispatcher,
+  hasBinding,
   parseJson,
   packageDocumentation,
   contributeDocumentation,
@@ -11,16 +12,6 @@ import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { Todo } from "./service.ts";
 import { TodoEditError } from "./document.ts";
-
-const RETURNS = {
-  type: "array",
-  items: {
-    type: "object",
-    properties: { text: { type: "string" }, completed: { type: "boolean" } },
-    required: ["text", "completed"],
-    additionalProperties: false,
-  },
-};
 
 const GENERATED = {
   "self-closing": {
@@ -38,12 +29,11 @@ export function todoDeclaration(): IdentityComponent {
     name: "Sidekick.Todo",
     origin: "@executablemd/cli:repl/todo",
     props: { type: "object", properties: {}, additionalProperties: false },
-    returns: RETURNS,
     forms: ["self-closing", "paired"],
     generated: GENERATED,
     description:
-      'Read your session checklist with `<Sidekick.Todo as="items" />`. Apply a matching unified diff in its content to edit the same checklist.',
-    as: "Required. Captures ordered items with text and completed fields.",
+      "Read your session checklist with `<Sidekick.Todo />`. Apply a matching unified diff in its content to edit the same checklist.",
+    as: "Optional for reads and required for edits. Captures ordered items with text and completed fields.",
     context: "One fenced unified diff for todo.md.",
     factory: todoBody,
   };
@@ -52,6 +42,10 @@ export function todoDeclaration(): IdentityComponent {
 function todoBody(claim: IdentityClaimant): FunctionComponent {
   function body(edit: boolean): FunctionComponent {
     return function* (_props, invocation): Operation<Json> {
+      const bound = yield* hasBinding();
+      if (edit && !bound) {
+        throw new TodoEditError('A paired <Sidekick.Todo> requires an "as" binding.');
+      }
       const name = yield* claim(invocation);
       const patch = edit ? patchBody(yield* content()) : undefined;
       const stored = yield createDurableOperation<Json>(
@@ -61,9 +55,14 @@ function todoBody(claim: IdentityClaimant): FunctionComponent {
           if (service === undefined) {
             throw new TodoEditError("Sidekick.Todo requires an initialized live REPL session.");
           }
-          return parseJson(
-            patch === undefined ? (yield* service.read()).items : yield* service.apply(patch),
-          );
+          const items =
+            patch === undefined ? (yield* service.read()).items : yield* service.apply(patch);
+          if (bound) {
+            return parseJson(items);
+          }
+          return items.length === 0
+            ? "The checklist is empty."
+            : items.map(({ text, completed }) => `- [${completed ? "x" : " "}] ${text}`).join("\n");
         },
       );
       return parseJson(stored);
