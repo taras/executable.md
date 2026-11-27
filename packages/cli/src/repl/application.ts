@@ -5263,6 +5263,8 @@ function row(
     readonly claim?: string | undefined;
     /** What this row's label is made of, where it is made of more than one thing. */
     readonly runs?: readonly ReplTokenRun[];
+    /** Whether this control is drawn as a filled button, with a one-cell marker. */
+    readonly button?: true;
   } = {},
 ): Described {
   const claims = options.focus === true || options.claim === key;
@@ -5270,7 +5272,10 @@ function row(
   // foreground it had and still says where the next keystroke lands.
   const here = options.here === key;
   const runs = tokenRuns([
-    { text: focusPrefixed("", here), token: here ? "focus-marker" : style.role },
+    {
+      text: focusPrefixed("", here, options.button === true),
+      token: here ? "focus-marker" : style.role,
+    },
     ...(options.runs ?? [{ text: label, token: style.role }]),
   ]);
   return {
@@ -5280,7 +5285,12 @@ function row(
     description: describeNode<ReplAction>({
       key,
       component: SELECT_ROW,
-      input: { label, ...select, ...(options.here === key ? { focused: true } : {}) },
+      input: {
+        label,
+        ...select,
+        ...(options.here === key ? { focused: true } : {}),
+        ...(options.button === true ? { button: true } : {}),
+      },
       ...(claims ? { focus: true } : {}),
     }),
   };
@@ -11236,7 +11246,7 @@ function measurementTextOf(component: ReplComponent<ReplAction>, input: ReplView
   }
   const label = typeof named?.["label"] === "string" ? named["label"] : "";
   if (component === SELECT_ROW) {
-    return focusPrefixed(label, focused);
+    return focusPrefixed(label, focused, named?.["button"] === true);
   }
   return label;
 }
@@ -13660,6 +13670,7 @@ function workspaceControls(
     items.push(
       row("sidekick:stop", "Stop", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
         here: view.focused,
+        button: true,
       }),
     );
   }
@@ -13670,7 +13681,7 @@ function workspaceControls(
       "Send",
       { select: "send-message" },
       styleOf(state.message.length === 0 ? "inactive" : "navigate"),
-      { here: view.focused },
+      { here: view.focused, button: true },
     ),
   );
   if (workspace.queueHeld !== undefined) {

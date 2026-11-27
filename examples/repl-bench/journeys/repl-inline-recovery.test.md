@@ -13,9 +13,9 @@
     <ReplBench.WaitForText text="Automatic feed… · generating" />
     <ReplBench.Focus target="sidekick-composer" />
     <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="> Send" bold={true} />
+    <ReplBench.WaitForText text=">Send" bold={true} />
     <ReplBench.Key key="Alt+ArrowUp" />
-    <ReplBench.WaitForText text="> Stop" bold={true} />
+    <ReplBench.WaitForText text=">Stop" bold={true} />
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text=" Stop " present={false} />
     <ReplBench.WaitForText text="Answer saved. Feedback receipt unknown." timeout="10s" />
