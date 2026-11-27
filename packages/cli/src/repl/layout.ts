@@ -713,6 +713,35 @@ export function roundEditorOutlineProps(): ReplBoxProps {
 }
 
 /**
+ * The Sidekick composer's input box: one thin edge around its value rows.
+ *
+ * The edge is the field's only focus mark, so it takes the focus colour while
+ * the field holds focus and the muted one otherwise. As tall as its rows, which
+ * the measured composer height already chose.
+ */
+export function composerOutlineProps(focused: boolean): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: fit(), direction: "ttb", padding: { left: 1, right: 1 } },
+    bg: terminalColour(REPL_PALETTE.draftSurface),
+    border: {
+      color: terminalColour(focused ? REPL_PALETTE.focus : REPL_PALETTE.muted),
+      top: 1,
+      bottom: 1,
+      left: 1,
+      right: 1,
+    },
+  };
+}
+
+/** The rows the composer's edge takes: one above its value rows and one below. */
+export const COMPOSER_EDGES = 2;
+
+/** The composer field's own node inside that edge, as tall as its value rows. */
+export const COMPOSER_INPUT_PROPS: ReplBoxProps = Object.freeze({
+  layout: Object.freeze({ width: grow(), height: fit(), direction: "ttb" as const }),
+});
+
+/**
  * One column of the body, stacked. `undefined` grows into what is left.
  *
  * Not clipped horizontally, and that is load-bearing. The engine resolves a

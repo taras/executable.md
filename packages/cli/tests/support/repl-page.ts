@@ -19,7 +19,8 @@
  * renderer and tree handles instead.
  *
  * A control is found by its visible label inside a scope stated from other
- * visible text. A locator refuses zero matches and refuses more than one, so a
+ * visible text, or from the Sidekick composer's drawn edge, which is the one
+ * place this product marks with colour alone and is read at capture. A locator refuses zero matches and refuses more than one, so a
  * reply that echoes `[send]`, or two panes that both draw it, fails loudly with
  * the rows it saw rather than pressing whichever came first.
  */
@@ -29,6 +30,8 @@ import type { Operation } from "effection";
 
 import { ReplTerminal } from "../../src/repl/terminal.ts";
 import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
+import { composerInput } from "./composer-input.ts";
+import type { ComposerInput } from "./composer-input.ts";
 import { MOUNTED_DEADLINE_MS, useMountedRepl } from "./mounted-repl.ts";
 import type { MountedRepl } from "./mounted-repl.ts";
 
@@ -53,12 +56,21 @@ export interface ScreenScope {
   readonly after?: string;
   readonly rightOf?: string;
   readonly rightOffset?: number;
-  readonly within?: {
-    readonly top: number;
-    readonly bottom: number;
-    readonly left: number;
-    readonly right: number;
-  };
+  readonly within?: ScreenBounds | DrawnBounds;
+}
+
+/** Rows from `top` up to `bottom` and columns from `left` up to `right`, each end exclusive. */
+export interface ScreenBounds {
+  readonly top: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly right: number;
+}
+
+/** Bounds read from what one reading drew, named for a refusal to quote. */
+export interface DrawnBounds {
+  readonly name: string;
+  readonly of: (reading: ScreenReading) => ScreenBounds | undefined;
 }
 
 /** The screen after one write the command completed. */
@@ -68,6 +80,8 @@ export interface ScreenReading {
   /** The size the terminal had while this was captured. */
   readonly size: ReplTerminalSize;
   readonly rows: readonly string[];
+  /** The Sidekick composer's input box, found from its drawn edge, where one is drawn. */
+  readonly composer: ComposerInput | undefined;
   shows(text: string): boolean;
   /** How many times the text appears, over every row, counting repeats in one row. */
   occurrences(text: string): number;
@@ -200,17 +214,29 @@ function visible(rows: readonly string[]): string[] {
   return rows.map((row) => row.trim()).filter((row) => row.length > 0);
 }
 
-function reading(index: number, size: ReplTerminalSize, cells: string[][]): ScreenReading {
+function reading(
+  index: number,
+  size: ReplTerminalSize,
+  cells: string[][],
+  composer: ComposerInput | undefined,
+): ScreenReading {
   const rows = cells.map((line) => line.join("").trimEnd());
   const columns = cells.map((line) => columnsOf(line));
   /** The column one offset into a row's text was drawn in. */
   const columnAt = (row: number, offset: number): number => columns[row]?.[offset] ?? offset;
   /** The cells this scope admits: a row range, and a column floor. */
   const bounded = (scope: ScreenScope | undefined, what: string) => {
-    let from = scope?.within?.top ?? 0;
-    let to = scope?.within?.bottom ?? rows.length;
-    let floor = scope?.within?.left ?? 0;
-    const ceiling = scope?.within?.right ?? size.columns;
+    const within = scope?.within;
+    const box = within !== undefined && "of" in within ? within.of(self) : within;
+    if (within !== undefined && box === undefined) {
+      throw new Error(
+        `${what} needs ${scopeOf(scope)} and none was drawn. rows=${JSON.stringify(visible(rows))}`,
+      );
+    }
+    let from = box?.top ?? 0;
+    let to = box?.bottom ?? rows.length;
+    let floor = box?.left ?? 0;
+    const ceiling = box?.right ?? size.columns;
     if (scope?.onRow !== undefined) {
       const at = rowOf(rows, scope.onRow, what);
       from = Math.max(from, at);
@@ -241,10 +267,11 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
     }
     return found;
   };
-  return {
+  const self: ScreenReading = {
     index,
     size,
     rows,
+    composer,
     shows: (text) => rows.some((row) => row.includes(text)),
     occurrences: (text) => rows.reduce((count, row) => count + offsetsIn(row, text).length, 0),
     found: (text, scope) => matches(text, scope, `looking for ${JSON.stringify(text)}`).length,
@@ -264,6 +291,7 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
       return found[0];
     },
   };
+  return self;
 }
 
 function scopeOf(scope: ScreenScope | undefined): string {
@@ -274,7 +302,11 @@ function scopeOf(scope: ScreenScope | undefined): string {
     scope.onRow === undefined ? undefined : `the row showing ${JSON.stringify(scope.onRow)}`,
     scope.after === undefined ? undefined : `below ${JSON.stringify(scope.after)}`,
     scope.rightOf === undefined ? undefined : `at or right of ${JSON.stringify(scope.rightOf)}`,
-    scope.within === undefined ? undefined : `inside ${JSON.stringify(scope.within)}`,
+    scope.within === undefined
+      ? undefined
+      : "of" in scope.within
+        ? `inside ${scope.within.name}`
+        : `inside ${JSON.stringify(scope.within)}`,
   ].filter((part) => part !== undefined);
   return parts.join(", ");
 }
@@ -301,7 +333,13 @@ export function* useReplPage(
       const screen = mounted?.terminal.screen;
       if (screen !== undefined) {
         count += 1;
-        latest = reading(count, screen.size, screen.cells());
+        const cells = screen.cells();
+        latest = reading(
+          count,
+          screen.size,
+          cells,
+          composerInput(cells, (row, column) => screen.styleAt(column, row).foreground),
+        );
         for (const wake of Array.from(wakers)) {
           wake();
         }

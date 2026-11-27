@@ -88,7 +88,9 @@ Run this acceptance document with the REPL Bench plugin. The expected screens ar
       <Terminal.WaitForText text="[1]" present={false} />
       <Terminal.Key key="1" />
       <Terminal.WaitForText text="[close]" />
-      <Terminal.WaitForText text="> › message the sidekick" present={false} />
+      <Terminal.Region name="sidekick-composer" focused={false}>
+        <Terminal.WaitForText text="Send sidekick a message" />
+      </Terminal.Region>
       <Terminal.Key key="Ctrl+G" />
       <Terminal.Key key="Escape" />
       <Terminal.WaitForText text="[close]" present={false} />

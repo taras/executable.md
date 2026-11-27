@@ -125,7 +125,8 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import {
   BINDINGS,
-  COMPOSER,
+  composerAt,
+  composerShown,
   COMPOSER_VALUE,
   DRAFT,
   DRAFT_VALUE,
@@ -1133,10 +1134,14 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
     // Both fields a keystroke reaches are the archive's input surface, in every
     // cell of every row they hold, blank ones included.
     const box = regionOf(observed, "box:round-editor:body");
-    const composer = regionOf(observed, "box:tray");
+    const composer = observed.boundsOf("sidekick:message");
+    if (composer === undefined) {
+      throw new Error("this frame placed no composer field");
+    }
     const surfaces = [
       ...[1, 2, 3].map((row) => grid.styleAt(box.x + box.width - 2, box.y + row)),
-      grid.styleAt(composer.x + composer.width - 2, composer.y + 2),
+      // The blank padding cell between the composer's value and its edge.
+      grid.styleAt(composer.x + composer.width, composer.y),
     ].map((style) => style.background);
     expect(surfaces).toEqual([SURFACE.input, SURFACE.input, SURFACE.input, SURFACE.input]);
 
@@ -5501,7 +5506,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       const reading = page.screen();
       return {
         draft: DRAFT_LINES.map((line) => reading.found(line, DRAFT_VALUE)),
-        message: reading.shows(COMPOSER) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
+        message: composerShown(reading) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
         filter: reading.shows("All sessions ▾"),
         frozen: reading.shows("[live]"),
       };
@@ -5604,7 +5609,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       const reading = page.screen();
       return {
         draft: DRAFT_LINES.map((line) => reading.found(line, DRAFT_VALUE)),
-        message: reading.shows(COMPOSER) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
+        message: composerShown(reading) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
       };
     };
     const kept = typedNow();
@@ -6158,7 +6163,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
       expect({ control, shown: entries.shows(control) }).toEqual({ control, shown: true });
     }
     // The Sidekick's own rows are on no other surface's screen.
-    expect(entries.shows(COMPOSER)).toBe(false);
+    expect(composerShown(entries)).toBe(false);
     expect(entries.shows(SIDEKICK)).toBe(false);
 
     // The Sessions surface: the Transcript's own reading, and no Draft.
@@ -6179,7 +6184,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     }
     yield* page.press("second request", { after: "TRANSCRIPT" });
     const talkingNow = yield* page.until("the Sidekick surface", (reading) =>
-      reading.shows(COMPOSER),
+      composerShown(reading),
     );
     expect(talkingNow.shows("[stop]")).toBe(true);
     expect(talkingNow.shows(DRAFT)).toBe(false);
@@ -6232,7 +6237,7 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
         yield* page.press("Sessions", { onRow: "Sessions" });
         yield* page.until("the Sessions list", (reading) => reading.shows("TRANSCRIPT"));
         yield* page.press("first request");
-        yield* page.until("the Sidekick surface", (reading) => reading.shows(COMPOSER));
+        yield* page.until("the Sidekick surface", (reading) => composerShown(reading));
       }
 
       // Every outcome is in the reading this screen is showing, whatever its
@@ -6311,14 +6316,14 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
 
     // What the column does offer is all there: the conversation's own composer,
     // and the controls that move the chat.
-    expect(resized.shows(COMPOSER)).toBe(true);
+    expect(composerShown(resized)).toBe(true);
     expect(resized.shows("[↑ earlier]")).toBe(false);
     expect(resized.shows("[↓ later]")).toBe(false);
 
     // One traversal of the chat's own window, which holds more rows than it
     // shows: each outcome's ink is read the first time that outcome is on the
     // screen.
-    const sourceColumn = resized.locate(COMPOSER).column;
+    const sourceColumn = composerAt(resized).column;
     const sourceBefore = resized.rows.map((row) => row.slice(0, sourceColumn));
     const inks = new Map<string, CellStyle>();
     const walk = yield* walkChat(page, inks);
@@ -6333,7 +6338,7 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
 
     // The composer the conversation is answered in is still there afterwards,
     // and what the Draft holds did not follow the chat's own movement.
-    expect(page.screen().shows(COMPOSER)).toBe(true);
+    expect(composerShown(page.screen())).toBe(true);
     expect(page.screen().rows.map((row) => row.slice(0, sourceColumn))).toEqual(sourceBefore);
   });
 });
@@ -6362,7 +6367,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     expect(narrow.shows("[History]")).toBe(true);
     expect(narrow.found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(narrow.shows(SIDEKICK)).toBe(false);
-    expect(narrow.shows(COMPOSER)).toBe(false);
+    expect(composerShown(narrow)).toBe(false);
 
     const refused = yield* page.resize({ columns: 60, rows: 15 });
     expect(refused.shows("needs at least 72x20")).toBe(true);

@@ -17,7 +17,7 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../../src/repl/terminal.ts";
 import { MOUNTED_DEADLINE_MS } from "./mounted-repl.ts";
 import type { Terminal } from "./mounted-repl.ts";
-import type { PageKey, ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
+import type { PageKey, ReplPage, ScreenCell, ScreenReading, ScreenScope } from "./repl-page.ts";
 
 /** The suffix in the Round editor heading. */
 export const DRAFT = "· draft";
@@ -28,20 +28,43 @@ export const SIDEKICK = "SIDEKICK";
 /** The other tab of that pane, whose selection takes the Sidekick's place. */
 export const BINDINGS = "BINDINGS";
 
-/** What the Sidekick's composer invites, which is the pane's own prompt. */
-export const COMPOSER = "message the sidekick";
+/** What an empty Sidekick composer shows in place of a message. */
+export const PLACEHOLDER = "Send sidekick a message";
+
+/** Whether this reading draws the Sidekick composer's input box. */
+export function composerShown(reading: ScreenReading): boolean {
+  return reading.composer !== undefined;
+}
+
+/** Whether the composer's edge is drawn in the focus colour. */
+export function composerFocused(reading: ScreenReading): boolean {
+  return reading.composer?.focused === true;
+}
+
+/**
+ * The top-left corner of the composer's edge, which sits on the row above its
+ * value and one column left of it.
+ */
+export function composerAt(reading: ScreenReading): ScreenCell {
+  const box = reading.composer;
+  if (box === undefined) {
+    throw new Error(`the Sidekick composer is not drawn. rows=${JSON.stringify(reading.rows)}`);
+  }
+  return { row: box.top - 1, column: box.left - 1 };
+}
 
 /** The Sidekick's own Send and Stop, by the one bounded layout statement available. */
 export const SIDEKICK_PANE: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK };
 
 /**
- * The rows the Sidekick's composer draws its own value on.
+ * The cells inside the Sidekick composer's edge, where its value is drawn.
  *
- * The multiline composer shares rows with the Draft. Its value starts four
- * cells left of its prompt label, so both vertical and horizontal bounds are
- * needed to distinguish the two fields. Measured at 160x36.
+ * The multiline composer shares rows with the Draft, so the edge bounds both
+ * the rows and the columns that belong to it.
  */
-export const COMPOSER_VALUE: ScreenScope = { after: COMPOSER, rightOf: COMPOSER, rightOffset: -4 };
+export const COMPOSER_VALUE: ScreenScope = {
+  within: { name: "the Sidekick composer's input", of: (reading) => reading.composer },
+};
 
 /**
  * The rows the Draft draws its own value on.
@@ -55,13 +78,23 @@ export const DRAFT_VALUE: ScreenScope = { after: DRAFT };
 /**
  * The Sidekick's own Send and Stop, found from its composer rather than its tab.
  *
- * The composer's prompt is drawn once wherever that field exists, and the
- * pane's controls are right of its own first cell while the Draft's are left of
- * it — measured at 160x36: the prompt at column 108, this pane's Send at 153,
- * the Draft's at 94. A drawer of this pane covers its tab but not the composer,
- * so this scope keeps answering while {@link SIDEKICK_PANE} cannot.
+ * The composer's edge is drawn once wherever that field exists, and the pane's
+ * controls are at or right of its left edge while the Draft's are left of it.
+ * A drawer of this pane covers its tab but not the composer, so this scope
+ * keeps answering while {@link SIDEKICK_PANE} cannot.
  */
-export const SIDEKICK_CONTROLS: ScreenScope = { rightOf: COMPOSER };
+export const SIDEKICK_CONTROLS: ScreenScope = {
+  within: {
+    name: "the columns at or right of the Sidekick composer's edge",
+    of: (reading) =>
+      reading.composer && {
+        top: 0,
+        bottom: reading.rows.length,
+        left: reading.composer.left - 1,
+        right: reading.size.columns,
+      },
+  },
+};
 
 /** How the History rail marks an entry that reached each outcome. */
 export const RAIL: Readonly<Record<string, string>> = Object.freeze({
@@ -121,8 +154,8 @@ export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Oper
  * real change: pressing the composer's prompt moves no focus on this product.
  */
 export function* intoComposer(page: ReplPage): Operation<void> {
-  yield* pressTab(page, BINDINGS, (one) => !one.shows(COMPOSER));
-  yield* pressTab(page, SIDEKICK, (one) => one.shows(COMPOSER));
+  yield* pressTab(page, BINDINGS, (one) => !composerShown(one));
+  yield* pressTab(page, SIDEKICK, (one) => composerShown(one));
 }
 
 /**
@@ -202,7 +235,7 @@ export function stopSidekick(page: ReplPage): Operation<void> {
   if (reading.occurrences("[stop]") === 1) {
     return page.press("[stop]");
   }
-  if (reading.shows(COMPOSER)) {
+  if (composerShown(reading)) {
     return page.press("[stop]", SIDEKICK_CONTROLS);
   }
   return page.press("[stop]", { onRow: "[close]" });
@@ -212,7 +245,7 @@ export function stopSidekick(page: ReplPage): Operation<void> {
 export function sidekickIdle(reading: ScreenReading): boolean {
   // A drawer of this pane covers its composer, and a pane with no composer
   // offers no Send: asked then, the answer is that it is not at rest.
-  if (!reading.shows(COMPOSER)) {
+  if (!composerShown(reading)) {
     return false;
   }
   return (
@@ -477,8 +510,8 @@ export function* chooseOffer(page: ReplPage, label: string): Operation<void> {
 /** Select one of the inspection column's two tabs and wait for its reading. */
 export function selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Operation<void> {
   return pane === "sidekick"
-    ? pressTab(page, SIDEKICK, (one) => one.shows(COMPOSER))
-    : pressTab(page, BINDINGS, (one) => !one.shows(COMPOSER));
+    ? pressTab(page, SIDEKICK, (one) => composerShown(one))
+    : pressTab(page, BINDINGS, (one) => !composerShown(one));
 }
 
 /**

@@ -39,7 +39,9 @@
 
     <XMD.Repl resume={closed.resume} expectExit={true} as="reopened">
       <Terminal.WaitForText text="Entries    * Sidekick" />
-      <Terminal.WaitForText text="message the sidekick" />
+      <Terminal.Region name="sidekick-composer">
+        <Terminal.WaitForText text="Send sidekick a message" />
+      </Terminal.Region>
       <Terminal.WaitForText text="Entries" row={1} as="entriesTab" />
       <Terminal.Click at={entriesTab} />
       <Terminal.WaitForText text="1. [ok]" as="retainedEntry" />

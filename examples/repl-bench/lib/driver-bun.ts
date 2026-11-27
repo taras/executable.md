@@ -212,6 +212,8 @@ export function useDriver(options: Launch) {
       label: string,
       read: (frame: ReturnType<typeof viewport>) => T | undefined,
       ms: number,
+      /** Why the last frame failed, where that is something other than the label. */
+      missing?: (frame: ReturnType<typeof viewport>) => string | undefined,
     ): Operation<T> {
       return yield* race([
         (function* (): Operation<T> {
@@ -229,7 +231,7 @@ export function useDriver(options: Launch) {
         })(),
         (function* (): Operation<never> {
           yield* sleep(ms);
-          throw new Error(`Timed out waiting for ${label}`);
+          throw new Error(missing?.(lastFrame()) ?? `Timed out waiting for ${label}`);
         })(),
       ]);
     }
@@ -243,6 +245,7 @@ export function useDriver(options: Launch) {
         present = true,
         unique = false,
         bold,
+        focused,
         timeout = ACTION_TIMEOUT,
       } = query;
       const expected = count ?? (present ? (unique ? 1 : undefined) : 0);
@@ -259,7 +262,7 @@ export function useDriver(options: Launch) {
         label,
         (frame) => {
           const box = frame.box(region);
-          if (box === undefined) {
+          if (box === undefined || (focused !== undefined && frame.composerFocused !== focused)) {
             return undefined;
           }
           const hits = [...frame.matches(text, box)].filter(
@@ -274,6 +277,14 @@ export function useDriver(options: Launch) {
           return expected === 0 ? null : hits[0];
         },
         timeout,
+        // A region that was never found is a different failure from text that
+        // was never shown inside it, and says so.
+        (frame) =>
+          region !== undefined && frame.box(region) === undefined
+            ? `Timed out waiting for the ${region} region to be found, so ${label} was never checked`
+            : focused !== undefined && frame.composerFocused !== focused
+              ? `Timed out waiting for the ${region} region to be ${focused ? "focused" : "unfocused"}, so ${label} was never checked`
+              : undefined,
       );
     }
 
@@ -328,8 +339,8 @@ export function useDriver(options: Launch) {
                     ACTION_TIMEOUT,
                   ),
                 );
-              } else if (current.composerLabel !== undefined) {
-                click(current.composerLabel);
+              } else if (current.composerCell !== undefined) {
+                click(current.composerCell);
               }
               return yield* wait(
                 "keyboard focus in the Sidekick composer",

@@ -22,6 +22,8 @@ export const waitOptions = z.object({
   present: z.boolean().optional(),
   unique: z.boolean().optional(),
   bold: z.boolean().optional(),
+  /** Whether the sidekick-composer region must show keyboard focus on its edge. */
+  focused: z.boolean().optional(),
 });
 export const command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ready") }),

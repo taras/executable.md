@@ -49,7 +49,7 @@ import type { MountedHost, Terminal } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ScreenReading, ReplPage } from "./support/repl-page.ts";
 import {
-  COMPOSER,
+  composerShown,
   DRAFT as DRAFT_HEADING,
   DRAFT_VALUE,
   closeDrawer,
@@ -1473,7 +1473,7 @@ function* takeTheJourney(
 function* answeredUnder(page: ReplPage, scope: string, text: string): Operation<number> {
   yield* openCatalog(page);
   yield* chooseCatalogRow(page, scope);
-  if (page.screen().shows(COMPOSER)) {
+  if (composerShown(page.screen())) {
     yield* selectPane(page, "bindings");
   }
   const reading = yield* page.until(

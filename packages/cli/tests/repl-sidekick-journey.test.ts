@@ -102,7 +102,8 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
   closeDrawer,
-  COMPOSER,
+  composerAt,
+  composerShown,
   COMPOSER_VALUE,
   composerHolds,
   draftHolds,
@@ -1407,7 +1408,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
       reply: "Review result.",
     });
     fake.script({ reply: "<Output>Review noted.</Output>" });
-    yield* page.until("the Sidekick composer", (screen) => screen.shows(COMPOSER));
+    yield* page.until("the Sidekick composer", (screen) => composerShown(screen));
     yield* typed(page, "review");
     yield* page.press("[send]");
     const identity = `Entry 1 · ${MOUNTED_AGENT} · `;
@@ -4446,8 +4447,8 @@ describe("Follow: submitted rounds in the running command", () => {
     page.repl.fake.script({ reply: followSubmission("<Output>OFF-ROUND</Output>") });
     yield* sendMessage(page, "one round only");
     yield* cleaning.operation;
-    yield* page.press("[x] Follow");
-    yield* page.until("unchecked live Follow", (one) => one.shows("[ ] Follow"));
+    yield* page.press("[x]loop");
+    yield* page.until("unchecked live Follow", (one) => one.shows("[ ]loop"));
     expect(page.repl.fake.prompts).toHaveLength(1);
     release.resolve();
     yield* savedReplies(page.repl, 1);
@@ -4468,7 +4469,7 @@ describe("Follow: submitted rounds in the running command", () => {
       return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
     });
     expect(page.repl.fake.prompts).toHaveLength(3);
-    expect(page.screen().shows("[ ] Follow")).toBe(true);
+    expect(page.screen().shows("[ ]loop")).toBe(true);
   });
 });
 
@@ -5724,7 +5725,7 @@ describe("1342 — written Markdown in the chat and in entry Output", () => {
 
   /** Where the chat scrolls: above the composer, which stays put. */
   function inChat(reading: ScreenReading): { readonly column: number; readonly row: number } {
-    const composer = reading.locate(COMPOSER);
+    const composer = composerAt(reading);
     return { column: composer.column, row: composer.row - 3 };
   }
 

@@ -29,7 +29,12 @@ import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { PageKey, ReplPage } from "./support/repl-page.ts";
 
-import { DRAFT_VALUE, intoDraft } from "./support/screen-journeys.ts";
+import {
+  COMPOSER_VALUE,
+  composerShown,
+  DRAFT_VALUE,
+  intoDraft,
+} from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-focus-regions.test.ts";
 
@@ -69,7 +74,7 @@ describe("REPL focus regions: the normal screen", () => {
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* typed(page, "message-kept");
-      expect(page.screen().found("message-kept", { after: "message the sidekick" })).toBe(1);
+      expect(page.screen().found("message-kept", COMPOSER_VALUE)).toBe(1);
       expect(page.screen().found("draft-kept", DRAFT_VALUE)).toBe(1);
       expect(page.repl.fake.prompts).toHaveLength(0);
 
@@ -107,10 +112,10 @@ describe("REPL focus regions: the normal screen", () => {
     expect(page.screen().shows("> SIDEKICK")).toBe(true);
     yield* key(page, "ArrowRight");
     expect(page.screen().shows("> BINDINGS")).toBe(true);
-    expect(page.screen().shows("message the sidekick")).toBe(true);
+    expect(composerShown(page.screen())).toBe(true);
     expect(page.screen().shows("[refresh]")).toBe(false);
     yield* page.key("Enter");
-    yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
+    yield* page.until("Bindings selected", (one) => !composerShown(one));
     for (let at = 0; at < 5 && !page.screen().shows("> [History]"); at++) {
       yield* key(page, "Tab");
     }
@@ -243,7 +248,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* page.resize(MEDIUM);
     yield* page.resize(NARROW);
     yield* page.type("\x071");
-    yield* page.until("narrow Sidekick", (one) => one.shows("message the sidekick"));
+    yield* page.until("narrow Sidekick", (one) => composerShown(one));
     expect(page.screen().shows("* Sidekick")).toBe(true);
     expect(page.screen().shows("* Entries")).toBe(false);
     expect(page.screen().shows("* Sessions")).toBe(false);
@@ -252,7 +257,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* page.resize({ columns: 71, rows: 19 });
     yield* page.until("the minimum-size refusal", (one) => one.shows("needs at least 72x20"));
     yield* page.resize(NARROW);
-    yield* page.until("the routed reading recovered", (one) => one.shows("message the sidekick"));
+    yield* page.until("the routed reading recovered", (one) => composerShown(one));
     yield* page.type("\x071");
     yield* page.type("-recovered");
     yield* page.until("the recovered Message", (one) => one.shows("next-message-narrow-recovered"));

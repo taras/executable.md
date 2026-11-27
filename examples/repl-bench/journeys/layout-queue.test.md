@@ -20,7 +20,9 @@
       <Repl.Sidekick.Activate />
       <Terminal.Resize columns={72} rows={20} />
       <Terminal.WaitForText text="* Sidekick" row={1} />
-      <Terminal.WaitForText text="message the sidekick" as="composer" />
+      <Terminal.Region name="sidekick-composer">
+        <Terminal.WaitForText text="Send sidekick a message" as="composer" />
+      </Terminal.Region>
       <Terminal.WaitForText text="No entry yet" as="round" />
       <AssertEquals actual={round.row > composer.row} expected={true} />
       <Terminal.WaitForText text="TRANSCRIPT" row={1} present={false} />
@@ -74,7 +76,7 @@
         <Terminal.WaitForText text="Queue gate held" />
 
         <Terminal.Focus target="sidekick-composer" />
-        <Terminal.WaitForText text="Follow" as="controls" />
+        <Terminal.WaitForText text="]loop" as="controls" />
         <Terminal.WaitForText text="[stop]" row={controls.row} />
         <Terminal.WaitForText text="[send]" row={controls.row} />
         <Each in={["Wait for tax check.", "Send results later."]} let="message">

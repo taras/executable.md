@@ -5,38 +5,67 @@ import { viewport } from "../lib/screen.ts";
 
 const size = { columns: 72, rows: 20 };
 const encoder = new TextEncoder();
-const { composerSurface, draftSurface } = REPL_PALETTE;
-const focusSurface = 0x243747;
-const label = "> › message the sidekick";
 
 function paint(surface: number, text: string): string {
   return `\x1b[48;2;${surface >> 16};${(surface >> 8) & 255};${surface & 255}m${text}\x1b[0m`;
 }
 
-Deno.test("recognizes the focused composer among lookalike queue and TODO rows", () => {
-  const backend = createXtermBackend({ cols: size.columns, rows: size.rows });
-  try {
-    const queueRow = paint(composerSurface, `queued ${label}`.padEnd(size.columns));
-    const todoRow =
-      paint(composerSurface, " ") +
-      paint(focusSurface, label.padEnd(44)) +
-      paint(composerSurface, " ".repeat(size.columns - 45));
-    backend.feed(encoder.encode(`${queueRow}\r\n${todoRow}\r\n`));
-    assert.equal(viewport(backend, size).composerLabel, undefined);
+function ink(colour: number, text: string): string {
+  return `\x1b[38;2;${colour >> 16};${(colour >> 8) & 255};${colour & 255}m${text}\x1b[39m`;
+}
 
-    const fieldRow =
-      paint(composerSurface, " ") +
-      paint(focusSurface, label.padEnd(size.columns - 2)) +
-      paint(composerSurface, " ");
-    const valueRow = paint(composerSurface, " ") + paint(draftSurface, "focused composer value");
-    backend.feed(encoder.encode(`${fieldRow}\r\n${valueRow}`));
-    const screen = viewport(backend, size);
-    assert.deepEqual(screen.composerLabel, { row: 2, column: 3 });
-    assert.equal(screen.composerFocused, true);
-    assert.deepEqual(
-      [...screen.matches("focused composer value", screen.box("sidekick-composer"))],
-      [{ row: 3, column: 1 }],
-    );
+/** Three rows of a box drawn with one edge colour, holding this text, at this indent. */
+function boxed(edge: number, text: string, indent: number, width: number): string[] {
+  const inner = width - 2;
+  return [
+    " ".repeat(indent) + ink(edge, `┌${"─".repeat(inner)}┐`),
+    " ".repeat(indent) + ink(edge, "│") + ` ${text}`.padEnd(inner) + ink(edge, "│"),
+    " ".repeat(indent) + ink(edge, `└${"─".repeat(inner)}┘`),
+  ];
+}
+
+function screenOf(rows: readonly string[]) {
+  const backend = createXtermBackend({ cols: size.columns, rows: size.rows });
+  backend.feed(encoder.encode(rows.join("\r\n")));
+  return { backend, screen: viewport(backend, size) };
+}
+
+Deno.test("finds the composer's bordered input whatever it holds, and reads focus from its edge", () => {
+  for (const [edge, held, focused] of [
+    [REPL_PALETTE.focus, "Send sidekick a message", true],
+    [REPL_PALETTE.focus, "Hello World!", true],
+    [REPL_PALETTE.muted, "Hello World!", false],
+  ] satisfies readonly (readonly [number, string, boolean])[]) {
+    const { backend, screen } = screenOf([
+      "  [x]loop    [send]",
+      ...boxed(edge, held, 1, 40),
+      "  [exit]",
+    ]);
+    try {
+      assert.deepEqual(screen.box("sidekick-composer"), { top: 2, bottom: 3, left: 2, right: 40 });
+      assert.equal(screen.composerFocused, focused);
+      assert.deepEqual(screen.composerCell, { row: 2, column: 2 });
+      assert.deepEqual([...screen.matches(held, screen.box("sidekick-composer"))], [
+        { row: 2, column: 3 },
+      ]);
+    } finally {
+      backend.destroy();
+    }
+  }
+});
+
+Deno.test("does not take another outline or an open frame for the composer", () => {
+  const { backend, screen } = screenOf([
+    ...boxed(REPL_PALETTE.chromeEdge, "Executable Markdown", 0, 30),
+    ink(REPL_PALETTE.focus, "┌──────┐"),
+    ink(REPL_PALETTE.focus, "│") + " open ",
+    ink(REPL_PALETTE.focus, "└──────┘"),
+    ink(REPL_PALETTE.muted, "└──────┘ a closing edge with nothing above it"),
+  ]);
+  try {
+    assert.equal(screen.box("sidekick-composer"), undefined);
+    assert.equal(screen.composerCell, undefined);
+    assert.equal(screen.composerFocused, false);
   } finally {
     backend.destroy();
   }

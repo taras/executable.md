@@ -59,6 +59,9 @@ function* wait(page: ReplPage, command: Extract<Command, { action: "wait" }>): O
   }
   const scope = scopeOf(command.region);
   const holds = (reading: ScreenReading): boolean => {
+    if (command.focused !== undefined && reading.composer?.focused !== command.focused) {
+      return false;
+    }
     const found = reading.found(command.text, scope);
     if (command.count !== undefined) {
       return found === command.count;

@@ -92,6 +92,7 @@ const buildProps = z.object({
 });
 const Build = createContext<PreparedBuild>("xmd.repl-bench.build");
 const RegionContext = createContext<Region | undefined>("xmd.repl-bench.region", undefined);
+const RegionFocus = createContext<boolean | undefined>("xmd.repl-bench.region-focus", undefined);
 const WaitTimeout = createContext<number | undefined>("xmd.repl-bench.wait-timeout", undefined);
 const Sidekick = createContext<Yielded<ReturnType<typeof attachSidekick>> | undefined>(
   "xmd.repl-bench.sidekick",
@@ -580,10 +581,16 @@ const terminalActions = [
         throw new Error("Use a paired <Terminal.Region>");
       }
       (yield* TerminalContext.expect()).requireLaunch();
-      yield* RegionContext.set(region.parse(props.name));
+      const name = region.parse(props.name);
+      const focused = z.boolean().optional().parse(props.focused);
+      if (focused !== undefined && name !== "sidekick-composer") {
+        throw new Error("Only the sidekick-composer region takes focused");
+      }
+      yield* RegionContext.set(name);
+      yield* RegionFocus.set(focused);
       return yield* content();
     },
-    { name: string },
+    { name: string, focused: boolean },
     ["name"],
   ),
   registration(
@@ -634,6 +641,7 @@ const terminalActions = [
         ...options,
         unique,
         region: yield* RegionContext.get(),
+        focused: yield* RegionFocus.get(),
         timeout:
           timeout === undefined
             ? yield* WaitTimeout.get()

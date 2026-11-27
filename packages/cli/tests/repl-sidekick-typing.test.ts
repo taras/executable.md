@@ -5,7 +5,10 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import type { ReplPage, PageKey } from "./support/repl-page.ts";
 import {
+  composerAt,
+  composerShown,
   intoComposer,
+  SIDEKICK_CONTROLS,
   intoDraft,
   typed,
   draftText,
@@ -411,10 +414,10 @@ describe("1048 — generated retained output", () => {
       }
       if (size.columns === 72) {
         yield* page.press("Sidekick", { onRow: "Entries" });
-        yield* page.until("the routed Sidekick", (one) => one.shows("message the sidekick"));
+        yield* page.until("the routed Sidekick", (one) => composerShown(one));
       }
-      const cell = page.screen().locate("Settled TAIL.", { rightOf: "message the sidekick" });
-      const floor = page.screen().locate("message the sidekick").column;
+      const cell = page.screen().locate("Settled TAIL.", SIDEKICK_CONTROLS);
+      const floor = composerAt(page.screen()).column;
       for (const direction of ["up", "down"] as const) {
         for (let step = 0; step < 100; step++) {
           const text = page
@@ -463,8 +466,7 @@ describe("1048 — generated retained output", () => {
     yield* page.until(
       "the requested evaluated reply revealed",
       (one) =>
-        one.shows("[Back to current chat]") &&
-        one.found("Submitted.", { rightOf: "message the sidekick" }) > 0,
+        one.shows("[Back to current chat]") && one.found("Submitted.", SIDEKICK_CONTROLS) > 0,
     );
     yield* page.press("[Back to current chat]");
     yield* openConfigure(page);
@@ -478,7 +480,7 @@ describe("1048 — generated retained output", () => {
     yield* page.press("Ask R000");
     yield* page.until(
       "the saved chat read-only",
-      (one) => one.shows("[Back to current chat]") && !one.shows("message the sidekick"),
+      (one) => one.shows("[Back to current chat]") && !composerShown(one),
     );
     expect(page.screen().shows("Submitted.")).toBe(true);
     yield* page.press("[Back to current chat]");

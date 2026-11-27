@@ -1,5 +1,6 @@
 import type { TerminalBackend } from "@termless/core";
 import { REPL_PALETTE } from "../../../packages/cli/src/repl/presentation-style.ts";
+import { composerInput } from "../../../packages/cli/tests/support/composer-input.ts";
 import type { Point, Region, Size } from "./protocol.ts";
 
 type Box = { left: number; right: number; top: number; bottom: number };
@@ -40,30 +41,14 @@ export function viewport(backend: TerminalBackend, size: Size) {
 
   const history = rows.findIndex((row) => /^ HISTORY\s/.test(row));
   const bodyBottom = history < 0 ? size.rows : history;
-  // Document text can contain the label. The field sits inside the composer tray.
-  const hasFocusMarker = ({ row, column }: Point) => cells[row]?.[column - 2] === ">";
-  const composerLabel = [...matches("› message the sidekick")].find((point) => {
-    const { row, column } = point;
-    if (row >= bodyBottom || background(row, column - 3) !== REPL_PALETTE.composerSurface) {
-      return false;
-    }
-    const surface = background(row, column);
-    // The focused field paints the inner width of the tray. Queue text
-    // inherits the tray surface and a focused TODO paints only its own control.
-    return (
-      surface === REPL_PALETTE.draftSurface ||
-      (hasFocusMarker(point) &&
-        surface !== undefined &&
-        surface !== REPL_PALETTE.composerSurface &&
-        surface === background(row, size.columns - 2))
-    );
-  });
+  // The bordered input, found from its edge rather than from what it holds.
+  const input = composerInput(cells, (row, column) => foreground({ row, column }), bodyBottom);
   const transcriptTitle = rows.findIndex((row, index) => index < 4 && /^\s*TRANSCRIPT\s/.test(row));
-  const composer = composerLabel && {
-    left: composerLabel.column - 2,
-    right: size.columns - 1,
-    top: composerLabel.row + 1,
-    bottom: bodyBottom,
+  const composer = input && {
+    left: input.left,
+    right: input.right,
+    top: input.top,
+    bottom: input.bottom,
   };
   function drawer(title: string): Box | undefined {
     const heading = [...matches(title)].find(
@@ -97,8 +82,9 @@ export function viewport(backend: TerminalBackend, size: Size) {
     text: rows.map((row) => row.trimEnd()).join("\n"),
     matches,
     bold: ({ row, column }: Point) => styled[row]?.[column]?.bold === true,
-    composerLabel,
-    composerFocused: composerLabel !== undefined && hasFocusMarker(composerLabel),
+    /** A cell inside the composer's input, for a pointer that wants to reach it. */
+    composerCell: input && { row: input.top, column: input.left },
+    composerFocused: input?.focused === true,
     focusHints(): string[] | undefined {
       for (const { row, column } of matches(" move focus · Esc closes")) {
         if (row !== 0 && background(row, column + 1) !== REPL_PALETTE.drawerSurface) {

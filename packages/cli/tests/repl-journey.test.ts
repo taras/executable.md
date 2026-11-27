@@ -36,7 +36,7 @@ import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   composerHolds,
-  COMPOSER,
+  composerShown,
   COMPOSER_VALUE,
   intoComposer,
   selectPane,
@@ -447,9 +447,10 @@ describe("REPL original admission and terminal exit claims", () => {
       expect(files).toHaveLength(1);
       expect(files[0]).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
       expect(yield* journalRecords(page)).toEqual([]);
-      for (const label of ["TRANSCRIPT", "(none retained)", "Entries", "No entry yet", COMPOSER]) {
+      for (const label of ["TRANSCRIPT", "(none retained)", "Entries", "No entry yet"]) {
         expect(page.screen().shows(label)).toBe(true);
       }
+      expect(composerShown(page.screen())).toBe(true);
       yield* page.type("startup message");
       yield* page.until(
         "Sidekick Message taking the first text",
