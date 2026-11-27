@@ -118,7 +118,8 @@ import { journalModel, emptyModel } from "./fixtures/repl/journals.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import { QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
-import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
+import type { ReplDescription } from "../src/repl/description.ts";
+import { measuringContext, useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
@@ -1072,6 +1073,49 @@ describe("REPL appearance - the shipping profiles' geometry", () => {
  */
 describe("REPL appearance - the archive's inks, from the mounted terminal", () => {
   beforeAll(() => useTempFileCompiler());
+
+  it("F1: the loop toggle draws only its glyph, names itself loop and exposes whether it is pressed", function* () {
+    const model = yield* settledFailedAndRunning();
+    const presenter = yield* usePresenter(WIDE);
+    const live: ReplLive = { ...NOTHING_LIVE, sidekick: SIDEKICK_QUIET };
+    for (const follow of [true, false]) {
+      const view = withWorkspace(reading(stateWith({}), model, live, WIDE), {
+        ...workspaceOf(model),
+        follow,
+      });
+      const found: { key: string; input: unknown }[] = [];
+      const walk = (description: ReplDescription<ReplAction>): void => {
+        const read = readDescription(description);
+        if (read.key === "follow") {
+          found.push({ key: read.key, input: read.input });
+        }
+        read.children.forEach(walk);
+      };
+      presentationFor(view, measuringContext(WIDE)).descriptions.forEach(walk);
+      expect(found).toEqual([
+        {
+          key: "follow",
+          input: expect.objectContaining({
+            label: "∞",
+            name: "loop",
+            pressed: follow,
+            select: "toggle-follow",
+          }),
+        },
+      ]);
+      const observed = yield* presenter.commit(view);
+      const toggle = placed(observed, "follow");
+      // Marker cell, glyph, one cell after: all on the unshaded pane.
+      expect(toggle.width).toBe(3);
+      expect(presenter.grid.at(toggle.x + 1, toggle.y)).toBe("∞");
+      expect(presenter.grid.styleAt(toggle.x + 1, toggle.y).foreground).toBe(
+        follow ? 0x7ed3e8 : 0x7b858d,
+      );
+      for (let x = toggle.x; x < toggle.x + toggle.width; x += 1) {
+        expect(presenter.grid.styleAt(x, toggle.y).background).toBe(0x0a0c0e);
+      }
+    }
+  });
 
   it("an outcome, a syntax role and the field surfaces are the archive's, and the grounds differ", function* () {
     // The same screen the appearance rows read, composed from a journal that

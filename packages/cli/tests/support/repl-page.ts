@@ -30,8 +30,8 @@ import type { Operation } from "effection";
 
 import { ReplTerminal } from "../../src/repl/terminal.ts";
 import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
-import { composerInput } from "./composer-input.ts";
-import type { ComposerInput } from "./composer-input.ts";
+import { composerInput, loopState } from "./composer-input.ts";
+import type { ComposerInput, LoopState } from "./composer-input.ts";
 import { MOUNTED_DEADLINE_MS, useMountedRepl } from "./mounted-repl.ts";
 import type { MountedRepl } from "./mounted-repl.ts";
 
@@ -82,6 +82,8 @@ export interface ScreenReading {
   readonly rows: readonly string[];
   /** The Sidekick composer's input box, found from its drawn edge, where one is drawn. */
   readonly composer: ComposerInput | undefined;
+  /** Whether the Sidekick's loop toggle is drawn on, off, or not at all. */
+  readonly loop: LoopState | undefined;
   shows(text: string): boolean;
   /** How many times the text appears, over every row, counting repeats in one row. */
   occurrences(text: string): number;
@@ -219,6 +221,7 @@ function reading(
   size: ReplTerminalSize,
   cells: string[][],
   composer: ComposerInput | undefined,
+  loop: LoopState | undefined,
 ): ScreenReading {
   const rows = cells.map((line) => line.join("").trimEnd());
   const columns = cells.map((line) => columnsOf(line));
@@ -272,6 +275,7 @@ function reading(
     size,
     rows,
     composer,
+    loop,
     shows: (text) => rows.some((row) => row.includes(text)),
     occurrences: (text) => rows.reduce((count, row) => count + offsetsIn(row, text).length, 0),
     found: (text, scope) => matches(text, scope, `looking for ${JSON.stringify(text)}`).length,
@@ -334,12 +338,9 @@ export function* useReplPage(
       if (screen !== undefined) {
         count += 1;
         const cells = screen.cells();
-        latest = reading(
-          count,
-          screen.size,
-          cells,
-          composerInput(cells, (row, column) => screen.styleAt(column, row).foreground),
-        );
+        const ink = (row: number, column: number) => screen.styleAt(column, row).foreground;
+        const composer = composerInput(cells, ink);
+        latest = reading(count, screen.size, cells, composer, loopState(cells, ink, composer));
         for (const wake of Array.from(wakers)) {
           wake();
         }

@@ -615,6 +615,18 @@ export const BUTTON_PROPS: ReplBoxProps = Object.freeze({
 });
 
 /**
+ * The tray's loop toggle: its marker cell, its glyph and one cell after, on the
+ * pane's own surface. Focus fills all three with the focus surface.
+ */
+export const LOOP_PROPS: ReplBoxProps = Object.freeze({
+  layout: Object.freeze({
+    width: fit(),
+    height: fixed(1),
+    padding: Object.freeze({ right: 1 }),
+  }),
+});
+
+/**
  * How many blank rows each shared column keeps above its first heading.
  *
  * Space asked for at the top of the three columns, taken as real layout padding

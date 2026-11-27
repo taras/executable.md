@@ -11,6 +11,8 @@ import {
   composerFocused,
   intoComposer,
   sidekickIdle,
+  LOOP,
+  TRAY_CONTROLS,
 } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
@@ -264,7 +266,7 @@ for (const size of [
       expect(page.repl.fake.prompts).toHaveLength(0);
       capture(page, "overflow-wrapped");
       const header = page.screen().locate("TODO", { onRow: "SIDEKICK" });
-      const composer = page.screen().locate("]loop");
+      const composer = page.screen().locate(LOOP, TRAY_CONTROLS);
       const actions = page.screen().locate("task-0");
       const bodyRows = page
         .screen()
@@ -437,7 +439,10 @@ for (const size of [
       );
       const visibleRows = (one: ScreenReading) =>
         one.rows
-          .slice(one.locate("TODO", { onRow: "SIDEKICK" }).row + 1, one.locate("]loop").row)
+          .slice(
+            one.locate("TODO", { onRow: "SIDEKICK" }).row + 1,
+            one.locate(LOOP, TRAY_CONTROLS).row,
+          )
           .map((row) =>
             row
               .replace(/> (?=[☐☑])/, "  ")

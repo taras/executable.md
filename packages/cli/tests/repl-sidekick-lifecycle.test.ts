@@ -1092,7 +1092,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
       // Stopped, with the provider's own cancellation held: this is what says
       // Stop joined what it asked for rather than returning over the top of it.
-      expect(page.screen().shows("[x]loop")).toBe(true);
+      expect(page.screen().loop).toBe("pressed");
       const cancelling = repl.fake.holdCancellation();
       try {
         // The Sidekick's own Stop. This person's entry is running, so the draft is
@@ -1112,7 +1112,7 @@ describe("Tier PV — generation that ended without a reply", () => {
       yield* page.until("the attempt Stop left", (one) =>
         one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
       );
-      expect(page.screen().shows("[x]loop")).toBe(true);
+      expect(page.screen().loop).toBe("pressed");
       const read = yield* settledReading(repl);
       expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
       expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
@@ -1869,7 +1869,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     yield* page.until("Stop joining and the Sidekick coming to rest", (one) => sidekickIdle(one));
     expect(page.screen().shows("Shall I go on?")).toBe(false);
     expect(page.screen().shows("[answer sidekick]")).toBe(false);
-    expect(page.screen().shows("[x]loop")).toBe(true);
+    expect(page.screen().loop).toBe("pressed");
 
     // Nothing was answered and nothing followed: the intent stands with no
     // outcome beside it, which is what an interrupted question is.
@@ -2304,14 +2304,14 @@ describe("Follow: mounted Stop owns continuation", () => {
     yield* entered.operation;
     yield* page.until(
       "both Stops with Follow enabled",
-      (one) => trayFound(one, STOP) === 1 && roundStops(one) === 1 && one.shows("[x]loop"),
+      (one) => trayFound(one, STOP) === 1 && roundStops(one) === 1 && one.loop === "pressed",
     );
     yield* stopSidekick(page);
     yield* page.until(
       "Sidekick Stop joined with the entry still running",
       (one) => sidekickIdle(one) && roundStops(one) === 1,
     );
-    expect(page.screen().shows("[x]loop")).toBe(true);
+    expect(page.screen().loop).toBe("pressed");
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect((yield* settledReading(page.repl)).model.entries[0]?.terminal).toBeUndefined();
     release.resolve();
@@ -2336,7 +2336,7 @@ describe("Follow: mounted Stop owns continuation", () => {
     );
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.repl.fake.prompts[2]).toContain("Entry entry-2 completed.");
-    expect(page.screen().shows("[x]loop")).toBe(true);
+    expect(page.screen().loop).toBe("pressed");
   });
 });
 

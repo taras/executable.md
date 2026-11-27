@@ -76,7 +76,7 @@
         <Terminal.WaitForText text="Queue gate held" />
 
         <Terminal.Focus target="sidekick-composer" />
-        <Terminal.WaitForText text="]loop" as="controls" />
+        <Terminal.WaitForText text="∞" as="controls" />
         <Terminal.WaitForText text="Stop" row={controls.row} />
         <Terminal.WaitForText text="Send" row={controls.row} />
         <Each in={["Wait for tax check.", "Send results later."]} let="message">

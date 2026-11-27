@@ -88,3 +88,31 @@ export function composerOnScreen(screen: ColouredScreen | undefined): ComposerIn
     ? undefined
     : composerInput(screen.cells(), (row, column) => screen.styleAt(column, row).foreground);
 }
+
+/** Whether the Sidekick's loop toggle is on, read from the ink of its glyph. */
+export type LoopState = "pressed" | "released";
+
+/**
+ * The loop toggle's state on the controls row directly above the composer's
+ * edge, or none where that row draws no `∞` in either of the toggle's inks.
+ */
+export function loopState(
+  cells: readonly (readonly string[])[],
+  edge: (row: number, column: number) => number | undefined,
+  composer: ComposerInput | undefined,
+): LoopState | undefined {
+  if (composer === undefined) {
+    return undefined;
+  }
+  const row = composer.top - 2;
+  const column = (cells[row] ?? []).indexOf("∞");
+  if (column < composer.left - 1) {
+    return undefined;
+  }
+  const ink = edge(row, column);
+  return ink === REPL_PALETTE.loopOn
+    ? "pressed"
+    : ink === REPL_PALETTE.muted
+      ? "released"
+      : undefined;
+}
