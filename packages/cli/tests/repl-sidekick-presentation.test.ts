@@ -561,8 +561,17 @@ describe("Flow 1 composer presentation", () => {
     const hint = empty.locate(PLACEHOLDER, COMPOSER_VALUE);
     expect(ink(hint.column, hint.row).foreground).toBe(REPL_PALETTE.muted);
     expect(ink(hint.column - 1, hint.row).background).toBe(REPL_PALETTE.focus);
-    expect(empty.locate("[x]loop").row).toBe(empty.locate("[send]", SIDEKICK_CONTROLS).row);
-    expect(corner.row).toBe(empty.locate("[send]", SIDEKICK_CONTROLS).row + 1);
+    const send = empty.locate("[send]", SIDEKICK_CONTROLS);
+    expect(empty.locate("[x]loop").row).toBe(send.row);
+    expect(corner.row).toBe(send.row + 1);
+    // Every cell of the controls row, the controls' own included, is the
+    // unshaded Sidekick pane: #0a0c0e.
+    for (let column = corner.column - 1; column < WIDE.columns; column += 1) {
+      expect([column, ink(column, send.row).background]).toEqual([
+        column,
+        REPL_PALETTE.conversationSurface,
+      ]);
+    }
 
     yield* page.type("Hello World!");
     const typed = yield* page.until("the typed draft", (one) => composerHolds(one, "Hello World!"));
@@ -580,6 +589,42 @@ describe("Flow 1 composer presentation", () => {
     const edge = composerAt(blurred);
     expect(ink(edge.column, edge.row).foreground).toBe(REPL_PALETTE.muted);
     expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+});
+
+describe("Flow 1 composer beside waiting messages", () => {
+  beforeEach(journalBeforeEach(OWNER));
+  it("F1: waiting messages keep the shaded tray while the controls row stays unshaded", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<Output>Held answer.</Output>", held: true });
+    yield* sendMessage(page, "first message");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* typed(page, "waiting message");
+    yield* page.press("[send]", SIDEKICK_CONTROLS);
+    const queued = yield* page.until("the waiting message", (one) =>
+      one.shows("Waiting messages are kept only in this REPL."),
+    );
+    const screen = page.repl.terminal.screen;
+    if (screen === undefined) {
+      throw new Error("the mounted terminal has no screen");
+    }
+    const notice = queued.locate("Waiting messages are kept only in this REPL.");
+    const corner = composerAt(queued);
+    const send = queued.locate("[send]", SIDEKICK_CONTROLS);
+    // The tray's gutter column and the notice itself keep the shaded tray.
+    for (const column of [corner.column - 1, notice.column, WIDE.columns - 1]) {
+      expect([column, screen.styleAt(column, notice.row).background]).toEqual([
+        column,
+        REPL_PALETTE.composerSurface,
+      ]);
+    }
+    for (const column of [corner.column - 1, send.column, WIDE.columns - 1]) {
+      expect([column, screen.styleAt(column, send.row).background]).toEqual([
+        column,
+        REPL_PALETTE.conversationSurface,
+      ]);
+    }
+    page.repl.fake.releaseTurn();
   });
 });
 

@@ -76,6 +76,7 @@ import {
   composerOutlineProps,
   COMPOSER_EDGES,
   COMPOSER_INPUT_PROPS,
+  trayPartProps,
   SPACER_PROPS,
   statedActionRowProps,
   statedPartProps,
@@ -13665,7 +13666,8 @@ function workspaceControls(
         "follow",
         `[${workspace.follow ? "x" : " "}]loop`,
         { select: "toggle-follow" },
-        styleOf("action"),
+        // The tray row is unshaded: its controls carry no surface of their own.
+        styleOf("navigate"),
         {
           here: view.focused,
         },
@@ -13680,7 +13682,7 @@ function workspaceControls(
     );
   }
   items.push(
-    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
+    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("navigate"), {
       here: view.focused,
     }),
   );
@@ -13690,7 +13692,7 @@ function workspaceControls(
         "sidekick:resume",
         "[Resume queue]",
         { select: "resume-sidekick-queue" },
-        styleOf("action"),
+        styleOf("navigate"),
         { here: view.focused },
       ),
     );
@@ -15249,30 +15251,42 @@ function workspacePresentation(input: {
             box({
               id: "box:tray",
               region,
-              props: workspaceBlockProps(
-                trayRows,
-                REPL_PALETTE.conversationSurface,
-                WORKSPACE_LIST_GUTTER,
-                inside,
-              ),
+              props: workspaceBlockProps(trayRows, REPL_PALETTE.conversationSurface, 0, inside),
+              // Waiting messages keep the shaded tray surface; the controls
+              // and the input sit on the pane's own.
               children: [
-                ...queueStatus,
-                // A tray whose rows fit places them where the accepted screen
-                // has them. One that does not is a window of the rows it was
-                // allocated, whose room the engine measures like any other.
-                ...((held?.queued.length ?? 0) > 0 &&
-                (allocation !== undefined || queueRows.length > 0)
-                  ? [
+                ...(queueStatus.length === 0 && queueRows.length === 0
+                  ? []
+                  : [
                       box({
-                        id: queueViewport,
+                        id: "box:tray:queue",
                         region,
-                        props: viewportProps(allocation?.queue ?? queueRows.length),
-                        children: queueRows,
+                        props: trayPartProps(WORKSPACE_LIST_GUTTER, REPL_PALETTE.composerSurface),
+                        children: [
+                          ...queueStatus,
+                          // A tray whose rows fit places them where the accepted screen
+                          // has them. One that does not is a window of the rows it was
+                          // allocated, whose room the engine measures like any other.
+                          ...((held?.queued.length ?? 0) > 0 &&
+                          (allocation !== undefined || queueRows.length > 0)
+                            ? [
+                                box({
+                                  id: queueViewport,
+                                  region,
+                                  props: viewportProps(allocation?.queue ?? queueRows.length),
+                                  children: queueRows,
+                                }),
+                              ]
+                            : queueRows),
+                        ],
                       }),
-                    ]
-                  : queueRows),
-                ...trayHeader,
-                ...composer,
+                    ]),
+                box({
+                  id: "box:tray:input",
+                  region,
+                  props: trayPartProps(WORKSPACE_LIST_GUTTER),
+                  children: [...trayHeader, ...composer],
+                }),
               ],
             }),
           ]),
