@@ -527,6 +527,27 @@ describe(REPOSITORY_SUITE, () => {
 });
 
 describe("joined entry diagnostics", () => {
+it("settles a search without a provider and permits a successor", function* () {
+  const f = yield* fixture();
+  const call = yield* submit(f, '<GitHub.Search query="is:issue" as="page" />');
+  yield* deadline(call.submission.join());
+  yield* deadline(call.task);
+
+  const saved = yield* history(f);
+  const cold = value(projectRepl(yield* readRecords(saved.path)));
+  const entry = value(
+    yield* readEntryJournal({ entry: 1 }, { entries: cold.entries, printing: undefined }),
+  );
+  expect(entry.value).toMatchObject({
+    status: "failed",
+    failure: expect.stringContaining("this host has no GitHub search provider"),
+  });
+
+  const successor = value(yield* f.root.session.submit("The session is still usable."));
+  value(yield* deadline(successor.join()));
+  yield* f.task.halt();
+});
+
   beforeEach(journalBeforeEach(OWNER));
   it("E3/E4/E5: exact earlier outcomes coexist with a live idle entry and joined Stop cleanup", function* () {
     const cleanup = gate();

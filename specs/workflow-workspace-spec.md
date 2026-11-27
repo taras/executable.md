@@ -2406,6 +2406,10 @@ selected by the enclosing `Repository` or by the ordinary run's ambient
 selection. The provider authenticates that selection and checks its GitHub
 repository against the `allowed` list in `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`
 before opening a GitHub session. Configuration is read on invocation.
+A host without a search provider raises an ordinary document error before
+opening a GitHub session or binding a result. If the error reaches the root
+of a REPL entry, the REPL records the entry as failed and permits a successor
+after cleanup.
 
 The query uses GitHub REST issue search syntax and includes exactly one
 standalone positive `is:issue` or `is:pr` qualifier. Additional result-kind
