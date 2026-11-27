@@ -312,7 +312,9 @@ export function* replRepositoryInstallation(
             "the Repository in scope is not one this entry selected, so it names no checkout",
           );
         const entry = access();
-        if (entry === undefined) throw refuse();
+        if (entry === undefined) {
+          throw refuse();
+        }
         return yield* entry.selections.authenticate(selection, refuse).origin();
       });
       yield* useReplGitHubCheckLogs(

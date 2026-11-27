@@ -531,7 +531,9 @@ describe("joined entry diagnostics", () => {
   it("settles a search outside the allowlist and permits a successor", function* () {
     yield* API.Env.around({
       *env([name], next) {
-        if (name === "XMD_WORKFLOW_GITHUB_PULL_REQUESTS") return undefined;
+        if (name === "XMD_WORKFLOW_GITHUB_PULL_REQUESTS") {
+          return undefined;
+        }
         return yield* next(name);
       },
     });
@@ -563,8 +565,11 @@ describe("joined entry diagnostics", () => {
     const previous = process.env.GH_TOKEN;
     process.env.GH_TOKEN = token;
     yield* ensure(() => {
-      if (previous === undefined) delete process.env.GH_TOKEN;
-      else process.env.GH_TOKEN = previous;
+      if (previous === undefined) {
+        delete process.env.GH_TOKEN;
+      } else {
+        process.env.GH_TOKEN = previous;
+      }
     });
 
     const repository = "https://github.com/octo/project";
