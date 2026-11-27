@@ -733,6 +733,19 @@ export function composerOutlineProps(focused: boolean): ReplBoxProps {
   };
 }
 
+/** One section of the Sidekick tray, inset by the tray's gutter, on its own surface where it has one. */
+export function trayPartProps(gutter: number, surface?: number): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: fit(),
+      direction: "ttb",
+      padding: { left: gutter, right: gutter },
+    },
+    ...(surface === undefined ? {} : { bg: terminalColour(surface) }),
+  };
+}
+
 /** The rows the composer's edge takes: one above its value rows and one below. */
 export const COMPOSER_EDGES = 2;
 
