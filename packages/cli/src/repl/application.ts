@@ -8346,7 +8346,7 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held =
+  const held: DrawerContent | undefined =
     context.measuring && view.selection.drawers.at(-1)?.kind === "history"
       ? {
           title: "History",
@@ -8361,6 +8361,7 @@ function drawerFor(
           context.preview,
           context.notices,
           context.details,
+          context.admission.windows.get(DRAWER_WINDOW) ?? { from: 0, count: 0 },
         );
   if (held === undefined) {
     return undefined;
@@ -8394,7 +8395,9 @@ function drawerFor(
           from,
           count,
         );
-  const admitted = windowed(content, context, entering, view.focused, asking, reveals);
+  const admitted = held.roundsWindowed
+    ? content.map((one) => one.described)
+    : windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
     view.selection.drawers.at(-1)?.kind === "history" && !view.state.historyPositions
       ? admitted
@@ -8806,6 +8809,7 @@ function inspectionContent(
 
 /** What one drawer reading holds, before any window decides what is shown. */
 interface DrawerContent {
+  readonly roundsWindowed?: true;
   readonly title: string;
   /**
    * What the title is, which is not the same for every drawer.
@@ -8873,6 +8877,7 @@ function drawerContent(
   preview?: readonly ReplFittedLine[] | undefined,
   notices?: ReplPreparedNotices,
   details?: readonly ReplFittedLine[],
+  roundWindow?: Pick<ReplWindow, "from" | "count">,
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined && presentedCatalog(view)) {
@@ -8899,6 +8904,7 @@ function drawerContent(
   // its own text would let what it is in front of show through from where that
   // text stopped, because a renderer writes what changed and nothing else.
   const content: DrawerRow[] = [];
+  let roundsWindowed: true | undefined;
   let title: string;
   /** What the title reads as. Ordinary unless this drawer is a question. */
   let titleStyle: ReplRowStyle = styleOf("drawer-title");
@@ -8986,10 +8992,9 @@ function drawerContent(
     title = "History";
     // Both views use the whole recorded navigation, including positions beyond
     // the selected prefix, without reading their payloads.
-    const points = numbered(view.navigation);
     const rounds = historyRounds(view);
     if (rounds === undefined) {
-      for (const one of [...points].reverse()) {
+      for (const one of [...numbered(view.navigation)].reverse()) {
         content.push({
           described: row(
             `drawer:marker:${one.point.marker}`,
@@ -9005,7 +9010,13 @@ function drawerContent(
       }
     } else {
       const entries = new Map(view.model.entries.map((entry) => [entry.order, entry]));
-      for (const [index, round] of rounds.entries()) {
+      roundsWindowed = roundWindow === undefined ? undefined : true;
+      const from = roundWindow?.from ?? 0;
+      const visible =
+        roundWindow === undefined ? rounds : rounds.slice(from, from + roundWindow.count);
+      // Keyboard neighbours still come from the whole list.
+      for (const [offset, round] of visible.entries()) {
+        const index = from + offset;
         const { input, output } = round;
         const older = rounds[index + 1]?.input;
         const newer = rounds[index - 1]?.input;
@@ -9055,7 +9066,7 @@ function drawerContent(
         const status = entry === undefined ? undefined : workState(entry, view.model, view.live);
         const glyph =
           status === undefined
-            ? ""
+            ? " "
             : status.word === "UNFINISHED"
               ? "·"
               : status.word.split(" ")[0];
@@ -9097,10 +9108,17 @@ function drawerContent(
     content.push(...built.content);
   }
 
-  if (content.length === 0) {
+  if (content.length === 0 && roundsWindowed !== true) {
     content.push({ described: drawerLine("drawer:empty", " ", width, styleOf("metadata")) });
   }
-  return { title, titleStyle, dismissing, entering, content };
+  return {
+    title,
+    titleStyle,
+    dismissing,
+    entering,
+    content,
+    ...(roundsWindowed ? { roundsWindowed } : {}),
+  };
 }
 
 /**
@@ -10872,7 +10890,8 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
   const at = state.route.at ?? "head";
   const execution = state.route.execution;
   if (open.kind === "history") {
-    return `history:${execution}:${at}`;
+    // History shows the same destinations at every selected prefix.
+    return `history:${execution}`;
   }
   if (open.kind === "binding") {
     return `binding:${execution}:${at}:${state.route.scopes.join("/")}:${open.name}`;

@@ -91,6 +91,71 @@ function markers(observed: Observed): readonly string[] {
 }
 
 describe("History over a long retained history", () => {
+  it("keeps scrolled round buttons in place after a pointer selection", function* () {
+    const model = yield* largeHistory();
+    const presenter = yield* usePresenter(NARROW);
+    const closed = initialState("history-round-alignment");
+    const opened = reduceRepl(
+      closed,
+      { kind: "open-drawer", drawer: { kind: "history" } },
+      model,
+      LIVE,
+    ).state;
+    const first = yield* presenter.commit(viewOf(opened, model, NARROW));
+    const scrolled = reduceRepl(
+      opened,
+      { kind: "scroll", delta: 3 },
+      model,
+      LIVE,
+      first.committed.admission,
+    ).state;
+    const before = yield* presenter.commit(viewOf(scrolled, model, NARROW));
+    const newer = model.entries[56];
+    const target = model.entries[53];
+    const input = "drawer:marker:" + newer.scope.marker;
+    const outcome = model.checkpoints.filter((point) => point.kind === "terminal")[56];
+    const output = "drawer:marker:" + outcome.marker;
+    const clicked = before.boundsOf("drawer:marker:" + target.scope.marker);
+    if (clicked === undefined) {
+      throw new Error("The selected round is outside the scrolled window");
+    }
+    const dispatched = yield* presenter.tree.dispatch({
+      kind: "pointer",
+      target: before.committed.rendered.map.at(clicked.x, clicked.y) ?? "",
+      frame: before.committed.rendered.tree,
+    });
+    if (!dispatched.ok || dispatched.value.outcome !== "action") {
+      throw new Error("The round selection was not dispatched");
+    }
+    const selected = reduceRepl(scrolled, dispatched.value.action, model, LIVE).state;
+    expect(selected.route.at).toBe(target.scope.marker);
+    const prefix = {
+      ...model,
+      selection: target.scope.marker,
+      head: false,
+      entries: [...model.entries.slice(0, 53), { ...target, terminal: undefined }],
+    };
+    const resolved = viewFor(
+      selected,
+      prefix,
+      LIVE,
+      NARROW,
+      undefined,
+      navigationOf(model.checkpoints, "live"),
+    );
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const after = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(prefix)));
+    for (const key of [input, output]) {
+      const old = before.boundsOf(key);
+      const next = after.boundsOf(key);
+      expect(old).toBeDefined();
+      expect(next).toBeDefined();
+      expect([next?.x, next?.y]).toEqual([old?.x, old?.y]);
+    }
+  });
+
   it("H1: opens from its control at 316x120 with every admitted row placed", function* () {
     const model = yield* largeHistory();
     expect(model.checkpoints.length).toBe(120);
