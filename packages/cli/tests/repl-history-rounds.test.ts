@@ -11,7 +11,7 @@ import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { decodeLocation } from "../src/repl/route.ts";
 
 function hasRound(row: string, round: number): boolean {
-  return new RegExp(`(?:^|\\s)${round}:(?:\\s|$)`).test(row);
+  return new RegExp(`(?:^|\\s)in +${round}(?:\\s|$)`).test(row);
 }
 const OWNER = "packages/cli/tests/repl-history-rounds.test.ts";
 describe("History round controls", () => {
@@ -29,24 +29,28 @@ describe("History round controls", () => {
       for (const method of ["pointer", "keyboard"]) {
         for (const destination of ["Input", "Output"]) {
           yield* page.press("[History]");
-          yield* page.until("round controls", (one) => one.shows("3:") && one.shows("[Output]"));
-          const input = page.screen().locate("[Input]", { onRow: "3:" });
-          const output = page.screen().locate("[Output]", { onRow: "3:" });
+          yield* page.until("round controls", (one) => one.shows("in 3 ") && one.shows("out"));
+          const input = page.screen().locate("in", { onRow: "in 3 " });
+          const output = page.screen().locate("out", { onRow: "in 3 " });
           expect(input.row).toBe(output.row);
           expect(page.screen().rows[input.row]).toContain("✓");
           expect(page.screen().rows[input.row]).not.toMatch(
             /COMPLETED|ACTIVE|FAILED|INTERRUPTED|UNFINISHED/,
           );
-          const glyph = page.screen().locate("✓", { onRow: "3:" });
+          const glyph = page.screen().locate("✓", { onRow: "in 3 " });
           expect(page.repl.terminal.screen?.styleAt(glyph.column, glyph.row).foreground).toBe(
             REPL_PALETTE.success,
           );
-          const number = page.screen().locate("3:");
-          for (let offset = 0; offset < 2; offset++) {
-            expect(
-              page.repl.terminal.screen?.styleAt(number.column + offset, number.row).foreground,
-            ).toBe(REPL_PALETTE.output);
-          }
+          const number = page.screen().locate(" 3 ", { onRow: "in 3 " });
+          expect(input.column).toBeLessThan(number.column);
+          expect(number.column).toBeLessThan(output.column);
+          expect(output.column).toBeLessThan(glyph.column);
+          expect(page.repl.terminal.screen?.styleAt(number.column + 1, number.row).foreground).toBe(
+            REPL_PALETTE.output,
+          );
+          expect(page.repl.terminal.screen?.styleAt(output.column, output.row).background).toBe(
+            REPL_PALETTE.draftSurface,
+          );
           const heading = page
             .screen()
             .rows.findIndex(
@@ -56,22 +60,22 @@ describe("History round controls", () => {
           expect(page.screen().shows("Enter or click activates")).toBe(false);
           expect(page.screen().shows("Round 3:")).toBe(false);
           if (size.columns === 160) {
-            expect(input.row).toBeLessThan(page.screen().locate("2:").row);
+            expect(input.row).toBeLessThan(page.screen().locate("in", { onRow: "in 2 " }).row);
           }
           if (method === "pointer") {
-            yield* page.press(`[${destination}]`, { onRow: "3:" });
+            yield* page.press(destination === "Input" ? "in" : "out", { onRow: "in 3 " });
           } else {
             yield* page.until("Input focus", (one) =>
-              one.rows.some((row) => hasRound(row, 3) && row.includes("> [Input]")),
+              one.rows.some((row) => hasRound(row, 3) && row.includes("> in")),
             );
             if (destination === "Output") {
               yield* page.key("ArrowRight");
-              yield* page.until("Output focused", (one) => one.shows("> [Output]"));
-              const number = page.screen().locate("3:");
-              expect(page.repl.terminal.screen?.styleAt(number.column, number.row).foreground).toBe(
-                REPL_PALETTE.output,
-              );
-              yield* page.until("Output focus", (one) => one.shows("> [Output]"));
+              yield* page.until("Output focused", (one) => one.shows("> out"));
+              const number = page.screen().locate(" 3 ", { onRow: "in 3 " });
+              expect(
+                page.repl.terminal.screen?.styleAt(number.column + 1, number.row).foreground,
+              ).toBe(REPL_PALETTE.output);
+              yield* page.until("Output focus", (one) => one.shows("> out"));
               yield* page.key("ArrowUp");
             }
             yield* page.key("Enter");
@@ -97,11 +101,11 @@ describe("History round controls", () => {
     for (const destination of ["Input", "Output"]) {
       yield* page.press("[History]");
       yield* page.until("single Input focused", (one) =>
-        one.rows.some((row) => hasRound(row, 1) && row.includes("> [Input]")),
+        one.rows.some((row) => hasRound(row, 1) && row.includes("> in")),
       );
       if (destination === "Output") {
         yield* page.key("ArrowRight");
-        yield* page.until("single Output focused", (one) => one.shows("> [Output]"));
+        yield* page.until("single Output focused", (one) => one.shows("> out"));
         yield* page.key("ArrowUp");
       } else {
         yield* page.key("ArrowDown");
@@ -122,7 +126,7 @@ describe("History round controls", () => {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
     yield* generateTypingHistory(page, 2, 1);
     yield* page.press("[History]");
-    yield* page.until("Actions round drawer", (one) => one.shows("2:"));
+    yield* page.until("Actions round drawer", (one) => one.shows("in 2 "));
     for (const target of ["Positions", "Rounds"]) {
       yield* page.key("Tab");
       yield* page.until("Actions enters Close", (one) => one.shows("> [close]"));
@@ -134,7 +138,7 @@ describe("History round controls", () => {
       yield* page.until("mode action restored", (one) => one.shows(`> [${target}]`));
       yield* page.key("Enter");
       yield* page.until("mode switches", (one) =>
-        one.shows(target === "Positions" ? "4 · Entry outcome recorded" : "2:"),
+        one.shows(target === "Positions" ? "4 · Entry outcome recorded" : "in 2 "),
       );
     }
   });
@@ -149,7 +153,10 @@ describe("History round controls", () => {
       ["Input", "Output"].map((destination) => ({ round, destination })),
     );
     const focused = (round: number, destination: string) => (one: { rows: readonly string[] }) =>
-      one.rows.some((row) => hasRound(row, round) && row.includes(`> [${destination}]`));
+      one.rows.some(
+        (row) =>
+          hasRound(row, round) && row.includes(`> ${destination === "Input" ? "in" : "out"}`),
+      );
     yield* page.until("Alt first Input", focused(20, "Input"));
     for (const stop of stops.slice(1)) {
       yield* page.key("Alt+ArrowDown");
@@ -167,12 +174,12 @@ describe("History round controls", () => {
       yield* page.until("round drawer ready", (one) => one.shows("[Positions]"));
       yield* page.key("Home");
       yield* page.until("newest round focused", (one) =>
-        one.rows.some((row) => hasRound(row, 20) && row.includes("> [Input]")),
+        one.rows.some((row) => hasRound(row, 20) && row.includes("> in")),
       );
       expect(page.screen().rows.some((row) => hasRound(row, 1))).toBe(false);
       yield* page.key("End");
       yield* page.until("oldest round focused", (one) =>
-        one.rows.some((row) => hasRound(row, 1) && row.includes("> [Input]")),
+        one.rows.some((row) => hasRound(row, 1) && row.includes("> in")),
       );
       if (destination === "Input") {
         yield* page.key("ArrowDown");
@@ -180,7 +187,7 @@ describe("History round controls", () => {
       if (destination === "Output") {
         yield* page.key("ArrowRight");
         yield* page.until("oldest Output focused", (one) =>
-          one.rows.some((row) => hasRound(row, 1) && row.includes("> [Output]")),
+          one.rows.some((row) => hasRound(row, 1) && row.includes("> out")),
         );
       }
       yield* page.key("Enter");
@@ -203,15 +210,15 @@ describe("History round controls", () => {
         const markers = retained.model.checkpoints.map((one) => one.marker);
         const expected = destination === "Input" ? markers.at(-2) : markers.at(-1);
         yield* page.press("[History]");
-        yield* page.until("identity round row", (one) => one.shows("2:"));
+        yield* page.until("identity round row", (one) => one.shows("in 2 "));
         if (destination === "Input") {
-          yield* page.press("[Input]", { onRow: "2:" });
+          yield* page.press("in", { onRow: "in 2 " });
         } else {
           yield* page.until("identity Input focus", (one) =>
-            one.rows.some((row) => hasRound(row, 2) && row.includes("> [Input]")),
+            one.rows.some((row) => hasRound(row, 2) && row.includes("> in")),
           );
           yield* page.key("ArrowRight");
-          yield* page.until("identity Output focus", (one) => one.shows("> [Output]"));
+          yield* page.until("identity Output focus", (one) => one.shows("> out"));
           yield* page.key("Enter");
         }
         yield* page.until("identity selected", (one) => one.shows("[live]"));
@@ -239,10 +246,12 @@ describe("History round controls", () => {
     yield* page.until("failed round", (one) => one.shows("FAILED"));
     yield* page.resize({ columns: 72, rows: 20 });
     yield* page.press("[History]");
-    yield* page.until("failure glyph", (one) => one.shows("[Output]"));
+    yield* page.until("failure glyph", (one) =>
+      one.rows.some((row) => hasRound(row, 1) && row.includes("×")),
+    );
     for (const key of ["ArrowRight", "ArrowLeft"] as const) {
       yield* page.key(key);
-      const glyph = page.screen().locate("×", { onRow: "1:" });
+      const glyph = page.screen().locate("×", { onRow: "in 1 " });
       expect(page.repl.terminal.screen?.styleAt(glyph.column, glyph.row).foreground).toBe(
         REPL_PALETTE.failure,
       );
@@ -261,25 +270,25 @@ describe("History round controls", () => {
     yield* page.press("Send", { onRow: "✎ draft" });
     yield* page.until("round waits", (one) => one.shows("[answer]"));
     yield* page.press("[History]");
-    yield* page.until("pending round row", (one) => one.shows("3:"));
-    expect(page.screen().rows[page.screen().locate("3:").row]).toContain("●");
-    const active = page.screen().locate("●", { onRow: "3:" });
+    yield* page.until("pending round row", (one) => one.shows("in 3 "));
+    expect(page.screen().rows[page.screen().locate(" 3 ", { onRow: "in 3 " }).row]).toContain("●");
+    const active = page.screen().locate("●", { onRow: "in 3 " });
     expect(page.repl.terminal.screen?.styleAt(active.column, active.row).foreground).toBe(
       REPL_PALETTE.lifecycleActive,
     );
     expect(page.screen().rows[active.row]).not.toContain("ACTIVE");
-    expect(page.screen().found("[Output]", { onRow: "3:" })).toBe(0);
-    expect(page.screen().found("[Output]", { onRow: "2:" })).toBe(1);
+    expect(page.screen().found("out", { onRow: "in 3 " })).toBe(0);
+    expect(page.screen().found("out", { onRow: "in 2 " })).toBe(1);
     yield* page.until("pending Input focus", (one) =>
-      one.rows.some((row) => hasRound(row, 3) && row.includes("> [Input]")),
+      one.rows.some((row) => hasRound(row, 3) && row.includes("> in")),
     );
     yield* page.key("Alt+ArrowDown");
     yield* page.until("pending Output skipped", (one) =>
-      one.rows.some((row) => hasRound(row, 2) && row.includes("> [Input]")),
+      one.rows.some((row) => hasRound(row, 2) && row.includes("> in")),
     );
     yield* page.key("Alt+ArrowUp");
     yield* page.until("pending Input restored", (one) =>
-      one.rows.some((row) => hasRound(row, 3) && row.includes("> [Input]")),
+      one.rows.some((row) => hasRound(row, 3) && row.includes("> in")),
     );
     yield* page.press("[Positions]");
     yield* page.until(
@@ -287,8 +296,8 @@ describe("History round controls", () => {
       (one) => one.shows("Bindings recorded") && one.shows("[Rounds]"),
     );
     yield* page.press("[Rounds]");
-    yield* page.until("round list restored", (one) => one.shows("3:"));
-    yield* page.press("[Input]", { onRow: "3:" });
+    yield* page.until("round list restored", (one) => one.shows("in 3 "));
+    yield* page.press("in", { onRow: "in 3 " });
     yield* page.until(
       "pending input selected",
       (one) => one.shows("[live]") && one.shows("UNFINISHED"),
