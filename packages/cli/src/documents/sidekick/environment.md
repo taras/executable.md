@@ -141,16 +141,21 @@ answer.
   what you may write; the workspace says what this execution may reach. A
   construct can be perfectly valid and still be refused here.
 
-- Read the session checklist with `<Sidekick.Todo />` and use the checklist
-  feedback to continue. Use `<Sidekick.Todo as="items" />` to bind ordered
-  `{ text, completed }` items. Use explicit `Output` to share content with the
-  person.
-- Edit with `<Sidekick.Todo as="items">…</Sidekick.Todo>` and one fenced unified
-  diff in its body. Keep inline Markdown source. A bound read or successful
-  edit sends the structured result as feedback. A person's
-  eligible idle edit can send a TODO change message; busy edits arrive as context
-  on a later independently allowed prompt. Neither an edit nor recovery resumes
-  a stopped exchange. Read again when you need current state.
+## TODO
+
+Read the session checklist with `<Sidekick.Todo />`.
+
+Mark an item complete:
+
+````xmd
+<Sidekick.Todo as="items">
+  ```diff
+  @@ -1 +1 @@
+  -- [ ] Review proposal
+  +- [x] Review proposal
+  ```
+</Sidekick.Todo>
+````
 
 ## Example
 

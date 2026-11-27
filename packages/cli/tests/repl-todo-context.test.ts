@@ -325,6 +325,39 @@ describe("TODO context on independently admitted prompts", () => {
     });
   }
 
+  it("completes a checklist item with the example received from Guide.Environment", function* () {
+    const { host, dispatch } = yield* setup();
+    const file = host.workspace + "/todo.md";
+    yield* writeTextFile(file, "- [ ] Review proposal\n");
+    host.fake.script({ reply: "<Guide.Environment />" });
+    host.fake.script({ reply: "<Output>Guide received.</Output>" });
+    const guide = yield* send(dispatch, "read the Environment guide");
+    expect((yield* guide.completion).ok).toBe(true);
+
+    const feedback = host.fake.prompts[1] ?? "";
+    const example = [
+      '<Sidekick.Todo as="items">',
+      "  ```diff",
+      "  @@ -1 +1 @@",
+      "  -- [ ] Review proposal",
+      "  +- [x] Review proposal",
+      "  ```",
+      "</Sidekick.Todo>",
+    ].join("\n");
+    const introduction =
+      "## TODO\n\nRead the session checklist with `<Sidekick.Todo />`.\n\n" +
+      "Mark an item complete:\n\n````xmd\n";
+    expect(feedback).toContain(introduction + example + "\n````\n\n## Example");
+
+    const shownPatch = feedback.split(introduction)[1]?.split("\n````")[0] ?? "";
+    host.fake.script({ reply: shownPatch });
+    host.fake.script({ reply: "<Output>Item complete.</Output>" });
+    const edit = yield* send(dispatch, "apply the example from the guide");
+    expect((yield* edit.completion).ok).toBe(true);
+    expect(host.fake.prompts[3]).toContain('"completed": true');
+    expect(yield* readTextFile(file)).toBe("- [x] Review proposal\n");
+  });
+
   it("runs a bound TODO read and advertises and runs a bound write", function* () {
     const { host, dispatch } = yield* setup();
     const file = host.workspace + "/todo.md";
