@@ -1946,7 +1946,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     expect(inkOfSpan(grid, recordedAnswer, '"approve"').foreground).not.toBe(REPL_PALETTE.muted);
   });
 
-  it("D1: History names itself, and its rows keep the band's own accent", function* () {
+  it("D1: History names itself and uses the shared action button style", function* () {
     const model = yield* settledAndFailed();
     const presenter = yield* usePresenter(WIDE);
     const state = opening(selecting(stateWith({}), "entry-1"));
@@ -1959,7 +1959,8 @@ describe("REPL presentation: what a drawer says it is showing", () => {
       throw new Error("this history retained no position");
     }
     const row = placed(observed, `drawer:marker:${marker.marker}`);
-    expect(inkOf(grid, row).foreground).toBe(REPL_PALETTE.historical);
+    expect(inkOf(grid, row).foreground).toBe(REPL_PALETTE.heading);
+    expect(inkOf(grid, row).background).toBe(REPL_PALETTE.draftSurface);
   });
 
   it("D2: a drawer's actions sit on their own surface, and only one is focused", function* () {

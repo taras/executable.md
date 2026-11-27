@@ -273,6 +273,8 @@ describe("History round controls", () => {
     yield* page.until("pending round row", (one) => one.shows("in 3 "));
     expect(page.screen().rows[page.screen().locate(" 3 ", { onRow: "in 3 " }).row]).toContain("●");
     const active = page.screen().locate("●", { onRow: "in 3 " });
+    const completed = page.screen().locate("✓", { onRow: "in 2 " });
+    expect(active.column).toBe(completed.column);
     expect(page.repl.terminal.screen?.styleAt(active.column, active.row).foreground).toBe(
       REPL_PALETTE.lifecycleActive,
     );
