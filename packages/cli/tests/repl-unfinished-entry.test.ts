@@ -35,6 +35,7 @@ import {
 } from "../src/repl/sidekick/profile.ts";
 import type { ControlJournal } from "../src/repl/sidekick/controls.ts";
 import { GitOperationAdmissionError, gitPlugin } from "@executablemd/git";
+import { usePullRequestServer } from "./support/pull-request-server.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { runGit } from "./support/fixture-git.ts";
@@ -527,28 +528,74 @@ describe(REPOSITORY_SUITE, () => {
 });
 
 describe("joined entry diagnostics", () => {
-it("settles a search without a provider and permits a successor", function* () {
-  const f = yield* fixture();
-  const call = yield* submit(f, '<GitHub.Search query="is:issue" as="page" />');
-  yield* deadline(call.submission.join());
-  yield* deadline(call.task);
+  it("settles a search outside the allowlist and permits a successor", function* () {
+    yield* API.Env.around({
+      *env([name], next) {
+        if (name === "XMD_WORKFLOW_GITHUB_PULL_REQUESTS") return undefined;
+        return yield* next(name);
+      },
+    });
+    const f = yield* fixture();
+    yield* runGit(f.A, ["remote", "add", "origin", "https://github.com/octo/project"]);
+    const call = yield* submit(f, '<GitHub.Search query="is:issue" as="page" />');
+    expect((yield* deadline(call.submission.join())).ok).toBe(false);
+    expect(yield* deadline(call.task)).toBe(1);
 
-  const saved = yield* history(f);
-  const cold = value(projectRepl(yield* readRecords(saved.path)));
-  const entry = value(
-    yield* readEntryJournal({ entry: 1 }, { entries: cold.entries, printing: undefined }),
-  );
-  expect(entry.value).toMatchObject({
-    status: "failed",
-    failure: expect.stringContaining("this host has no GitHub search provider"),
+    const saved = yield* history(f);
+    const cold = value(projectRepl(yield* readRecords(saved.path)));
+    const entry = value(
+      yield* readEntryJournal({ entry: 1 }, { entries: cold.entries, printing: undefined }),
+    );
+    expect(entry.value).toMatchObject({
+      status: "failed",
+      failure: expect.stringContaining("has not authorized search"),
+    });
+
+    const successor = value(yield* f.root.session.submit("The session is still usable."));
+    value(yield* deadline(successor.join()));
+    yield* f.task.halt();
   });
 
-  const successor = value(yield* f.root.session.submit("The session is still usable."));
-  value(yield* deadline(successor.join()));
-  yield* f.task.halt();
-});
-
   beforeEach(journalBeforeEach(OWNER));
+  it("searches the selected GitHub repository and retains the search result", function* () {
+    const token = "repl-search-test-token";
+    const server = yield* usePullRequestServer({ token });
+    const previous = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = token;
+    yield* ensure(() => {
+      if (previous === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = previous;
+    });
+
+    const repository = "https://github.com/octo/project";
+    yield* API.Env.around({
+      *env([name], next) {
+        if (name === "XMD_WORKFLOW_GITHUB_PULL_REQUESTS") {
+          return JSON.stringify({ endpoint: server.url, allowed: [repository] });
+        }
+        return yield* next(name);
+      },
+    });
+    const f = yield* fixture();
+    yield* runGit(f.A, ["remote", "add", "origin", repository]);
+    const call = yield* submit(f, '<GitHub.Search query="is:issue" as="page" />');
+    value(yield* deadline(call.submission.join()));
+    expect(yield* deadline(call.task)).toBe(0);
+
+    expect(server.requests).toEqual([
+      { method: "GET", path: "/search/issues", authorization: "Bearer " + token },
+    ]);
+    expect(value(yield* f.root.session.bindings()).page).toEqual({
+      total_count: 0,
+      incomplete_results: false,
+      items: [],
+    });
+    const saved = yield* history(f);
+    expect(saved.bytes).toContain('"type":"github_search"');
+    expect(saved.bytes).not.toContain(token);
+    yield* f.task.halt();
+  });
+
   it("E3/E4/E5: exact earlier outcomes coexist with a live idle entry and joined Stop cleanup", function* () {
     const cleanup = gate();
     yield* ensure(cleanup.release);

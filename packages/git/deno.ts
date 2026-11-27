@@ -59,6 +59,7 @@ export type { AdmittedReadExecution } from "./src/deno/composition/pull-request-
 export {
   denoPullRequestOperations,
   useReplGitHubCheckLogs,
+  useReplGitHubSearch,
 } from "./src/deno/composition/pull-request-host.ts";
 export type { DenoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
 export {
