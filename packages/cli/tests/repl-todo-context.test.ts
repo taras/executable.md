@@ -297,18 +297,21 @@ describe("TODO context on independently admitted prompts", () => {
     expect((yield* todo.read()).items[0].text).toBe("survives");
     expect(host.fake.prompts).toHaveLength(1);
   });
-  it("retains both typed control results and delivers their ordinary feedback", function* () {
+  it("advertises and runs both TODO forms with capture", function* () {
     const { host, todo, dispatch } = yield* setup();
     yield* todo.save("", "- [ ] shared\n");
-    host.fake.script({ reply: '<Sidekick.Todo as="items" />' });
+    const read = '<Sidekick.Todo as="result" />';
+    const write = '<Sidekick.Todo as="result">';
+    host.fake.script({ reply: read });
     host.fake.script({
-      reply:
-        '<Sidekick.Todo as="items">\n```diff\n@@ -1 +1 @@\n-- [ ] shared\n+- [x] shared\n```\n</Sidekick.Todo>',
+      reply: write + "\n```diff\n@@ -1 +1 @@\n-- [ ] shared\n+- [x] shared\n```\n</Sidekick.Todo>",
     });
     host.fake.script({ reply: "<Output>done</Output>" });
     const sent = yield* send(dispatch, "read and complete");
     expect((yield* sent.completion).ok).toBe(true);
     expect(host.fake.prompts).toHaveLength(3);
+    expect(host.fake.prompts[0]).toContain(`- ${read} — read.`);
+    expect(host.fake.prompts[0]).toContain(`- ${write}…</Sidekick.Todo> — write.`);
     expect(host.fake.prompts[1]).toContain('"completed": false');
     expect(host.fake.prompts[2]).toContain('"completed": true');
     const saved = yield* records(host.execution);
