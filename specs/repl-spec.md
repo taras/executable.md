@@ -3600,10 +3600,11 @@ layering those live values over retained head values.
 
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
-What a reply may write is the compact surface derived from what is admitted; what
-an entry may write is a read over the ordinary entry's current registry,
-finalized includes and host declarations. The index uses core's structured
-symbols. Named lookup uses core's
+The compact response surface is derived from what is admitted. A control
+supplied with a definition that declares `returns` is listed with an `as`
+binding in each admitted form. Entry syntax is a read over the ordinary entry's
+current registry, finalized includes and host declarations. The index uses
+core's structured symbols. Named lookup uses core's
 [full reference selection and renderer](executable-mdx-spec.md#531-syntax--the-protected-symbols-component).
 It carries the existing assertion defaults, including Assert, AssertEquals and
 AssertThrows, without entering the broader CLI run profile's testing, Verbose

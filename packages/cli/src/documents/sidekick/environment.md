@@ -142,8 +142,9 @@ answer.
   construct can be perfectly valid and still be refused here.
 
 - Read the session checklist with `<Sidekick.Todo as="items" />`. Edit it with
-  the paired form containing one fenced unified diff. Both return ordered
-  `{ text, completed }` items and render nothing. Keep inline Markdown source.
+  `<Sidekick.Todo as="items">…</Sidekick.Todo>` with one fenced unified diff
+  as the body. Both forms require `as`, capture ordered `{ text, completed }`
+  items and render nothing. Keep inline Markdown source.
 - Both Todo forms receive ordinary result feedback in this exchange. A person's
   eligible idle edit can send a TODO change message; busy edits arrive as context
   on a later independently allowed prompt. Neither an edit nor recovery resumes
