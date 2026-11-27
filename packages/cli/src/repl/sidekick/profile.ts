@@ -319,6 +319,8 @@ export interface SurfaceEntry {
   readonly form: InvocationForm;
   /** The props this control admits, by name, from its own schema. */
   readonly props: readonly string[];
+  /** Whether its definition declares a value that the invocation must capture. */
+  readonly requiresCapture: boolean;
   /** Whether its return is collected and sent back as the next turn's input. */
   readonly designated: boolean;
 }
@@ -339,6 +341,7 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
       effect: "read",
       form: "self-closing",
       props: [],
+      requiresCapture: false,
       designated: false,
     });
   }
@@ -351,6 +354,7 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
     effect: "read",
     form: "self-closing",
     props: ["names"],
+    requiresCapture: false,
     designated: false,
   });
   for (const control of ceiling.controls) {
@@ -363,6 +367,9 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
       // schema here to read, so it states the authored contract it was selected
       // for instead.
       props: control.definition === undefined ? (control.props ?? []) : propsOf(control.definition),
+      requiresCapture:
+        control.definition?.returns !== undefined ||
+        (control.name === "Sidekick.Todo" && control.form === "paired"),
       designated:
         DESIGNATED.has(control.name) ||
         (ceiling.components ?? []).some((one) => one.name === control.name),
@@ -373,15 +380,16 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
 
 /** How one control is written, in the form it is admitted for. */
 function spellingOf(entry: SurfaceEntry): string {
+  const tag = entry.requiresCapture ? `${entry.name} as="result"` : entry.name;
   switch (entry.form) {
     case "paired":
-      return `<${entry.name}>…</${entry.name}>`;
+      return `<${tag}>…</${entry.name}>`;
     case "self-closing":
-      return `<${entry.name} />`;
+      return `<${tag} />`;
     default:
       // Both spellings admitted, so both are stated: an agent told only one
       // would treat the other as unavailable.
-      return `<${entry.name} /> or <${entry.name}>…</${entry.name}>`;
+      return `<${tag} /> or <${tag}>…</${entry.name}>`;
   }
 }
 

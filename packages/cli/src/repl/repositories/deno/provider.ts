@@ -61,6 +61,7 @@ import {
   denoPullRequestOperations,
   useDenoRepositoryOperations,
   useReplGitHubCheckLogs,
+  useReplGitHubSearch,
 } from "@executablemd/git/deno";
 import type { DenoPullRequestOperations, DenoRepositoryOperations } from "@executablemd/git/deno";
 import { Repository } from "@executablemd/git/api";
@@ -94,7 +95,7 @@ import type { ReplPushAccess, ReplPushEntry } from "./push.ts";
 import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
 import { replPullRequestPolicy } from "./pull-request.ts";
 import { replPullRequestReadAdmission, replPullRequestReadPolicy } from "./pull-request-reads.ts";
-import { pushDeclaration } from "@executablemd/git";
+import { GitOperationAdmissionError, pushDeclaration } from "@executablemd/git";
 import { issueDeclaration } from "@executablemd/git";
 import { pullRequestDeclaration } from "@executablemd/git";
 import type { BindOperations } from "@executablemd/git";
@@ -304,6 +305,18 @@ export function* replRepositoryInstallation(
     admissions: [...admissions, ...(filesystem.admissions ?? [])],
     *install() {
       yield* useEntryIssueTransport({});
+      yield* useReplGitHubSearch(owner, function* (selection) {
+        const refuse = () =>
+          new GitOperationAdmissionError(
+            "<GitHub.Search>",
+            "the Repository in scope is not one this entry selected, so it names no checkout",
+          );
+        const entry = access();
+        if (entry === undefined) {
+          throw refuse();
+        }
+        return yield* entry.selections.authenticate(selection, refuse).origin();
+      });
       yield* useReplGitHubCheckLogs(
         options.access?.project ?? options.projectCwd ?? (yield* cwd()),
         options.access,

@@ -42,6 +42,7 @@ function invalid(): PullRequestReadError {
 export function useGitHubSearch(
   options: GitHubPullRequestsOptions,
   locator: (selection: RepositorySelection) => Operation<string | undefined>,
+  refuseUnavailable: (message: string) => Error = unavailable,
 ): Operation<void> {
   const resolved = gitHubPullRequestReadResolver(options);
   return GitHubSearch.around({
@@ -49,13 +50,13 @@ export function useGitHubSearch(
       const origin = yield* locator(selection);
       const repository = origin === undefined ? undefined : parseGitHubRepository(origin);
       if (repository === undefined) {
-        throw unavailable("the selected Repository does not name a GitHub repository.");
+        throw refuseUnavailable("the selected Repository does not name a GitHub repository.");
       }
       const name = `${repository.owner}/${repository.repository}`;
       const url = `https://github.com/${name}`;
       const configuration = yield* resolved.authorized();
       if (!configuration?.allowed || !pullRequestAllowed(configuration.allowed, url)) {
-        throw unavailable("this host has not authorized search in the selected Repository.");
+        throw refuseUnavailable("this host has not authorized search in the selected Repository.");
       }
       const apiBase = options.access?.endpoint ?? configuration.endpoint ?? GITHUB_API;
       const validate = (value: unknown, page: number) =>

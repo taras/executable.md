@@ -153,6 +153,8 @@ export interface ReplPage {
    * deadline passes first.
    */
   until(what: string, holds: (reading: ScreenReading) => boolean): Operation<ScreenReading>;
+  /** Wait for the next captured reading after this index, or fail if the command ends. */
+  after(index: number): Operation<void>;
   /** Press the pointer at the first cell of this label. Waits for nothing. */
   press(label: string, scope?: ScreenScope): Operation<void>;
   /** Send one named key. Waits for nothing. */
@@ -391,6 +393,16 @@ export function* useReplPage(
     return latest;
   };
 
+  function* after(index: number): Operation<void> {
+    yield* next(index);
+    if (count <= index && repl.terminal.ending !== undefined) {
+      throw (
+        repl.terminal.ending.failure ??
+        new Error(`the command ended before the next reading. ${describe()}`)
+      );
+    }
+  }
+
   function* until(what: string, holds: (one: ScreenReading) => boolean): Operation<ScreenReading> {
     return yield* race([
       (function* (): Operation<ScreenReading> {
@@ -450,5 +462,5 @@ export function* useReplPage(
     (one) => one.shows("[exit]") || one.shows("needs at least"),
   );
 
-  return { repl, screen, until, press, key: sendKey, wheel, type, resize, describe };
+  return { repl, screen, until, after, press, key: sendKey, wheel, type, resize, describe };
 }

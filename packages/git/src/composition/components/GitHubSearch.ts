@@ -28,9 +28,8 @@ interface GitHubSearchApi {
 
 export const GitHubSearch = createApi<GitHubSearchApi>("executablemd.git.github.search", {
   *search(): Operation<SearchResult> {
-    throw new GitOperationAdmissionError(
-      SEARCH_ELEMENT,
-      "this host has no GitHub search provider.",
+    throw new Error(
+      SEARCH_ELEMENT + " could not run because this host has no GitHub search provider.",
     );
   },
 });

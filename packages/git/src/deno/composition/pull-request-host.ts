@@ -25,6 +25,11 @@
  * belong to that one call, so two concurrent reads cannot reach each other's.
  */
 
+import { SEARCH_ELEMENT } from "../../composition/components/GitHubSearch.ts";
+import { useGitHubSearch } from "./github-search.ts";
+import { retainGitHubSearch } from "./pull-request-operations.ts";
+import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
+import type { RepositorySelection } from "../../composition/selection.ts";
 import { useGitHubCheckLogs } from "./github-check-log.ts";
 import type { Operation } from "effection";
 import { hostFilesHandler } from "@executablemd/runtime";
@@ -100,5 +105,20 @@ export function useReplGitHubCheckLogs(project: string, access?: HostFilesAccess
     // This effect owns the receipt. Passing the body through the entry file
     // recorder would retain the payload and introduce a second effect.
     write: hostFilesHandler({ access }).writeTextFile,
+  });
+}
+
+export function* useReplGitHubSearch(
+  entryOwner: string,
+  locator: (selection: RepositorySelection) => Operation<string | undefined>,
+): Operation<void> {
+  yield* useGitHubSearch(
+    { host: denoGitHubSource },
+    locator,
+    (message) => new Error(SEARCH_ELEMENT + ": " + message),
+  );
+  yield* PullRequestReadExecution.around({
+    search: ([repository, request, transport, validate]) =>
+      retainGitHubSearch({ entryOwner }, repository, request, transport, validate),
   });
 }
