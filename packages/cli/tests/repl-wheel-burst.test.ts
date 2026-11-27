@@ -96,10 +96,10 @@ describe("wheel bursts in one input chunk", () => {
       expect(page.screen().found("[History]")).toBe(1);
       expect(page.screen().shows("[exit]")).toBe(true);
       yield* page.press("[History]");
-      yield* page.until("History opens", (one) => one.shows("120:"));
-      expect(page.screen().shows("120:")).toBe(true);
+      yield* page.until("History opens", (one) => one.shows("in 120 "));
+      expect(page.screen().shows("in 120 ")).toBe(true);
       yield* page.key("Escape");
-      yield* page.until("History closes", (one) => !one.shows("120:"));
+      yield* page.until("History closes", (one) => !one.shows("in 120 "));
       yield* page.until("History focus restored", (one) => one.shows("> [History]"));
       for (let stop = 0; stop < 30 && !page.screen().shows("> [History]"); stop++) {
         yield* page.key("Tab");
@@ -107,9 +107,9 @@ describe("wheel bursts in one input chunk", () => {
       }
       expect(page.screen().shows("> [History]")).toBe(true);
       yield* page.key("Enter");
-      yield* page.until("keyboard History opens", (one) => one.shows("120:"));
+      yield* page.until("keyboard History opens", (one) => one.shows("in 120 "));
       yield* page.key("Escape");
-      yield* page.until("keyboard History closes", (one) => !one.shows("120:"));
+      yield* page.until("keyboard History closes", (one) => !one.shows("in 120 "));
     }
   });
 
@@ -120,11 +120,13 @@ describe("wheel bursts in one input chunk", () => {
     yield* page.until("History", (one) => one.shows("[close]"));
     yield* page.key("Tab");
     yield* page.until("History actions own focus", (one) => one.shows("> [close]"));
-    const cell = page.screen().locate("30:");
+    const cell = page.screen().locate("in 30 ");
     const positions = () =>
       page
         .screen()
-        .rows.flatMap((row) => [...row.matchAll(/(?:^|\s)(\d+):/g)].map((match) => match[1]));
+        .rows.flatMap((row) =>
+          [...row.matchAll(/(?:^|\s)in +(\d+)(?=\s|$)/g)].map((match) => match[1]),
+        );
     const newest = positions();
     yield* burst(page, "down", cell, 4);
     const older = positions();
