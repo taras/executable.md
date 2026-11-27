@@ -5940,12 +5940,16 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
       renderer.resize(next.size);
       inputs = [];
       const cold = yield* prepareFrame(renderer, next);
-      if (!cold.ok) throw cold.error;
+      if (!cold.ok) {
+        throw cold.error;
+      }
       expect(inputs).toHaveLength(1);
       const key = inputs[0];
       inputs = [];
       const warm = yield* prepareFrame(renderer, next, store);
-      if (!warm.ok) throw warm.error;
+      if (!warm.ok) {
+        throw warm.error;
+      }
       if (key === previous) {
         expect(inputs).toEqual([]);
         hits++;
