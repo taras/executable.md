@@ -85,6 +85,7 @@ import {
   workspaceQueueRows,
   workspaceBodyRows,
   TAB_GAP,
+  FOLLOW_GAP,
   workspaceBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
@@ -14798,7 +14799,16 @@ function workspacePresentation(input: {
       return [];
     }
     const left = parts(headerKeysOf(spec.left, candidates), region, surface);
-    const right = parts(headerKeysOf(spec.right, candidates), region, surface);
+    const grouped = parts(headerKeysOf(spec.right, candidates), region, surface);
+    const follow = grouped.findIndex((one) => one.key === "follow");
+    const right =
+      id !== "tray" || follow < 0 || follow === grouped.length - 1
+        ? grouped
+        : [
+            ...grouped.slice(0, follow + 1),
+            box({ id: "box:tray:follow-gap", region, props: statedPartProps(FOLLOW_GAP) }),
+            ...grouped.slice(follow + 1),
+          ];
     if (left.length === 0 && right.length === 0) {
       return [];
     }

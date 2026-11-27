@@ -562,8 +562,25 @@ describe("Flow 1 composer presentation", () => {
     expect(ink(hint.column, hint.row).foreground).toBe(REPL_PALETTE.muted);
     expect(ink(hint.column - 1, hint.row).background).toBe(REPL_PALETTE.focus);
     const send = empty.locate("[send]", SIDEKICK_CONTROLS);
-    expect(empty.locate("[x]loop").row).toBe(send.row);
+    const loop = empty.locate("[x]loop");
+    expect(loop.row).toBe(send.row);
     expect(corner.row).toBe(send.row + 1);
+    // The approved composer's geometry: seven blank cells between the two
+    // controls, and one between [send] and the pane's right edge.
+    expect(send.column - (loop.column + "[x]loop".length)).toBe(7);
+    expect(WIDE.columns - (send.column + "[send]".length)).toBe(1);
+    // The controls are text on the pane, not filled buttons: every glyph,
+    // brackets and checkbox included, is the heading ink.
+    for (const at of [loop, send]) {
+      const label = at === loop ? "[x]loop" : "[send]";
+      for (let offset = 0; offset < label.length; offset += 1) {
+        expect([label, offset, ink(at.column + offset, at.row).foreground]).toEqual([
+          label,
+          offset,
+          REPL_PALETTE.heading,
+        ]);
+      }
+    }
     // Every cell of the controls row, the controls' own included, is the
     // unshaded Sidekick pane: #0a0c0e.
     for (let column = corner.column - 1; column < WIDE.columns; column += 1) {

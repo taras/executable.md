@@ -598,6 +598,14 @@ export function headerBandProps(rows: number, surface: number, topGap = 0): Repl
 export const TAB_GAP = 2;
 
 /**
+ * The extra cells after Follow in the Sidekick tray. The approved composer
+ * leaves seven blank cells between `[x]loop` and the control after it: the
+ * row's gap on each side of this spacer and that control's two-cell marker
+ * room supply the other six.
+ */
+export const FOLLOW_GAP = 1;
+
+/**
  * How many blank rows each shared column keeps above its first heading.
  *
  * Space asked for at the top of the three columns, taken as real layout padding
