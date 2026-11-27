@@ -24,6 +24,7 @@ import {
   SidekickHistoryError,
   readSidekickRecords,
 } from "../src/repl/sidekick/history.ts";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { renderReceipt } from "../src/repl/sidekick/controls.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -539,6 +540,48 @@ function* compose(page: ReplPage, text: string): Operation<void> {
 function sendComposed(page: ReplPage): Operation<void> {
   return page.press("[send]", SIDEKICK_CONTROLS);
 }
+
+describe("Flow 1 composer presentation", () => {
+  beforeEach(journalBeforeEach(OWNER));
+  it("F1: the bordered input shows focus on its edge, a muted placeholder and the caret", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const ink = (column: number, row: number) => {
+      const screen = page.repl.terminal.screen;
+      if (screen === undefined) {
+        throw new Error("the mounted terminal has no screen");
+      }
+      return screen.styleAt(column, row);
+    };
+    const empty = yield* page.until(
+      "the focused empty composer",
+      (one) => composerFocused(one) && one.found(PLACEHOLDER, COMPOSER_VALUE) === 1,
+    );
+    const corner = composerAt(empty);
+    expect(ink(corner.column, corner.row).foreground).toBe(REPL_PALETTE.focus);
+    const hint = empty.locate(PLACEHOLDER, COMPOSER_VALUE);
+    expect(ink(hint.column, hint.row).foreground).toBe(REPL_PALETTE.muted);
+    expect(ink(hint.column - 1, hint.row).background).toBe(REPL_PALETTE.focus);
+    expect(empty.locate("[x]loop").row).toBe(empty.locate("[send]", SIDEKICK_CONTROLS).row);
+    expect(corner.row).toBe(empty.locate("[send]", SIDEKICK_CONTROLS).row + 1);
+
+    yield* page.type("Hello World!");
+    const typed = yield* page.until("the typed draft", (one) => composerHolds(one, "Hello World!"));
+    expect(typed.found(PLACEHOLDER, COMPOSER_VALUE)).toBe(0);
+    const text = typed.locate("Hello World!", COMPOSER_VALUE);
+    expect(ink(text.column + "Hello World!".length, text.row).background).toBe(REPL_PALETTE.focus);
+    // The short draft is one display row between the edges.
+    expect(typed.composer?.bottom).toBe((typed.composer?.top ?? 0) + 1);
+
+    yield* page.key("Tab");
+    const blurred = yield* page.until(
+      "the blurred draft",
+      (one) => !composerFocused(one) && composerHolds(one, "Hello World!"),
+    );
+    const edge = composerAt(blurred);
+    expect(ink(edge.column, edge.row).foreground).toBe(REPL_PALETTE.muted);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+});
 
 describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
   beforeEach(journalBeforeEach(OWNER));
