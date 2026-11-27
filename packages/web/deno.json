@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/web",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "exports": "./mod.ts",
   "compilerOptions": {
     "lib": ["dom", "dom.iterable", "esnext"]
