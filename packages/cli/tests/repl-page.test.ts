@@ -40,8 +40,11 @@ function composerShown(reading: ScreenReading): boolean {
   return reading.composer !== undefined;
 }
 
+/** The Sidekick's checked loop toggle, which shares its row with the Sidekick's Send. */
+const LOOP = "[x]loop";
+
 /** The Sidekick's own Send, scoped by the one bounded layout statement made here. */
-const SIDEKICK_SEND: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK };
+const SIDEKICK_SEND: ScreenScope = { onRow: LOOP, rightOf: LOOP };
 
 /** Where this label actually begins, asked of the emulator's own cells. */
 function cellOf(page: ReplPage, label: string): ScreenCell[] {
@@ -113,7 +116,7 @@ describe("REPL page — Send and its visible scope", () => {
       one.shows("> Round 1 · draft"),
     );
     expect(opened.found("Send", ROUND_BAR)).toBe(1);
-    expect(opened.found("[send]", SIDEKICK_SEND)).toBe(1);
+    expect(opened.found("Send", SIDEKICK_SEND)).toBe(1);
 
     yield* tab(page);
     yield* page.until("focused Send", (one) => one.shows("> Send"));
@@ -138,7 +141,7 @@ describe("REPL page — Send and its visible scope", () => {
     yield* intoDraft(page);
     yield* typed(page, "Send appears in this draft");
     const ambiguous = yield* refusal(page.press("Send"));
-    expect(ambiguous).toContain("is shown 4 times in the whole screen");
+    expect(ambiguous).toContain("is shown 5 times in the whole screen");
 
     expect(page.screen().found("Send", ROUND_BAR)).toBe(1);
     yield* page.press("Send", ROUND_BAR);
@@ -166,20 +169,20 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
     expect(composerShown(narrow)).toBe(false);
     // The scope that named the Sidekick's Send is refused here, saying which
     // visible text it could not find rather than pressing the Draft's instead.
-    const gone = yield* refusal(page.press("[send]", SIDEKICK_SEND));
-    expect(gone).toContain(`exactly one row showing ${JSON.stringify(SIDEKICK)}`);
+    const gone = yield* refusal(page.press("Send", SIDEKICK_SEND));
+    expect(gone).toContain(`exactly one row showing ${JSON.stringify(LOOP)}`);
     expect(narrow.found("Send", ROUND_BAR)).toBe(1);
 
     // Below the minimum the screen is its own refusal and offers nothing.
     const refused = yield* page.resize(BELOW);
     expect(refused.shows("needs at least 72x20")).toBe(true);
-    expect(refused.occurrences("[send]")).toBe(0);
+    expect(refused.occurrences("Send")).toBe(0);
 
     // Recovered, the draft is still what was typed into it.
     const recovered = yield* page.resize(WIDE);
     expect(recovered.shows("keep this draft")).toBe(true);
     expect(recovered.found("keep this draft", { after: DRAFT })).toBe(1);
-    expect(recovered.occurrences("[send]")).toBe(1);
+    expect(recovered.found("Send", SIDEKICK_SEND)).toBe(1);
   });
 
   it("publishes no reading for a write that is held, and resumes when it lands", function* () {
@@ -216,8 +219,8 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
     yield* typed(page, "\u754c\u754c\u754c");
 
     const reading = page.screen();
-    const located = reading.locate("[send]", SIDEKICK_SEND);
-    const drawn = cellOf(page, "[send]").filter((one) => one.row === located.row);
+    const located = reading.locate("Send", SIDEKICK_SEND);
+    const drawn = cellOf(page, "Send").filter((one) => one.row === located.row);
     expect(drawn).toHaveLength(1);
     // The one that matters: a located column is a terminal cell, so the cell it
     // names is where the label actually begins.
@@ -240,9 +243,8 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
     // admitted the Sidekick's Send before the glyphs still admits exactly it,
     // and still excludes the Draft's.
     const reading = page.screen();
-    expect(reading.found("[send]", SIDEKICK_SEND)).toBe(1);
+    expect(reading.found("Send", SIDEKICK_SEND)).toBe(1);
     expect(reading.found("Send", ROUND_BAR)).toBe(1);
-    expect(reading.occurrences("[send]")).toBe(1);
 
     // And the glyphs themselves are read where they are drawn: the first is on
     // the Draft's value row, two cells wide, with nothing of it left behind.
@@ -290,7 +292,7 @@ function* intoComposer(page: ReplPage): Operation<void> {
 function* asked(page: ReplPage, text: string, shown: string): Operation<void> {
   yield* intoComposer(page);
   yield* typed(page, text);
-  yield* page.press("[send]", SIDEKICK_SEND);
+  yield* page.press("Send", SIDEKICK_SEND);
   yield* page.until(`the reply showing ${JSON.stringify(shown)}`, (one) => one.shows(shown));
 }
 

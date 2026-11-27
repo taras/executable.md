@@ -34,6 +34,7 @@ import {
   composerShown,
   DRAFT_VALUE,
   intoDraft,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-focus-regions.test.ts";
@@ -771,7 +772,7 @@ describe("REPL focus regions: Sidekick reading keys", () => {
     yield* key(page, "Home");
     yield* page.until("the start of the chat", (one) => one.shows("Chat row 0"));
     page.repl.fake.releaseDeltas();
-    yield* page.until("the response finished", (one) => !one.shows("[stop]"));
+    yield* page.until("the response finished", (one) => !sidekickStopShown(one));
     expect(page.screen().shows("Chat row 0")).toBe(true);
     expect(page.screen().shows("Chat row 59")).toBe(false);
     yield* key(page, "End");

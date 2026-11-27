@@ -139,6 +139,7 @@ import {
   sidekickIdle,
   SIDEKICK,
   typed,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
@@ -5134,7 +5135,7 @@ describe("resume retention and mounted retained recovery corrections", () => {
     yield* page.key("Enter");
     yield* page.until(
       "the fresh reply",
-      (one) => one.shows("Fresh reply only.") && !one.shows("[stop]"),
+      (one) => one.shows("Fresh reply only.") && !sidekickStopShown(one),
     );
     expect(held.host.fake.prompts).toHaveLength(3);
     expect(held.host.fake.turns.at(-1)?.handle.sessionKey).toBe(held.session);

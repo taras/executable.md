@@ -36,7 +36,8 @@ import {
   intoComposer,
   composerFocused,
   COMPOSER_VALUE,
-  SIDEKICK_PANE,
+  trayFound,
+  SEND,
 } from "./support/screen-journeys.ts";
 import type { Operation } from "effection";
 import type { ReplPage } from "./support/repl-page.ts";
@@ -479,10 +480,7 @@ function* sendInstruction(page: ReplPage, text: string): Operation<void> {
     `the composer holding ${JSON.stringify(text)}`,
     (one) => one.found(text, COMPOSER_VALUE) === 1,
   );
-  yield* page.until(
-    "the Sidekick offering its own Send",
-    (one) => one.found("[send]", SIDEKICK_PANE) === 1,
-  );
+  yield* page.until("the Sidekick offering its own Send", (one) => trayFound(one, SEND) === 1);
   yield* page.until(
     "the Message field holding focus in the committed frame",
     (one) => one.found(text, COMPOSER_VALUE) === 1 && composerFocused(one),

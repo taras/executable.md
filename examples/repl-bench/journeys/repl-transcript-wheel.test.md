@@ -8,7 +8,7 @@
       </ReplBench.Region>
       <ReplBench.Key key="Enter" />
       <ReplBench.WaitForText text={"Reply witness "+turn+"."} />
-      <ReplBench.WaitForText text="[stop]" present={false} />
+      <ReplBench.WaitForText text=" Stop " present={false} />
     </Each>
 
     <ReplBench.Type text="message-kept" />

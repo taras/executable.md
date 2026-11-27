@@ -96,6 +96,39 @@ export const SIDEKICK_CONTROLS: ScreenScope = {
   },
 };
 
+/** The Sidekick tray's filled buttons. */
+export const SEND = "Send";
+export const STOP = "Stop";
+
+/**
+ * The Sidekick tray's controls row: the one row directly above the composer's
+ * edge, at or right of that edge. The titles Send and Stop are ordinary words,
+ * so the row itself is the scope — the placeholder, the chat and the Round bar
+ * all say them elsewhere.
+ */
+export const TRAY_CONTROLS: ScreenScope = {
+  within: {
+    name: "the Sidekick tray's controls row",
+    of: (reading) =>
+      reading.composer && {
+        top: reading.composer.top - 2,
+        bottom: reading.composer.top - 1,
+        left: reading.composer.left - 1,
+        right: reading.size.columns,
+      },
+  },
+};
+
+/** How many times the tray's controls row shows this title, or none where no composer is drawn. */
+export function trayFound(reading: ScreenReading, title: string): number {
+  return reading.composer === undefined ? 0 : reading.found(title, TRAY_CONTROLS);
+}
+
+/** Whether any Stop for the Sidekick is offered: the tray's button or a drawer's `[stop]`. */
+export function sidekickStopShown(reading: ScreenReading): boolean {
+  return trayFound(reading, STOP) > 0 || reading.shows("[stop]");
+}
+
 /** How the History rail marks an entry that reached each outcome. */
 export const RAIL: Readonly<Record<string, string>> = Object.freeze({
   ok: "✓",
@@ -213,11 +246,8 @@ export function* draftText(
 export function* sendMessage(page: ReplPage, text: string): Operation<void> {
   yield* intoComposer(page);
   yield* typed(page, text);
-  yield* page.until(
-    "the Sidekick offering its own Send",
-    (one) => one.found("[send]", SIDEKICK_PANE) === 1,
-  );
-  yield* page.press("[send]", SIDEKICK_PANE);
+  yield* page.until("the Sidekick offering its own Send", (one) => trayFound(one, SEND) === 1);
+  yield* page.press(SEND, TRAY_CONTROLS);
 }
 
 /** Ask the Sidekick something and wait for a reply that shows this. */
@@ -232,11 +262,11 @@ export function stopSidekick(page: ReplPage): Operation<void> {
   // and then the Stop to press is the drawer's: at or right of the way out
   // every drawer draws, which the Draft's own Stop is left of.
   const reading = page.screen();
+  if (trayFound(reading, STOP) === 1) {
+    return page.press(STOP, TRAY_CONTROLS);
+  }
   if (reading.occurrences("[stop]") === 1) {
     return page.press("[stop]");
-  }
-  if (composerShown(reading)) {
-    return page.press("[stop]", SIDEKICK_CONTROLS);
   }
   return page.press("[stop]", { onRow: "[close]" });
 }
@@ -248,10 +278,7 @@ export function sidekickIdle(reading: ScreenReading): boolean {
   if (!composerShown(reading)) {
     return false;
   }
-  return (
-    reading.found("[send]", SIDEKICK_CONTROLS) === 1 &&
-    reading.found("[stop]", SIDEKICK_CONTROLS) === 0
-  );
+  return trayFound(reading, SEND) === 1 && trayFound(reading, STOP) === 0;
 }
 
 /**

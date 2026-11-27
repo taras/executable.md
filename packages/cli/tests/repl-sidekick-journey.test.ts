@@ -125,6 +125,11 @@ import {
   sidekickShows,
   typed,
   unwrapped,
+  trayFound,
+  SEND,
+  STOP,
+  TRAY_CONTROLS,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-journey.test.ts";
@@ -1410,7 +1415,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     fake.script({ reply: "<Output>Review noted.</Output>" });
     yield* page.until("the Sidekick composer", (screen) => composerShown(screen));
     yield* typed(page, "review");
-    yield* page.press("[send]");
+    yield* page.press(SEND, TRAY_CONTROLS);
     const identity = `Entry 1 · ${MOUNTED_AGENT} · `;
     yield* page.until("the waiting status beside Entry 1", (screen) =>
       screen.shows(identity + "Waiting for agent update · 0s"),
@@ -1521,11 +1526,11 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // Both composers keep newer text while the active exchange owns Stop.
     expect(draftHolds(page.screen(), "mine")).toBe(true);
     expect(composerHolds(page.screen(), "later")).toBe(true);
-    expect(page.screen().shows("[stop]")).toBe(true);
+    expect(sidekickStopShown(page.screen())).toBe(true);
     // Busy Send and Stop belong to the Sidekick; Draft retains its own Send.
     expect(sidekickIdle(page.screen())).toBe(false);
-    expect(page.screen().found("[stop]", SIDEKICK_PANE)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
+    expect(trayFound(page.screen(), STOP)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
 
     // The rest of the text arrives, and the entry the reply submits is held
@@ -5050,7 +5055,7 @@ describe("993 mounted nested Output journeys", () => {
         reading.shows(`${MOUNTED_AGENT} (preview): ABC`),
       );
       if (stop) {
-        yield* page.press("[stop]", SIDEKICK_PANE);
+        yield* page.press(STOP, TRAY_CONTROLS);
       } else {
         repl.fake.releaseDeltas();
       }

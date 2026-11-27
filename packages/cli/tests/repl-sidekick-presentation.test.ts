@@ -25,6 +25,7 @@ import {
   readSidekickRecords,
 } from "../src/repl/sidekick/history.ts";
 import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
+import type { CellStyle } from "./support/terminal-screen.ts";
 import { renderReceipt } from "../src/repl/sidekick/controls.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -69,12 +70,15 @@ import {
   paneLines,
   sendMessage,
   SIDEKICK,
-  SIDEKICK_CONTROLS,
-  SIDEKICK_PANE,
   sidekickIdle,
   sidekickShows,
   stopSidekick,
   typed,
+  trayFound,
+  SEND,
+  STOP,
+  TRAY_CONTROLS,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-presentation.test.ts";
@@ -220,7 +224,7 @@ describe("987 — mounted original recovery", () => {
     page.repl.fake.releaseTurn();
     yield* page.repl.fake.startedTurns(2);
     yield* page.repl.fake.holdingTurns(1);
-    yield* page.until("the ordinary feedback turn running", (one) => one.shows("[stop]"));
+    yield* page.until("the ordinary feedback turn running", (one) => sidekickStopShown(one));
     page.repl.fake.releaseTurn();
     yield* page.until(
       "the healthy feedback completing",
@@ -315,7 +319,7 @@ describe("Sidekick presentation: visible work owns its controls", () => {
     yield* sendMessage(page, "explain the entry");
     yield* page.until("the Sidekick reply", (one) => sidekickShows(one, "Noted."));
     yield* page.until("the Sidekick returning to Send", sidekickIdle);
-    expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
   });
 
   it("keeps the composer separate from the Draft", function* () {
@@ -334,16 +338,16 @@ describe("Sidekick presentation: visible work owns its controls", () => {
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows(SIDEKICK)).toBe(false);
     expect(composerShown(narrow)).toBe(false);
-    expect(narrow.occurrences("[send]")).toBe(0);
+    expect(trayFound(narrow, SEND)).toBe(0);
     expect(draftOpen(narrow)).toBe(false);
     yield* intoDraft(page);
     const editing = page.screen();
     expect(editing.found("Send", { onRow: "✎ draft" })).toBe(1);
-    expect(editing.occurrences("[send]")).toBe(0);
+    expect(trayFound(editing, SEND)).toBe(0);
     const wide = yield* page.resize(WIDE);
     expect(wide.shows(SIDEKICK)).toBe(true);
     expect(composerShown(wide)).toBe(true);
-    expect(wide.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(wide, SEND)).toBe(1);
     expect(wide.found("Send", { onRow: "✎ draft" })).toBe(1);
   });
 
@@ -354,7 +358,7 @@ describe("Sidekick presentation: visible work owns its controls", () => {
       reply: "<Output>never reached</Output>\n",
     });
     yield* sendMessage(page, "hold this turn");
-    yield* page.until("the Sidekick Stop", (one) => one.found("[stop]", SIDEKICK_CONTROLS) === 1);
+    yield* page.until("the Sidekick Stop", (one) => trayFound(one, STOP) === 1);
     yield* stopSidekick(page);
     yield* page.until("the Sidekick returning to Send", sidekickIdle);
     expect(page.screen().shows("never reached")).toBe(false);
@@ -538,7 +542,21 @@ function* compose(page: ReplPage, text: string): Operation<void> {
 }
 
 function sendComposed(page: ReplPage): Operation<void> {
-  return page.press("[send]", SIDEKICK_CONTROLS);
+  return page.press(SEND, TRAY_CONTROLS);
+}
+
+/** The foreground of each cell of a title, from its first cell. */
+function controlInks(
+  ink: (column: number, row: number) => CellStyle,
+  at: { readonly column: number; readonly row: number },
+  title: string,
+): (number | undefined)[] {
+  return Array.from(title, (_, offset) => ink(at.column + offset, at.row).foreground);
+}
+
+/** The same ink on every cell of a title. */
+function inks(title: string, colour: number): number[] {
+  return Array.from(title, () => colour);
 }
 
 describe("Flow 1 composer presentation", () => {
@@ -561,38 +579,39 @@ describe("Flow 1 composer presentation", () => {
     const hint = empty.locate(PLACEHOLDER, COMPOSER_VALUE);
     expect(ink(hint.column, hint.row).foreground).toBe(REPL_PALETTE.muted);
     expect(ink(hint.column - 1, hint.row).background).toBe(REPL_PALETTE.focus);
-    const send = empty.locate("[send]", SIDEKICK_CONTROLS);
+    const send = empty.locate(SEND, TRAY_CONTROLS);
     const loop = empty.locate("[x]loop");
     expect(loop.row).toBe(send.row);
     expect(corner.row).toBe(send.row + 1);
-    // The approved composer's geometry: seven blank cells between the two
-    // controls, and one between [send] and the pane's right edge.
-    expect(send.column - (loop.column + "[x]loop".length)).toBe(7);
-    expect(WIDE.columns - (send.column + "[send]".length)).toBe(1);
-    // The controls are text on the pane, not filled buttons: every glyph,
-    // brackets and checkbox included, is the heading ink.
-    for (const at of [loop, send]) {
-      const label = at === loop ? "[x]loop" : "[send]";
-      for (let offset = 0; offset < label.length; offset += 1) {
-        expect([label, offset, ink(at.column + offset, at.row).foreground]).toEqual([
-          label,
-          offset,
-          REPL_PALETTE.heading,
-        ]);
-      }
-    }
-    // Every cell of the controls row, the controls' own included, is the
-    // unshaded Sidekick pane: #0a0c0e.
+    // The reference: a cyan checkbox against a light label, two blank cells,
+    // then a filled Send whose fill ends on the box's right edge column. The
+    // fill holds Send's two-cell marker room, its title and one cell after.
+    const fill = { from: send.column - 2, to: send.column + SEND.length };
+    expect(fill.from - (loop.column + "[x]loop".length)).toBe(2);
+    expect(fill.to).toBe(empty.composer?.right);
+    expect(controlInks(ink, loop, "[x]")).toEqual(inks("[x]", REPL_PALETTE.focus));
+    expect(controlInks(ink, { row: loop.row, column: loop.column + 3 }, "loop")).toEqual(
+      inks("loop", REPL_PALETTE.output),
+    );
+    // Dim while the draft is empty: there is nothing to send.
+    expect(controlInks(ink, send, SEND)).toEqual(inks(SEND, REPL_PALETTE.inactiveAction));
+    // The pane stays unshaded around the controls; only the button is filled.
     for (let column = corner.column - 1; column < WIDE.columns; column += 1) {
       expect([column, ink(column, send.row).background]).toEqual([
         column,
-        REPL_PALETTE.conversationSurface,
+        column >= fill.from && column <= fill.to
+          ? REPL_PALETTE.buttonSurface
+          : REPL_PALETTE.conversationSurface,
       ]);
     }
 
     yield* page.type("Hello World!");
     const typed = yield* page.until("the typed draft", (one) => composerHolds(one, "Hello World!"));
     expect(typed.found(PLACEHOLDER, COMPOSER_VALUE)).toBe(0);
+    // With something to send, Send takes the active action ink on the same fill.
+    const ready = typed.locate(SEND, TRAY_CONTROLS);
+    expect(controlInks(ink, ready, SEND)).toEqual(inks(SEND, REPL_PALETTE.heading));
+    expect(ink(ready.column - 2, ready.row).background).toBe(REPL_PALETTE.buttonSurface);
     const text = typed.locate("Hello World!", COMPOSER_VALUE);
     expect(ink(text.column + "Hello World!".length, text.row).background).toBe(REPL_PALETTE.focus);
     // The short draft is one display row between the edges.
@@ -617,7 +636,7 @@ describe("Flow 1 composer beside waiting messages", () => {
     yield* sendMessage(page, "first message");
     yield* page.repl.fake.holdingTurns(1);
     yield* typed(page, "waiting message");
-    yield* page.press("[send]", SIDEKICK_CONTROLS);
+    yield* page.press(SEND, TRAY_CONTROLS);
     const queued = yield* page.until("the waiting message", (one) =>
       one.shows("Waiting messages are kept only in this REPL."),
     );
@@ -627,7 +646,7 @@ describe("Flow 1 composer beside waiting messages", () => {
     }
     const notice = queued.locate("Waiting messages are kept only in this REPL.");
     const corner = composerAt(queued);
-    const send = queued.locate("[send]", SIDEKICK_CONTROLS);
+    const send = queued.locate(SEND, TRAY_CONTROLS);
     // The tray's gutter column and the notice itself keep the shaded tray.
     for (const column of [corner.column - 1, notice.column, WIDE.columns - 1]) {
       expect([column, screen.styleAt(column, notice.row).background]).toEqual([
@@ -635,12 +654,41 @@ describe("Flow 1 composer beside waiting messages", () => {
         REPL_PALETTE.composerSurface,
       ]);
     }
-    for (const column of [corner.column - 1, send.column, WIDE.columns - 1]) {
+    for (const column of [corner.column - 1, WIDE.columns - 1]) {
       expect([column, screen.styleAt(column, send.row).background]).toEqual([
         column,
         REPL_PALETTE.conversationSurface,
       ]);
     }
+    // The pictured busy state: a red Stop and a dim Send, each a filled button
+    // with one unfilled cell between them.
+    const ink = (column: number, row: number) => screen.styleAt(column, row);
+    const busyRow = (reading: ScreenReading) => {
+      const stop = reading.locate(STOP, TRAY_CONTROLS);
+      const sent = reading.locate(SEND, TRAY_CONTROLS);
+      const loop = reading.locate("[x]loop");
+      expect([loop.row, stop.row]).toEqual([sent.row, sent.row]);
+      expect(stop.column - 2 - (loop.column + "[x]loop".length)).toBe(2);
+      expect(sent.column - 2 - (stop.column + STOP.length + 1)).toBe(1);
+      expect(sent.column + SEND.length).toBe(reading.composer?.right);
+      expect(controlInks(ink, stop, STOP)).toEqual(inks(STOP, REPL_PALETTE.failure));
+      expect(controlInks(ink, sent, SEND)).toEqual(inks(SEND, REPL_PALETTE.inactiveAction));
+      expect(
+        [
+          stop.column - 2,
+          stop.column + STOP.length,
+          sent.column - 2,
+          sent.column + SEND.length,
+        ].map((column) => ink(column, sent.row).background),
+      ).toEqual(Array.from({ length: 4 }, () => REPL_PALETTE.buttonSurface));
+      expect(ink(stop.column + STOP.length + 1, sent.row).background).toBe(
+        REPL_PALETTE.conversationSurface,
+      );
+    };
+    busyRow(queued);
+    // The busiest staged row still fits one row at the medium size.
+    const medium = yield* page.resize({ columns: 120, rows: 30 });
+    busyRow(medium);
     page.repl.fake.releaseTurn();
   });
 });
@@ -654,7 +702,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
       expect(first.shows(label)).toBe(true);
     }
     expect(composerShown(first)).toBe(true);
-    expect(first.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(first, SEND)).toBe(1);
     expect([
       page.repl.fake.created,
       page.repl.fake.ensured,
@@ -844,8 +892,8 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
     yield* page.until("the Sidekick working", (one) => one.shows("[S] working"));
-    expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), STOP)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     yield* compose(page, "then this");
     page.repl.fake.releaseTurn();
@@ -864,7 +912,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     const fed = page.repl.terminal.fed;
     yield* page.until("the first answer without input", (one) => one.shows("[S] First answer."));
     expect(page.repl.terminal.fed).toBe(fed);
-    expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), STOP)).toBe(1);
     expect(page.screen().shows("Second answer.")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     page.repl.fake.releaseTurn();
@@ -919,7 +967,7 @@ describe("Sidekick texts and reading across every profile", () => {
       expect(drawn.shows("[exit]")).toBe(true);
       expect(composerHolds(drawn, "ask")).toBe(true);
       expect(composerShown(drawn)).toBe(true);
-      expect(drawn.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      expect(trayFound(drawn, SEND)).toBe(1);
       if (size.columns > NARROW.columns) {
         expect(draftHolds(drawn, "note")).toBe(true);
       } else {
@@ -941,7 +989,7 @@ describe("Sidekick texts and reading across every profile", () => {
     yield* compose(page, "my question");
     yield* selectPane(page, "bindings");
     expect(composerShown(page.screen())).toBe(false);
-    expect(page.screen().occurrences("[send]")).toBe(0);
+    expect(trayFound(page.screen(), SEND)).toBe(0);
     expect(page.screen().found("Send", { onRow: "✎ draft" })).toBe(1);
     expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
     yield* intoComposer(page);
@@ -1535,9 +1583,8 @@ function assertReadOnly(reading: ScreenReading): void {
   for (const absent of ["[configure", "[retry]", "[answer sidekick]"]) {
     expect(reading.shows(absent)).toBe(false);
   }
-  for (const absent of ["[send]", "[stop]"]) {
-    expect(reading.found(absent, { rightOf: "[Back to current chat]" })).toBe(0);
-  }
+  expect(trayFound(reading, SEND)).toBe(0);
+  expect(sidekickStopShown(reading)).toBe(false);
 }
 
 function* backToCurrent(page: ReplPage, reply = "Newer answer."): Operation<void> {
@@ -1727,7 +1774,7 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect((yield* settledReading(page.repl)).model.entries).toHaveLength(0);
     yield* backToCurrent(page);
     expect(composerHolds(page.screen(), "not sent yet")).toBe(true);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     expect(page.screen().shows("[Back to current chat]")).toBe(false);
   });
 
@@ -1749,7 +1796,7 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(sidekickShows(page.screen(), "Arrived later.")).toBe(false);
     expect(composerShown(page.screen())).toBe(false);
     yield* backToCurrent(page, "Arrived later.");
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     expect(page.screen().shows(`[configure ${OTHER_MOUNTED_AGENT}]`)).toBe(true);
   });
 
@@ -2137,7 +2184,7 @@ describe("Older chats retain their identity across failure and cold opening", ()
     yield* chooseTurn(page, "only ask");
     yield* page.until("the explicit selection", (one) => one.shows("[Back to current chat]"));
     expect(composerShown(page.screen())).toBe(true);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     yield* selectPane(page, "bindings");
     yield* selectPane(page, "sidekick");
     yield* page.until("the pinned chat returning", (one) => sidekickShows(one, "Only answer."));
@@ -2571,7 +2618,7 @@ describe("Sidekick original multiline composer ownership", () => {
     for (const label of ["[History]", "[exit]"]) {
       expect(page.screen().shows(label)).toBe(true);
     }
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
     for (let i = 0; i < 12; i += 1) {
       yield* page.key("Backspace");
     }
@@ -2642,12 +2689,12 @@ describe("Sidekick original multiline composer ownership", () => {
       expect(composerRows(page.screen()).join("\n")).toContain("ROW-8");
       expect(composerRows(page.screen()).length).toBeGreaterThanOrEqual(1);
       expect(composerRows(page.screen()).length).toBeLessThanOrEqual(6);
-      expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      expect(trayFound(page.screen(), SEND)).toBe(1);
       expect(chatHas(page.screen(), "SAID-8")).toBe(true);
     }
     const refused = yield* page.resize(TOO_SMALL);
     expect(refused.shows("72x20")).toBe(true);
-    expect(refused.shows("[send]")).toBe(false);
+    expect(trayFound(refused, SEND) > 0).toBe(false);
     yield* page.resize(WIDE);
     expect(composerRows(page.screen())).toHaveLength(6);
     yield* selectPane(page, "bindings");
@@ -3453,7 +3500,7 @@ describe("Sidekick original populated chat profiles", () => {
       expect(one.shows("[Back to current chat]")).toBe(true);
       expect(composerHolds(one, "my q")).toBe(true);
       expect(chatHas(one, "Older answer.")).toBe(true);
-      expect(one.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      expect(trayFound(one, SEND)).toBe(1);
       if (size.columns >= 120) {
         expect(one.shows("TRANSCRIPT")).toBe(true);
         expect(one.shows("SIDEKICK")).toBe(true);

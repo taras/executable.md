@@ -8,7 +8,7 @@
     <ReplBench.Key key="Enter" />
     <ReplBench.WaitForText text="1 ✓" />
     <ReplBench.WaitForText text="Probe completed." />
-    <ReplBench.WaitForText text="[stop]" present={false} />
+    <ReplBench.WaitForText text=" Stop " present={false} />
     <ReplBench.WaitForText text="[ ] Show token usage" row={0} as="usage" />
     <ReplBench.Click at={usage} />
     <ReplBench.WaitForText text="│  Output" as="output" />

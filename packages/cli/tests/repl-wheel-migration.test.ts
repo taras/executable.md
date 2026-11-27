@@ -13,6 +13,7 @@ import {
   applyConfigure,
   sidekickIdle,
   SIDEKICK_PANE,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 import { awaitedFact, OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
@@ -373,7 +374,7 @@ describe("wheel remaining migration journeys", () => {
       reply: `<Output>${Array.from({ length: 65 }, (_, at) => `Old row ${String(at).padStart(2, "0")}`).join("\n")}</Output>`,
     });
     yield* sendMessage(page, "old-first");
-    yield* page.until("old tail", (one) => one.shows("Old row 64") && !one.shows("[stop]"));
+    yield* page.until("old tail", (one) => one.shows("Old row 64") && !sidekickStopShown(one));
     yield* openConfigure(page);
     yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* applyConfigure(page);

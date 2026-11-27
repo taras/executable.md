@@ -1158,8 +1158,8 @@ an absence of messages.
 Omitting the chat follows the current one. An explicit identifier pins the
 reading to that chat, and it has the usual controls only while it *is* the
 active association. Every other saved chat is read-only: no composer, no
-`[send]`, no `[retry]`, no Configure, no pending question, no Follow, TODO or
-QUEUE and no `[stop]` addressing it, absent from the screen, its focus order and its target map
+Send, no `[retry]`, no Configure, no pending question, no Follow, TODO or
+QUEUE and no Stop addressing it, absent from the screen, its focus order and its target map
 rather than drawn and refused. A current-chat question or Configure drawer is
 hidden while an older chat is read and keeps every value already typed into it.
 Root actions still check the actual current conversation, so the selector can
@@ -1397,7 +1397,7 @@ keyboard focus is the separate mark it has always been — focus on a tab does n
 select it until it is activated. Each tab is as wide as its own name, so a
 pointer aimed at a name reaches the tab bearing it. When the Sidekick is the one
 showing, the pane holds its acknowledged chat, the one box its messages are typed
-into, and one control: `[send]` while it is idle, `[stop]` while it is working.
+into, and one control: Send while it is idle, Stop while it is working.
 The tabs stay above the reading and the box below it, so the way between the two
 readings and the place a person types do not scroll away with the conversation.
 
@@ -1483,8 +1483,13 @@ its own.
 
 Message is the input box at the foot of the Sidekick pane, above the fixed
 footer. The row above it holds the pane's controls on the pane's own
-unshaded surface: Follow, drawn `[x]loop` with no cell between its checkbox and
-its label, and `[send]`. The box is a thin edge around the message, with no heading,
+unshaded surface. Follow is drawn `[x]loop`, its checkbox in the focus colour
+against a light label, with no cell between them. Two cells after it come the
+buttons: Stop while the Sidekick is working, then Send, one cell apart and each
+a filled rectangle holding its title and its focus marker room, with Send's fill
+ending on the box's right edge. Stop's title is the failure colour. Send's is the
+active action colour while there is a message to send and dim while there is
+none; the pane between and around the controls stays unshaded. The box is a thin edge around the message, with no heading,
 label or focus marker of its own: the edge is the focus mark, cyan while Message
 holds focus and neutral grey when it does not. The message is drawn inside the
 edge in the rows the box's measured inner width cut it into, so a short message
@@ -1503,11 +1508,11 @@ shrinks.
 Wrapping is display only. The message Send carries is the text you typed, with
 your own line breaks, blank lines and whitespace and none of the breaks the pane
 drew — and long words are broken only between graphemes. The block is one field
-throughout: one focus owner, one value, one Tab stop, and Enter and `[send]`
+throughout: one focus owner, one value, one Tab stop, and Enter and Send
 mean exactly what they meant on one row.
 
 A multiline paste remains one editable Message and starts no send, waiting
-message, entry or provider work. One deliberate Enter or `[send]` submits the
+message, entry or provider work. One deliberate Enter or Send submits the
 complete value once, including text inserted at a middle caret. Pasting while a
 turn is running leaves that draft unsent when the turn finishes.
 
@@ -1520,8 +1525,8 @@ leaves as it does everywhere else.
 
 While the Sidekick is working the box stays editable, because composing the next
 question while a reply comes back is the ordinary case — and what was typed then
-is not sent by the cycle finishing. `[send]` offers nothing to activate while a
-cycle is in flight, `[stop]` is what is offered instead, and Stop joins only the
+is not sent by the cycle finishing. Send offers nothing to activate while a
+cycle is in flight, Stop is what is offered instead, and Stop joins only the
 Sidekick: an entry it already admitted belongs to the session and goes on
 running.
 

@@ -28,13 +28,16 @@ import {
   sendMessage,
   intoComposer,
   typed,
-  SIDEKICK_PANE,
-  SIDEKICK_CONTROLS,
   composerFocused,
   COMPOSER_VALUE,
   draftText,
   DRAFT_VALUE,
   sidekickIdle,
+  trayFound,
+  SEND,
+  STOP,
+  TRAY_CONTROLS,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 const OWNER = "packages/cli/tests/repl-sidekick-dispatch.test.ts";
@@ -68,7 +71,7 @@ function* queueComposer(page: Parameters<typeof sendMessage>[0]): Operation<void
 function* queueSend(page: Parameters<typeof sendMessage>[0], text: string): Operation<void> {
   yield* queueComposer(page);
   yield* typed(page, text);
-  yield* page.press("[send]", SIDEKICK_CONTROLS);
+  yield* page.press(SEND, TRAY_CONTROLS);
 }
 
 function fills(source: string): string {
@@ -220,7 +223,7 @@ describe("shared Sidekick dispatch", () => {
     yield* page.repl.fake.startedTurns(1);
     yield* page.until(
       "busy Send beside Stop",
-      (one) => one.found("[send]", SIDEKICK_PANE) === 1 && one.found("[stop]", SIDEKICK_PANE) === 1,
+      (one) => trayFound(one, SEND) === 1 && trayFound(one, STOP) === 1,
     );
     yield* sendMessage(page, "waiting request");
     yield* page.key("Enter");
@@ -272,10 +275,10 @@ describe("shared Sidekick dispatch", () => {
           one.shows("withdraw me") &&
           one.rows.some((row) => row.includes("remaining request") && /\sX\s*$/.test(row)),
       );
-      yield* page.press("[stop]");
+      yield* page.press(STOP, TRAY_CONTROLS);
       yield* page.until(
         "fixed Resume after Stop",
-        (one) => one.shows("[Resume queue]") && one.occurrences("[stop]") === 0,
+        (one) => one.shows("[Resume queue]") && !sidekickStopShown(one),
       );
       expect(page.screen().shows("Stopped.")).toBe(true);
       yield* page.press("X", { onRow: "withdraw me" });
@@ -377,9 +380,9 @@ describe("shared Sidekick dispatch", () => {
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
     expect(page.screen().found("refused seventeenth", COMPOSER_VALUE)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
-    yield* page.press("[send]", SIDEKICK_CONTROLS);
+    expect(trayFound(page.screen(), SEND)).toBe(1);
+    expect(trayFound(page.screen(), STOP)).toBe(1);
+    yield* page.press(SEND, TRAY_CONTROLS);
     yield* page.until(
       "freed capacity accepts the previously refused text",
       (one) =>

@@ -77,8 +77,8 @@
 
         <Terminal.Focus target="sidekick-composer" />
         <Terminal.WaitForText text="]loop" as="controls" />
-        <Terminal.WaitForText text="[stop]" row={controls.row} />
-        <Terminal.WaitForText text="[send]" row={controls.row} />
+        <Terminal.WaitForText text="Stop" row={controls.row} />
+        <Terminal.WaitForText text="Send" row={controls.row} />
         <Each in={["Wait for tax check.", "Send results later."]} let="message">
           <Terminal.Type text={message} />
           <Terminal.Key key="Enter" />

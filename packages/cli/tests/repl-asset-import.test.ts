@@ -407,6 +407,7 @@ import {
   sidekickIdle,
   formOpen,
   pasteDraft,
+  sidekickStopShown,
 } from "./support/screen-journeys.ts";
 
 describe("mounted asset import", () => {
@@ -539,7 +540,7 @@ describe("mounted asset import", () => {
       yield* submitForm(page);
       yield* entered.operation;
       expect(temporary).toBeDefined();
-      yield* page.until("copying response", (one) => !formOpen(one) && one.shows("[stop]"));
+      yield* page.until("copying response", (one) => !formOpen(one) && sidekickStopShown(one));
       if (origin === "Stop") {
         yield* stopSidekick(page);
       } else {
